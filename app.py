@@ -23,8 +23,8 @@ from groww_client import GrowwClient, format_inr, format_inr_full
 
 # ----------------- STREAMLIT CONFIGURATION -----------------
 st.set_page_config(
-    page_title="Groww Portfolio & MTF Decoupler",
-    page_icon="🌱",
+    page_title="Pulse Tester: Portfolio & MTF Decoupler",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -157,7 +157,7 @@ def render_kpi_card(title: str, value: str, sub: str, theme: str = "blue"):
     st.markdown(html, unsafe_allow_html=True)
 
 # ----------------- SIDEBAR -----------------
-st.sidebar.title("🌱 Groww MTF Decoupler")
+st.sidebar.title("📊 Pulse Tester: MTF Decoupler")
 st.sidebar.caption("Separate **Actual Delivery Holdings** from **MTF Leveraged Positions**.")
 
 mode_choice = st.sidebar.radio(
@@ -168,7 +168,7 @@ mode_choice = st.sidebar.radio(
 
 is_mock = (mode_choice == "Demo / Mock Data (Test UI)")
 
-with st.sidebar.expander("🔑 Groww Credentials & Connection", expanded=True):
+with st.sidebar.expander("🔑 Broker Credentials & Connection", expanded=True):
     auth_mode = os.getenv("GROWW_AUTH_MODE", "TOTP")
     api_key = os.getenv("GROWW_API_KEY", "")
     totp_secret = os.getenv("GROWW_TOTP_SECRET", "")
@@ -208,7 +208,7 @@ def fetch_portfolio_data(mock: bool):
     except Exception as e:
         return None, str(e)
 
-with st.spinner("Fetching and processing portfolio data from Groww..."):
+with st.spinner("Fetching and processing portfolio data..."):
     result, error_msg = fetch_portfolio_data(is_mock)
 
 if error_msg:
@@ -226,11 +226,11 @@ mtf_positions = processed["mtf_positions"]
 col_head, col_cash = st.columns([3, 1])
 
 with col_head:
-    st.title("Groww Portfolio & Margin Decoupler")
+    st.title("Pulse Tester: Portfolio & Margin Decoupler")
     if is_mock:
         st.caption("🟡 Running in **Demo Mode** with sample data. Configure `.env` to connect live account.")
     else:
-        st.caption(f"🟢 Connected to Live Groww Account | Client UCC: `{profile.get('ucc', 'N/A')}`")
+        st.caption(f"🟢 Connected to Live Broker Account | Client UCC: `{profile.get('ucc', 'N/A')}`")
 
 with col_cash:
     render_kpi_card(
@@ -297,9 +297,9 @@ with tab_overview:
     
     with k5:
         render_kpi_card(
-            title="Groww MTF Loan (Debt)",
+            title="Broker MTF Loan (Debt)",
             value=format_inr(summary["mtf_broker_loan"]),
-            sub=f"Daily Cost: -{format_inr(summary['mtf_daily_interest'])}/day<br>Available for Margin Buying: {format_inr(summary['collateral_available'])}",
+            sub=f"Daily Cost: -{format_inr(summary['mtf_daily_interest'])}/day<br>Available for Margin: {format_inr(summary['collateral_available'])}",
             theme="red"
         )
     
@@ -455,8 +455,8 @@ with tab_mtf:
     st.subheader("⚡ MTF (Pay Later) Leveraged Positions")
     st.markdown(
         """
-        These are your **leveraged margin positions** financed through Groww's Margin Trading Facility (Pay Later).
-        The gross value / cost basis come directly from your positions; the "cash used" figure below is Groww's
+        These are your **leveraged margin positions** financed through the broker's Margin Trading Facility (Pay Later).
+        The gross value / cost basis come directly from your positions; the "cash used" figure below is the broker's
         **actual reported equity margin usage**, not an assumed percentage.
         """
     )
@@ -478,7 +478,7 @@ with tab_mtf:
         )
     with mtf_c3:
         render_kpi_card(
-            title="Groww MTF Loan (Debt)",
+            title="Broker MTF Loan (Debt)",
             value=format_inr(summary["mtf_broker_loan"]),
             sub=f"Full: {format_inr_full(summary['mtf_broker_loan'])}",
             theme="red"
@@ -492,7 +492,7 @@ with tab_mtf:
         )
 
     st.markdown("### MTF Positions & Loan Table")
-    st.caption("Per-stock 'Your Cash' / 'Groww Loan' columns are an estimated proportional split of the real account-level margin used, since Groww does not expose a per-stock MTF margin breakdown.")
+    st.caption("Per-stock 'Your Cash' / 'Broker Loan' columns are an estimated proportional split of the real account-level margin used, since the broker does not expose a per-stock MTF margin breakdown.")
     if mtf_positions:
         df_mtf = pd.DataFrame(mtf_positions)
         display_mtf = df_mtf[[
@@ -502,8 +502,8 @@ with tab_mtf:
         ]].copy()
 
         display_mtf.columns = [
-            "Symbol", "MTF Qty", "Buy Price (₹)", "LTP (₹)", "Gross Value (₹)", 
-            "Est. Your Cash (₹)", "Est. Groww Loan (₹)", 
+            "Symbol", "MTF Qty", "Buy Price (₹)", "LTP (₹)", "Gross Value (₹)",
+            "Est. Your Cash (₹)", "Est. Broker Loan (₹)",
             "P&L (₹)", "P&L (%)", "Est. Interest (₹/day)", "Est. Interest (₹/yr)"
         ]
 
@@ -547,7 +547,7 @@ with tab_simulator:
             - **Stock Symbol:** `{matched_mtf['symbol']}`
             - **MTF Quantity:** `{matched_mtf['mtf_quantity']:,.0f}` shares
             - **Current Position Value:** `{format_inr(matched_mtf['total_position_value'])}`
-            - **Est. Groww Loan to Repay:** **`{format_inr(matched_mtf['est_broker_funded_loan'])}`** (`{format_inr_full(matched_mtf['est_broker_funded_loan'])}`)
+            - **Est. Broker Loan to Repay:** **`{format_inr(matched_mtf['est_broker_funded_loan'])}`** (`{format_inr_full(matched_mtf['est_broker_funded_loan'])}`)
             - **Est. Daily Interest Saved:** `₹{matched_mtf['est_daily_interest_drag']:,.2f}/day` (`₹{matched_mtf['est_annual_interest_drag']:,.2f}/year`)
             """)
 
@@ -585,8 +585,8 @@ with tab_simulator:
 # TAB 5: API DIAGNOSTICS & RAW RESPONSES
 # =====================================================================
 with tab_api:
-    st.subheader("🔍 Groww API Diagnostics & Raw Response Inspector")
-    st.markdown("Inspect the exact JSON response returned by every Groww Trading API this dashboard uses.")
+    st.subheader("🔍 API Diagnostics & Raw Response Inspector")
+    st.markdown("Inspect the exact JSON response returned by every Trading API this dashboard uses.")
 
     client_diag = GrowwClient(mock_mode=is_mock)
 
