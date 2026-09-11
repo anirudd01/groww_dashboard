@@ -1,5 +1,9 @@
 """Formatting utilities for Indian currency and date formats."""
 
+import re
+
+from utils.constants import MONTH_DISPLAY_MAP
+
 
 def format_inr(value: float, precision: int = 2) -> str:
     """
@@ -55,19 +59,30 @@ def format_expiry_date(date_str: str) -> str:
         month_str = date_str[2:5].upper()
         year = date_str[5:]
 
-        month_map = {
-            'JAN': 'Jan', 'FEB': 'Feb', 'MAR': 'Mar', 'APR': 'Apr',
-            'MAY': 'May', 'JUN': 'Jun', 'JUL': 'Jul', 'AUG': 'Aug',
-            'SEP': 'Sept', 'OCT': 'Oct', 'NOV': 'Nov', 'DEC': 'Dec'
-        }
-
-        if month_str not in month_map:
+        if month_str not in MONTH_DISPLAY_MAP:
             return date_str
 
         year_full = f"20{year}" if len(year) == 2 else year
-        return f"{year_full} {month_map[month_str]} {day}"
+        return f"{year_full} {MONTH_DISPLAY_MAP[month_str]} {day}"
     except Exception:
         return date_str
+
+
+def format_expiry_short(symbol: str) -> str:
+    """
+    Extract a short "Month Day" expiry display (e.g. "Sept 26") from a trading
+    symbol like 'EICHERMOT26SEP7900CE'. Returns "N/A" if no expiry pattern is found.
+    """
+    if not symbol:
+        return "N/A"
+
+    match = re.search(r'(\d{2})([A-Z]{3})', symbol.upper())
+    if not match:
+        return "N/A"
+
+    day, month = match.groups()
+    month_abbr = MONTH_DISPLAY_MAP.get(month, month)
+    return f"{month_abbr} {int(day)}"
 
 
 # ============= ANALYTICS FUNCTIONS =============
@@ -84,8 +99,6 @@ def extract_position_sentiment(symbol: str) -> dict:
     - sentiment: 'BULLISH' (Call) or 'BEARISH' (Put)
     - prediction: Human-readable prediction
     """
-    import re
-
     if not symbol or len(symbol) < 2:
         return {
             "underlying": "N/A",
@@ -173,8 +186,6 @@ def group_positions_by_underlying_expiry(positions: list) -> list:
     - symbols: List of symbols in group
     - pnl_arrow: 📈 for positive, 📉 for negative
     """
-    import re
-
     # Group by (underlying, expiry, call/put type) - 3 dimensions!
     groups = {}
 
@@ -193,11 +204,7 @@ def group_positions_by_underlying_expiry(positions: list) -> list:
             day, month = expiry_match.groups()
             expiry_key = f"{day}{month}"
             # Format as "Oct 15" (just day and month, no year)
-            month_abbr = {
-                'JAN': 'Jan', 'FEB': 'Feb', 'MAR': 'Mar', 'APR': 'Apr',
-                'MAY': 'May', 'JUN': 'Jun', 'JUL': 'Jul', 'AUG': 'Aug',
-                'SEP': 'Sept', 'OCT': 'Oct', 'NOV': 'Nov', 'DEC': 'Dec'
-            }.get(month, month)
+            month_abbr = MONTH_DISPLAY_MAP.get(month, month)
             expiry_display = f"{month_abbr} {int(day)}"
         else:
             expiry_key = "UNKNOWN"

@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 try:
     from dotenv import load_dotenv
@@ -18,45 +18,8 @@ except ImportError:
         except Exception:
             pass
 
-def format_inr(value: float, precision: int = 2) -> str:
-    """
-    Formats a number into Indian currency shorthand (Cr, L, K) or full standard format.
-    Examples: 1453500 -> '₹14.54 L', 29700000 -> '₹2.97 Cr', 2296.1 -> '₹2.30 K'
-    """
-    if value is None:
-        return "₹0.00"
-    abs_val = abs(value)
-    sign = "-" if value < 0 else ""
-    if abs_val >= 10_000_000:
-        return f"{sign}₹{abs_val / 10_000_000:.{precision}f} Cr"
-    elif abs_val >= 100_000:
-        return f"{sign}₹{abs_val / 100_000:.{precision}f} L"
-    elif abs_val >= 1_000:
-        return f"{sign}₹{abs_val / 1_000:.{precision}f} K"
-    else:
-        return f"{sign}₹{abs_val:.{precision}f}"
-
-def format_inr_full(value: float) -> str:
-    """Full Indian comma-separated format, e.g. ₹14,53,500.00"""
-    if value is None:
-        return "₹0.00"
-    s = f"{abs(value):.2f}"
-    parts = s.split(".")
-    int_part, dec_part = parts[0], parts[1]
-    if len(int_part) > 3:
-        last3 = int_part[-3:]
-        rest = int_part[:-3]
-        groups = []
-        while len(rest) > 2:
-            groups.insert(0, rest[-2:])
-            rest = rest[:-2]
-        if rest:
-            groups.insert(0, rest)
-        formatted_int = ",".join(groups) + "," + last3
-    else:
-        formatted_int = int_part
-    sign = "-" if value < 0 else ""
-    return f"{sign}₹{formatted_int}.{dec_part}"
+# Shared with the FnO dashboard - single implementation lives in utils/formatting.py
+from utils.formatting import format_inr, format_inr_full
 
 logger = logging.getLogger(__name__)
 
@@ -321,7 +284,7 @@ class GrowwClient:
         from growwapi import GrowwAPI
         # Format symbols as NSE_<SYMBOL>
         formatted_symbols = tuple(f"NSE_{s.strip()}" if not s.startswith("NSE_") else s.strip() for s in symbols)
-        
+
         try:
             # get_ltp supports up to 50 instruments per batch
             result = {}

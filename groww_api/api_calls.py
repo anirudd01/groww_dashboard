@@ -60,6 +60,38 @@ class GrowwAPIService:
             logger.error("Error fetching positions: %s", e)
             return []
 
+    def place_order(
+        self,
+        trading_symbol: str,
+        quantity: int,
+        price: float,
+        validity: str,
+        exchange: str,
+        segment: str,
+        product: str,
+        order_type: str,
+        transaction_type: str,
+    ) -> Dict[str, Any]:
+        """Place an order via the underlying Groww API session."""
+        return self.client.session.place_order(
+            trading_symbol=trading_symbol,
+            quantity=quantity,
+            price=price,
+            validity=validity,
+            exchange=exchange,
+            segment=segment,
+            product=product,
+            order_type=order_type,
+            transaction_type=transaction_type,
+        )
+
+    def get_order_status(self, segment: str, groww_order_id: str) -> Dict[str, Any]:
+        """Fetch the current status of a previously placed order."""
+        return self.client.session.get_order_status(
+            segment=segment,
+            groww_order_id=groww_order_id,
+        )
+
     def get_ltp_for_nse_fno(self, symbols: List[str]) -> Dict[str, float]:
         """
         Fetch LTP for NSE FnO contracts.

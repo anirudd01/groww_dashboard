@@ -1,12 +1,9 @@
 import os
+import re
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
 
 try:
     from dotenv import load_dotenv
@@ -28,43 +25,49 @@ from utils import (
     format_inr,
     format_inr_full,
     format_expiry_date,
+    format_expiry_short,
     extract_position_sentiment,
     get_sentiment_color,
     get_position_summary,
     group_positions_by_underlying_expiry,
+    EXCHANGE_NSE,
+    EXCHANGE_MCX,
+    SEGMENT_FNO,
+    SEGMENT_COMMODITY,
 )
-from datetime import datetime as dt_module
 
-def format_expiry_date_legacy(date_str: str) -> str:
-    """
-    Convert date format from NSE/MCX format to readable format.
-    Examples:
-    - '26SEP24' -> '2024 Sept 26'
-    - '25SEP2026' -> '2026 Sept 25'
-    - 'GOLD25SEP26150000CE' -> Extract '25SEP' and format
-    """
-    if not date_str or date_str == "N/A":
-        return "N/A"
+# Quick exit helper function
+def place_quick_exit_order(symbol, quantity, ltp, exchange, segment):
+    """Place a quick exit order at LTP - 0.5%"""
+    try:
+        exit_price = ltp * 0.995  # 0.5% less than LTP
+        api_client = GrowwAPIClient.get_instance()
+        api_service = GrowwAPIService(api_client)
 
-    # Try to extract date from symbol first (e.g., '26SEP24' from 'EICHERMOT26SEP7900CE')
-    import re
-    date_match = re.search(r'(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})', date_str)
+        order_response = api_service.place_order(
+            trading_symbol=symbol,
+            quantity=quantity,
+            price=exit_price,
+            validity="DAY",
+            exchange=exchange,
+            segment=segment,
+            product="NRML",
+            order_type="LIMIT",
+            transaction_type="SELL",
+        )
+        groww_order_id = order_response.get('groww_order_id', 'Unknown')
 
-    if date_match:
-        day, month_str, year_short = date_match.groups()
+        # Best-effort status check - order was already placed even if this fails
+        order_status = "UNKNOWN"
+        try:
+            status_response = api_service.get_order_status(segment=segment, groww_order_id=groww_order_id)
+            order_status = status_response.get('order_status') or status_response.get('status') or "UNKNOWN"
+        except Exception:
+            pass
 
-        # Determine full year (assume 20xx or 21xx)
-        year_int = int(year_short)
-        if year_int <= 30:
-            year_full = 2000 + year_int
-        else:
-            year_full = 1900 + year_int
-
-        # Format as "2026 Sept 17"
-        month_abbr = month_str.capitalize()
-        return f"{year_full} {month_abbr} {int(day)}"
-
-    return str(date_str)
+        return True, groww_order_id, exit_price, order_status
+    except Exception as e:
+        return False, str(e), None, None
 
 # --------------- STREAMLIT CONFIGURATION ---------------
 st.set_page_config(
@@ -534,17 +537,7 @@ with tab_equity:
                 pct_of_total = 0.0
 
             symbol = pos.get("symbol", "")
-            expiry_display = "N/A"
-            import re
-            expiry_match = re.search(r'(\d{2})([A-Z]{3})', symbol)
-            if expiry_match:
-                day, month = expiry_match.groups()
-                month_abbr = {
-                    'JAN': 'Jan', 'FEB': 'Feb', 'MAR': 'Mar', 'APR': 'Apr',
-                    'MAY': 'May', 'JUN': 'Jun', 'JUL': 'Jul', 'AUG': 'Aug',
-                    'SEP': 'Sept', 'OCT': 'Oct', 'NOV': 'Nov', 'DEC': 'Dec'
-                }.get(month, month)
-                expiry_display = f"{month_abbr} {int(day)}"
+            expiry_display = format_expiry_short(symbol)
 
             display_data.append({
                 "Symbol": symbol,
@@ -564,7 +557,10 @@ with tab_equity:
         # Sort by P&L % descending (winners first)
         df_display = df_display.sort_values("P&L %", ascending=False).reset_index(drop=True)
 
-        # Format for display
+        # Sortable Table with Quick Exit Buttons
+        st.markdown("#### Positions with Quick Exit (Sortable)")
+
+        # Display base dataframe
         st.dataframe(
             df_display.style.format({
                 "Qty": "{:,.0f}",
@@ -577,8 +573,65 @@ with tab_equity:
                 "P&L %": "{:+.2f}%"
             }),
             width='stretch',
-            height=600
+            height=400
         )
+
+        # Quick Exit Buttons Below Table (winners only, highest P&L% first)
+        st.markdown("**Quick Exit Buttons (profitable positions, highest P&L% first):**")
+
+        # Prominent, persistent result banner - stays visible (and full-width) after the rerun
+        # that a button click triggers, instead of a message tucked into a narrow column.
+        last_exit = st.session_state.get("eq_last_exit")
+        if last_exit:
+            if last_exit["success"]:
+                st.success(
+                    f"✅ **{last_exit['symbol']}** exit order placed @ ₹{last_exit['exit_price']:.2f} | "
+                    f"Order ID: `{last_exit['order_id']}` | Status: **{last_exit['order_status']}**"
+                )
+                st.caption("Status is read back from the API immediately after placement. Confirm the final fill in the Groww app / order book.")
+            else:
+                st.error(f"❌ **{last_exit['symbol']}** exit failed: {last_exit['order_id']}")
+            if st.button("Dismiss", key="eq_dismiss_exit"):
+                del st.session_state["eq_last_exit"]
+                st.rerun()
+
+        winning_positions = sorted(
+            [p for p in display_data if p["P&L %"] > 0],
+            key=lambda p: p["P&L %"],
+            reverse=True
+        )
+
+        if winning_positions:
+            exit_button_cols = st.columns(min(5, len(winning_positions)))
+            for idx, pos_data in enumerate(winning_positions):
+                with exit_button_cols[idx % len(exit_button_cols)]:
+                    if st.button(
+                        f"Exit {pos_data['Symbol'][:15]} (+{pos_data['P&L %']:.2f}%)",
+                        key=f"eq_exit_{idx}_{pos_data['Symbol']}",
+                        width='stretch'
+                    ):
+                        symbol = pos_data['Symbol']
+                        quantity = pos_data['Qty']
+                        ltp = pos_data['LTP']
+
+                        success, result, exit_price, order_status = place_quick_exit_order(
+                            symbol=symbol,
+                            quantity=quantity,
+                            ltp=ltp,
+                            exchange=EXCHANGE_NSE,
+                            segment=SEGMENT_FNO
+                        )
+
+                        st.session_state["eq_last_exit"] = {
+                            "symbol": symbol,
+                            "success": success,
+                            "order_id": result,
+                            "exit_price": exit_price,
+                            "order_status": order_status,
+                        }
+                        st.rerun()
+        else:
+            st.info("No profitable positions to quick-exit right now.")
 
         # Summary statistics
         st.markdown("---")
@@ -658,17 +711,7 @@ with tab_commodity:
                 pct_of_total = 0.0
 
             symbol = pos.get("symbol", "")
-            expiry_display = "N/A"
-            import re
-            expiry_match = re.search(r'(\d{2})([A-Z]{3})', symbol)
-            if expiry_match:
-                day, month = expiry_match.groups()
-                month_abbr = {
-                    'JAN': 'Jan', 'FEB': 'Feb', 'MAR': 'Mar', 'APR': 'Apr',
-                    'MAY': 'May', 'JUN': 'Jun', 'JUL': 'Jul', 'AUG': 'Aug',
-                    'SEP': 'Sept', 'OCT': 'Oct', 'NOV': 'Nov', 'DEC': 'Dec'
-                }.get(month, month)
-                expiry_display = f"{month_abbr} {int(day)}"
+            expiry_display = format_expiry_short(symbol)
 
             display_data.append({
                 "Symbol": symbol,
@@ -688,7 +731,10 @@ with tab_commodity:
         # Sort by P&L % descending (winners first)
         df_display = df_display.sort_values("P&L %", ascending=False).reset_index(drop=True)
 
-        # Format for display
+        # Sortable Table with Quick Exit Buttons
+        st.markdown("#### Positions with Quick Exit (Sortable)")
+
+        # Display base dataframe
         st.dataframe(
             df_display.style.format({
                 "Qty": "{:,.0f}",
@@ -701,8 +747,65 @@ with tab_commodity:
                 "P&L %": "{:+.2f}%"
             }),
             width='stretch',
-            height=600
+            height=400
         )
+
+        # Quick Exit Buttons Below Table (winners only, highest P&L% first)
+        st.markdown("**Quick Exit Buttons (profitable positions, highest P&L% first):**")
+
+        # Prominent, persistent result banner - stays visible (and full-width) after the rerun
+        # that a button click triggers, instead of a message tucked into a narrow column.
+        last_exit = st.session_state.get("cm_last_exit")
+        if last_exit:
+            if last_exit["success"]:
+                st.success(
+                    f"✅ **{last_exit['symbol']}** exit order placed @ ₹{last_exit['exit_price']:.2f} | "
+                    f"Order ID: `{last_exit['order_id']}` | Status: **{last_exit['order_status']}**"
+                )
+                st.caption("Status is read back from the API immediately after placement. Confirm the final fill in the Groww app / order book.")
+            else:
+                st.error(f"❌ **{last_exit['symbol']}** exit failed: {last_exit['order_id']}")
+            if st.button("Dismiss", key="cm_dismiss_exit"):
+                del st.session_state["cm_last_exit"]
+                st.rerun()
+
+        winning_positions = sorted(
+            [p for p in display_data if p["P&L %"] > 0],
+            key=lambda p: p["P&L %"],
+            reverse=True
+        )
+
+        if winning_positions:
+            exit_button_cols = st.columns(min(5, len(winning_positions)))
+            for idx, pos_data in enumerate(winning_positions):
+                with exit_button_cols[idx % len(exit_button_cols)]:
+                    if st.button(
+                        f"Exit {pos_data['Symbol'][:15]} (+{pos_data['P&L %']:.2f}%)",
+                        key=f"cm_exit_{idx}_{pos_data['Symbol']}",
+                        width='stretch'
+                    ):
+                        symbol = pos_data['Symbol']
+                        quantity = pos_data['Qty']
+                        ltp = pos_data['LTP']
+
+                        success, result, exit_price, order_status = place_quick_exit_order(
+                            symbol=symbol,
+                            quantity=quantity,
+                            ltp=ltp,
+                            exchange=EXCHANGE_MCX,
+                            segment=SEGMENT_COMMODITY
+                        )
+
+                        st.session_state["cm_last_exit"] = {
+                            "symbol": symbol,
+                            "success": success,
+                            "order_id": result,
+                            "exit_price": exit_price,
+                            "order_status": order_status,
+                        }
+                        st.rerun()
+        else:
+            st.info("No profitable positions to quick-exit right now.")
 
         # Summary statistics
         st.markdown("---")
@@ -802,7 +905,6 @@ with tab_analytics:
                 position_type = pos.get("type", "UNKNOWN")  # EQUITY or COMMODITY from API
 
                 # Extract expiry for grouping key
-                import re
                 expiry_match = re.search(r'(\d{2})([A-Z]{3})', symbol)
                 if expiry_match:
                     day, month = expiry_match.groups()
@@ -884,7 +986,7 @@ with tab_analytics:
                     "Current ₹": "₹{:,.0f}",
                     "P&L ₹": "₹{:,.0f}",
                     "P&L %": "{:+.2f}%"
-                }).applymap(
+                }).map(
                     highlight_type_column,
                     subset=["Type"]
                 ).background_gradient(
@@ -894,7 +996,7 @@ with tab_analytics:
                     vmax=10
                 )
 
-                st.dataframe(styled, width='stretch', height=400, use_container_width=True)
+                st.dataframe(styled, width='stretch', height=400)
 
                 # Expandable detail section
                 with st.expander(f"🔍 Expand to see all symbols ({len(positions_group)} groups)"):
