@@ -4,3 +4,9 @@ __pycache__/
 .venv/
 env/
 .streamlit/secrets.toml
+
+# Editor / tool-local state - not part of the project
+.vscode/
+.claude/
+
+docs/_archived
