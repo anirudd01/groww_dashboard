@@ -1,0 +1,117 @@
+"""Configuration for the sector heatmap dashboard.
+
+Every knob has a sensible default and can be overridden with an environment
+variable (so it can live in ``.env`` alongside the Groww credentials).
+No credentials are read or stored here.
+"""
+
+import os
+from dataclasses import dataclass, field
+from typing import Tuple
+
+from market.universe import DEFAULT_UNIVERSE_KEY
+
+# Sector tile ordering strategies (see docs/SECTOR_HEATMAP.md).
+ORDER_BY_PERFORMANCE = "performance"
+ORDER_ALPHABETICAL = "alphabetical"
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = (os.getenv(name, "") or "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+@dataclass(frozen=True)
+class HeatmapConfig:
+    """Runtime settings for the live feed service and the UI."""
+
+    # --- providers ------------------------------------------------------
+    # Broker preference order. The service uses the first one that
+    # authenticates and resolves instruments; the rest are fallbacks.
+    # Known: dhan, groww. Planned: kite.
+    providers: Tuple[str, ...] = ("dhan", "groww")
+
+    # --- universe -------------------------------------------------------
+    universe_key: str = DEFAULT_UNIVERSE_KEY
+
+    # --- UI -------------------------------------------------------------
+    ui_refresh_seconds: float = 1.0
+    sector_order: str = ORDER_BY_PERFORMANCE
+    #: Tiles per row in the clickable heatmap grid.
+    heatmap_columns: int = 4
+    # Colour scale saturates at +/- this many percent, so a flat day still
+    # shows contrast instead of an all-grey board.
+    min_colour_scale_pct: float = 0.75
+
+    # --- live feed ------------------------------------------------------
+    # How often the background worker drains the in-memory feed buffer.
+    # This is local work only - it makes no network calls.
+    feed_drain_seconds: float = 0.5
+    # No tick for this long while the market is open => show STALE.
+    stale_after_seconds: float = 10.0
+    # If the websocket produces no tick within this window after connecting,
+    # treat it as unusable and fall back (when the fallback is enabled).
+    feed_bootstrap_seconds: float = 20.0
+    # Backoff between websocket (re)connection attempts.
+    feed_retry_seconds: float = 30.0
+
+    # --- REST fallback --------------------------------------------------
+    # Only used when the websocket cannot be established or delivers nothing.
+    # One batched request covers the whole universe, so this is gentle on the
+    # API - but it is NOT the live feed, and the UI labels it as such.
+    rest_fallback_enabled: bool = True
+    rest_poll_seconds: float = 3.0
+    # The SDK defaults to no HTTP timeout; without this a throttled or stalled
+    # request would hang the worker loop and freeze the dashboard.
+    rest_timeout_seconds: int = 10
+
+    # --- reference data -------------------------------------------------
+    # Previous closes are refreshed at most this often (they only change
+    # once per trading day; the refresh exists to pick up a new session).
+    previous_close_refresh_seconds: int = 900
+    api_batch_size: int = 50
+
+    @classmethod
+    def from_env(cls) -> "HeatmapConfig":
+        order = (os.getenv("PULSE_HEATMAP_SECTOR_ORDER", "") or ORDER_BY_PERFORMANCE).strip().lower()
+        if order not in (ORDER_BY_PERFORMANCE, ORDER_ALPHABETICAL):
+            order = ORDER_BY_PERFORMANCE
+        raw_providers = (os.getenv("PULSE_MARKET_PROVIDERS", "") or "").strip()
+        providers = tuple(
+            part.strip().lower() for part in raw_providers.split(",") if part.strip()
+        ) or ("dhan", "groww")
+        return cls(
+            providers=providers,
+            universe_key=os.getenv("PULSE_HEATMAP_UNIVERSE", DEFAULT_UNIVERSE_KEY),
+            ui_refresh_seconds=_env_float("PULSE_HEATMAP_UI_REFRESH_SECONDS", 1.0),
+            sector_order=order,
+            heatmap_columns=max(1, _env_int("PULSE_HEATMAP_COLUMNS", 4)),
+            min_colour_scale_pct=_env_float("PULSE_HEATMAP_MIN_COLOUR_SCALE_PCT", 0.75),
+            feed_drain_seconds=_env_float("PULSE_HEATMAP_FEED_DRAIN_SECONDS", 0.5),
+            stale_after_seconds=_env_float("PULSE_HEATMAP_STALE_AFTER_SECONDS", 10.0),
+            feed_bootstrap_seconds=_env_float("PULSE_HEATMAP_FEED_BOOTSTRAP_SECONDS", 20.0),
+            feed_retry_seconds=_env_float("PULSE_HEATMAP_FEED_RETRY_SECONDS", 30.0),
+            rest_fallback_enabled=_env_bool("PULSE_HEATMAP_REST_FALLBACK", True),
+            rest_poll_seconds=_env_float("PULSE_HEATMAP_REST_POLL_SECONDS", 3.0),
+            rest_timeout_seconds=_env_int("PULSE_HEATMAP_REST_TIMEOUT_SECONDS", 10),
+            previous_close_refresh_seconds=_env_int(
+                "PULSE_HEATMAP_PREV_CLOSE_REFRESH_SECONDS", 900
+            ),
+            api_batch_size=_env_int("PULSE_HEATMAP_API_BATCH_SIZE", 50),
+        )
