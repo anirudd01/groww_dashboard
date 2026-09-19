@@ -6,7 +6,8 @@ looks open but no ticks arrive, and the feed's staleness detection surfaces
 that instead of the dashboard pretending prices are live.
 """
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Optional
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -46,3 +47,28 @@ def session_state(now: datetime = None) -> str:
 def is_market_open(now: datetime = None) -> bool:
     """True during the normal NSE continuous session (holidays not checked)."""
     return session_state(now) == SESSION_OPEN
+
+
+def todays_session_date(now: datetime = None) -> Optional[date]:
+    """Today's date once today's session has begun, otherwise ``None``.
+
+    Answers one narrow question: does the latest available price belong to
+    *today*? A previous-close lookup built on daily candles needs it to know
+    whether to step over today's own candle. Before 09:15 and at the weekend
+    the latest price comes from an earlier session, so this returns None and
+    the caller falls back to "the candle before the most recent one".
+
+    Holidays are not tracked (see the module docstring), so on a holiday this
+    returns today's date. The candle lookup then finds no candle for today and
+    measures against the last real session's close, which reads +0.00% rather
+    than reporting a move that did not happen.
+    """
+    now = now or now_ist()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=IST)
+    else:
+        now = now.astimezone(IST)
+
+    if now.weekday() >= 5:
+        return None
+    return now.date() if now.time() >= MARKET_OPEN else None

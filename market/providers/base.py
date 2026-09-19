@@ -13,7 +13,11 @@ provider in ``market/providers/registry.py``. No other file changes.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+#: Segments a universe can ask for. Brokers map these onto their own names.
+SEGMENT_CASH = "CASH"
+SEGMENT_INDEX = "INDEX"
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,36 @@ class InstrumentRef:
     provider_id: str
     exchange: str = "NSE"
     segment: str = "CASH"
+
+
+@dataclass(frozen=True)
+class DayBar:
+    """Today's session bar for one instrument.
+
+    Every field is optional because not every broker publishes every field,
+    and a broker that publishes none is a supported case rather than an
+    error. Consumers must check before using: a missing high is "unknown",
+    never zero.
+
+    ``close`` is deliberately absent - the previous close is reference data
+    with its own dedicated path, and mixing it in here would invite exactly
+    the "previous close inferred from the live feed" mistake the design
+    avoids.
+    """
+
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    volume: Optional[int] = None
+
+    @property
+    def has_range(self) -> bool:
+        """True when high/low describe a usable range."""
+        return (
+            self.high is not None
+            and self.low is not None
+            and self.high > self.low > 0
+        )
 
 
 class FeedHandle(ABC):
@@ -53,6 +87,15 @@ class FeedHandle(ABC):
         Dhan pushes an explicit previous-close packet on subscribe; Groww does
         not. Default is "none", so providers that lack it need not override.
         This is exchange-published reference data, never inferred from a tick.
+        """
+        return {}
+
+    def day_bars(self) -> Dict[str, "DayBar"]:
+        """Today's open/high/low/volume per symbol, where the feed carries it.
+
+        Dhan's quote packets carry it; Groww's LTP feed does not. Default is
+        "none", so a provider without it needs no override and the breadth
+        panel simply shows fewer columns rather than inventing values.
         """
         return {}
 
@@ -82,21 +125,52 @@ class MarketDataProvider(ABC):
 
     @abstractmethod
     def resolve_instruments(
-        self, symbols: List[str]
+        self, symbols: List[str], segment: str = SEGMENT_CASH
     ) -> Tuple[Dict[str, InstrumentRef], List[str]]:
         """Map canonical symbols to this broker's ids.
 
         Returns ``(resolved, missing)``. Ids come from the broker's instrument
         master - never hardcoded.
+
+        ``segment`` is ``SEGMENT_CASH`` for equities or ``SEGMENT_INDEX`` for
+        index values. A provider that cannot serve a segment returns every
+        symbol as missing rather than raising, so the service can fail over
+        to the next broker.
         """
 
     @abstractmethod
     def get_previous_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
         """Previous trading day's close per symbol. Reference data, called rarely."""
 
+    def get_prior_session_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+        """Close of the trading day *before* the most recent completed session.
+
+        Optional, and the answer to a question ``get_previous_close`` cannot
+        answer outside market hours. That method reads the broker's OHLC block,
+        which reports the previous session's close only while trading is live:
+        once the session ends brokers repoint the same field at *today's*
+        close, so a dashboard started after 15:30 would measure today against
+        itself and read +0.00% on every tile.
+
+        Daily candles do not move when the session ends, so they can still say
+        what the previous close was. A provider without a historical endpoint
+        returns nothing and the caller keeps whatever it already had - it must
+        never quietly fall back to the OHLC field, which is known to be wrong
+        at exactly the moment this path is used.
+        """
+        return {}
+
     @abstractmethod
     def get_ltp_snapshot(self, refs: List[InstrumentRef]) -> Dict[str, float]:
         """Batched REST price snapshot - the fallback when the feed is down."""
+
+    def get_day_bars(self, refs: List[InstrumentRef]) -> Dict[str, DayBar]:
+        """Batched REST session bars, for brokers whose quote endpoint has them.
+
+        Optional: the default returns nothing, and callers degrade to showing
+        breadth without the day-range column.
+        """
+        return {}
 
     @abstractmethod
     def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:

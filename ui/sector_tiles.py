@@ -18,7 +18,7 @@ The Plotly treemap remains available in ``ui/sector_heatmap.py`` as a
 display-only alternative.
 """
 
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import streamlit as st
 
@@ -93,16 +93,30 @@ def build_tile_css(
     return "<style>" + "".join(rules) + "</style>"
 
 
+def default_tooltip(sector: SectorMarketData) -> str:
+    """Constituent breadth, for the aggregated Nifty 50 board."""
+    return (
+        f"{sector.priced_count}/{sector.constituent_count} priced"
+        f" · {sector.positive_count} advancing,"
+        f" {sector.negative_count} declining"
+    )
+
+
 def render_sector_tiles(
     sectors: List[SectorMarketData],
     columns: int = 4,
     min_colour_scale_pct: float = MIN_SCALE_PCT,
     height_px: int = 96,
+    tooltip: Optional[Callable[[SectorMarketData], str]] = None,
 ) -> Optional[str]:
     """Draw the clickable heatmap. Returns the sector clicked, if any.
 
     ``sectors`` is rendered in the order given, so the caller controls whether
     tiles are ranked by performance or held in a stable alphabetical layout.
+
+    ``tooltip`` overrides the hover text. The index board passes its own,
+    because "1/1 priced, 1 advancing" would be noise on a tile that *is* a
+    single index rather than an aggregate of constituents.
     """
     if not sectors:
         return None
@@ -124,11 +138,7 @@ def render_sector_tiles(
                         tile_label(sector),
                         key=f"{tile_key(sector.sector)}_btn",
                         width="stretch",
-                        help=(
-                            f"{sector.priced_count}/{sector.constituent_count} priced"
-                            f" · {sector.positive_count} advancing,"
-                            f" {sector.negative_count} declining"
-                        ),
+                        help=(tooltip or default_tooltip)(sector),
                     ):
                         clicked = sector.sector
     return clicked

@@ -30,8 +30,15 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from market.config import HeatmapConfig
-from market.market_hours import is_market_open, session_state, SESSION_OPEN
+from market.market_hours import (
+    SESSION_OPEN,
+    SESSION_PRE_MARKET,
+    is_market_open,
+    session_state,
+)
 from market.models import (
+    PREV_CLOSE_DAILY_CANDLE,
+    PREV_CLOSE_OHLC,
     SOURCE_NONE,
     SOURCE_REST,
     SOURCE_WEBSOCKET,
@@ -90,6 +97,10 @@ class LiveMarketDataService:
         self._feed = None
         self._first_tick_logged: set = set()
         self._prev_close_fetched_at: float = 0.0
+        # Whether the active provider implements REST day bars at all. Checked
+        # once on activation so the fallback loop does not fire a doomed extra
+        # request every poll against a broker that has no such endpoint.
+        self._day_bars_supported: bool = False
         # True only while the websocket is actually delivering prices. The REST
         # fallback runs whenever this is False, so a websocket that connects but
         # stays silent never leaves the dashboard without data.
@@ -181,8 +192,18 @@ class LiveMarketDataService:
             self._fail("No market data providers are configured")
             return
 
+        # Activation can fail for transient reasons - a rate limit, a broker
+        # hiccup, a network blip. Retrying beats leaving the board dead
+        # until someone restarts the process.
         remaining = list(candidates)
-        if not self._activate_provider(remaining):
+        while not self._stop_event.is_set():
+            if self._activate_provider(remaining):
+                break
+            if self._stop_event.wait(self.config.feed_retry_seconds):
+                return
+            logger.info("Retrying provider activation ...")
+            remaining = list(candidates)
+        if self._stop_event.is_set():
             return
 
         self._set_status(state=STATUS_DISCONNECTED, detail="Connecting to the live feed")
@@ -282,6 +303,11 @@ class LiveMarketDataService:
             self._provider = provider
             self._teardown_feed()
             self._next_connect_attempt = 0.0
+            # Base class returns {}; only a provider that overrides it has a
+            # real endpoint worth calling.
+            self._day_bars_supported = (
+                type(provider).get_day_bars is not MarketDataProvider.get_day_bars
+            )
             logger.info("Using %s as the market data provider", provider.label)
             self._set_status(provider=provider.label, detail="")
             return True
@@ -295,7 +321,9 @@ class LiveMarketDataService:
 
     def _load_reference_data(self, provider: MarketDataProvider) -> None:
         """Resolve broker ids and previous closes before going live."""
-        resolved, missing = provider.resolve_instruments(self.universe.symbols)
+        resolved, missing = provider.resolve_instruments(
+            self.universe.symbols, segment=self.universe.segment
+        )
         if missing:
             logger.warning(
                 "%d constituent(s) unresolved on %s and will be skipped: %s",
@@ -323,7 +351,24 @@ class LiveMarketDataService:
     def _fetch_previous_close(
         self, provider: MarketDataProvider, refs: List[InstrumentRef]
     ) -> None:
-        closes = provider.get_previous_close(refs)
+        """Load previous closes from whichever source is honest right now.
+
+        During the session (and pre-open) the broker's OHLC block reports the
+        previous session's close and is by far the cheapest source: one
+        batched call for the whole universe.
+
+        The moment trading stops, that same field is repointed at *today's*
+        close - Dhan demonstrably returns ``close == last_price`` after 15:30.
+        Reading it then would measure today against itself and collapse every
+        tile to +0.00%, silently erasing the day's move. So outside the session
+        the previous close comes from daily candles instead, which do not move
+        when the session ends.
+
+        Symbols the candle lookup cannot cover are left unresolved rather than
+        filled from the OHLC field: they then show up in the data-gaps panel as
+        missing, which is true, instead of as +0.00%, which is not.
+        """
+        closes, source = self._previous_close_source(provider, refs)
         missing = []
         with self._lock:
             for ref in refs:
@@ -336,6 +381,7 @@ class LiveMarketDataService:
                 elif stock.previous_close is None:
                     missing.append(ref.symbol)
             self._status.missing_previous_close = missing
+            self._status.previous_close_source = source if closes else ""
         self._prev_close_fetched_at = time.monotonic()
         if missing:
             logger.warning(
@@ -344,12 +390,53 @@ class LiveMarketDataService:
                 ", ".join(missing),
             )
 
+    def _previous_close_source(
+        self, provider: MarketDataProvider, refs: List[InstrumentRef]
+    ):
+        """``(closes, source)`` from the path that is trustworthy right now."""
+        in_session = session_state() in (SESSION_OPEN, SESSION_PRE_MARKET)
+        if in_session or not self.config.historical_previous_close:
+            return provider.get_previous_close(refs), PREV_CLOSE_OHLC
+
+        closes = provider.get_prior_session_close(refs)
+        if not closes:
+            logger.warning(
+                "%s returned no daily candles, so previous closes stay unknown "
+                "outside market hours - its OHLC endpoint reports today's close "
+                "once trading stops and would read +0.00%% everywhere",
+                provider.label,
+            )
+        return closes, PREV_CLOSE_DAILY_CANDLE
+
     def _maybe_refresh_previous_close(self) -> None:
+        """Re-fetch previous closes periodically, but never after the close.
+
+        The refresh exists to pick up a new trading day without a restart. It
+        must not run once the session has ended, because brokers repoint the
+        OHLC ``close`` field at *today's* close the moment trading stops - Dhan
+        demonstrably does, returning ``close == last_price``. Refreshing then
+        would overwrite yesterday's close with today's and silently collapse
+        every percentage on the board to +0.00%, wiping out the day's move for
+        anyone who left the dashboard open past 15:30.
+
+        Refreshing while the market is open or pre-open is safe and is what
+        actually picks up a new session.
+        """
         interval = self.config.previous_close_refresh_seconds
         if interval <= 0 or self._provider is None:
             return
         if (time.monotonic() - self._prev_close_fetched_at) < interval:
             return
+
+        if session_state() not in (SESSION_OPEN, SESSION_PRE_MARKET):
+            # Hold what we have and check again after the interval.
+            self._prev_close_fetched_at = time.monotonic()
+            logger.debug(
+                "Skipping previous-close refresh outside market hours - the "
+                "broker's close field now reports today's close"
+            )
+            return
+
         try:
             self._fetch_previous_close(self._provider, self._refs)
         except Exception as e:
@@ -443,6 +530,9 @@ class LiveMarketDataService:
             prices = feed.latest_prices()
             # Some feeds publish the exchange's previous close explicitly.
             self._apply_previous_closes(feed.previous_closes())
+            # Quote-style feeds also carry the day's range; ticker-only
+            # feeds return nothing here and the breadth panel adapts.
+            self._apply_day_bars(feed.day_bars())
         except Exception as e:
             logger.warning("Feed read failed: %s", e)
             self._teardown_feed()
@@ -462,6 +552,16 @@ class LiveMarketDataService:
         except Exception as e:
             logger.warning("REST price poll failed: %s", e)
             return False
+
+        # Day bars are a nice-to-have on the fallback path: a broker that
+        # does not supply them, or a call that fails, must not cost us the
+        # prices we just fetched.
+        if self._day_bars_supported:
+            try:
+                self._apply_day_bars(self._provider.get_day_bars(self._refs))
+            except Exception as e:
+                logger.debug("REST day-bar poll failed (non-fatal): %s", e)
+
         return self._apply_prices(prices) if prices else False
 
     # ------------------------------------------------------------------
@@ -484,6 +584,29 @@ class LiveMarketDataService:
             if applied:
                 self._status.last_tick_at = now
         return applied > 0
+
+    def _apply_day_bars(self, bars) -> None:
+        """Record today's open/high/low/volume where a provider reports it.
+
+        Only positive values are written, so a provider that sends 0 for a
+        field it has not populated yet leaves the previous value (or None)
+        in place rather than corrupting the day range.
+        """
+        if not bars:
+            return
+        with self._lock:
+            for symbol, bar in bars.items():
+                stock = self._stocks.get(symbol)
+                if stock is None or bar is None:
+                    continue
+                if bar.open:
+                    stock.day_open = float(bar.open)
+                if bar.high:
+                    stock.day_high = float(bar.high)
+                if bar.low:
+                    stock.day_low = float(bar.low)
+                if bar.volume:
+                    stock.volume = int(bar.volume)
 
     def _apply_previous_closes(self, closes: Dict[str, float]) -> None:
         """Fill in any previous closes REST could not supply."""

@@ -16,7 +16,7 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 from groww_api import GrowwAPIClient, GrowwAPIService
-from market.providers.base import FeedHandle, InstrumentRef, MarketDataProvider
+from market.providers.base import SEGMENT_CASH, FeedHandle, InstrumentRef, MarketDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +122,22 @@ class GrowwProvider(MarketDataProvider):
         return self._service
 
     def resolve_instruments(
-        self, symbols: List[str]
+        self, symbols: List[str], segment: str = SEGMENT_CASH
     ) -> Tuple[Dict[str, InstrumentRef], List[str]]:
+        """Groww serves NSE cash equities only in this adapter.
+
+        Index values are reported as entirely missing rather than raising, so
+        the service can fail over to a broker that does serve them instead of
+        the whole board erroring out.
+        """
+        if (segment or SEGMENT_CASH).upper() != SEGMENT_CASH:
+            logger.info(
+                "Groww provider has no %s support; reporting %d symbol(s) as "
+                "unresolved so another provider can take the board",
+                segment, len(symbols),
+            )
+            return {}, list(symbols)
+
         resolved_raw, missing = self.service.resolve_nse_cash_instruments(symbols)
         resolved = {
             symbol: InstrumentRef(

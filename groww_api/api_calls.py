@@ -1,7 +1,7 @@
 """API wrapper for Groww Trading API calls."""
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from groww_api.client import GrowwAPIClient
 
@@ -217,6 +217,189 @@ class GrowwAPIService:
                         return float(val)
 
         return None
+
+    # ------------------------------------------------------------------
+    # NSE CASH (equity) helpers - used by the live sector heatmap
+    # ------------------------------------------------------------------
+
+    def get_instruments(self):
+        """Return Groww's full instrument master as a DataFrame."""
+        return self.client.session.get_all_instruments()
+
+    def resolve_nse_cash_instruments(
+        self, symbols: List[str]
+    ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+        """
+        Resolve NSE CASH trading symbols to their instrument metadata.
+
+        Exchange tokens are never hardcoded - they come from Groww's
+        instrument master.
+
+        Returns:
+            (resolved, missing) where `resolved` maps trading_symbol to a dict
+            with exchange / segment / exchange_token / name, and `missing` lists
+            the symbols that could not be found.
+        """
+        resolved: Dict[str, Dict[str, Any]] = {}
+        missing: List[str] = []
+
+        if not symbols:
+            return resolved, missing
+
+        try:
+            instruments = self.get_instruments()
+        except Exception as e:
+            logger.error("Could not load Groww instrument master: %s", e)
+            return resolved, list(symbols)
+
+        try:
+            nse_cash = instruments[
+                (instruments["exchange"] == "NSE")
+                & (instruments["segment"] == "CASH")
+            ]
+            lookup = nse_cash.set_index("trading_symbol")
+        except Exception as e:
+            logger.error("Unexpected instrument master layout: %s", e)
+            return resolved, list(symbols)
+
+        for symbol in symbols:
+            try:
+                row = lookup.loc[symbol]
+            except KeyError:
+                logger.warning("Missing exchange token for %s (not in instrument master)", symbol)
+                missing.append(symbol)
+                continue
+
+            # Duplicate trading symbols would yield a DataFrame; take the first.
+            if hasattr(row, "iloc") and getattr(row, "ndim", 1) > 1:
+                row = row.iloc[0]
+
+            token = row.get("exchange_token")
+            if token is None or str(token).strip() in ("", "nan"):
+                logger.warning("Missing exchange token for %s (blank in instrument master)", symbol)
+                missing.append(symbol)
+                continue
+
+            resolved[symbol] = {
+                "trading_symbol": symbol,
+                "exchange": "NSE",
+                "segment": "CASH",
+                "exchange_token": str(token).strip(),
+                "name": row.get("name"),
+            }
+
+        logger.info(
+            "Resolved %d/%d NSE CASH instruments from the instrument master",
+            len(resolved),
+            len(symbols),
+        )
+        return resolved, missing
+
+    def _nse_cash_batches(self, symbols: List[str], batch_size: int = 50):
+        """Yield (batch_of_symbols, prefixed_tuple) pairs for batched endpoints."""
+        for i in range(0, len(symbols), batch_size):
+            batch = symbols[i : i + batch_size]
+            yield batch, tuple(f"NSE_{s}" for s in batch)
+
+    def get_previous_close_nse_cash(
+        self, symbols: List[str], batch_size: int = 50, timeout: Optional[int] = 15
+    ) -> Dict[str, float]:
+        """
+        Fetch the previous trading day's closing price for NSE CASH symbols.
+
+        Uses Groww's OHLC endpoint, whose `close` field is the previous
+        session's close (today's close is not known until the session ends).
+        This is reference data: call it on startup, not on every refresh.
+        """
+        result: Dict[str, float] = {}
+        if not symbols:
+            return result
+
+        from growwapi import GrowwAPI
+
+        for batch, prefixed in self._nse_cash_batches(symbols, batch_size):
+            try:
+                resp = self.client.session.get_ohlc(
+                    segment=GrowwAPI.SEGMENT_CASH,
+                    exchange_trading_symbols=prefixed,
+                    timeout=timeout,
+                )
+            except Exception as e:
+                logger.warning(
+                    "OHLC request failed for %d symbols (%s ...): %s",
+                    len(batch),
+                    batch[0],
+                    e,
+                )
+                continue
+
+            if not isinstance(resp, dict):
+                continue
+
+            for key, ohlc in resp.items():
+                symbol = key[4:] if key.startswith("NSE_") else key
+                if not isinstance(ohlc, dict):
+                    continue
+                close = ohlc.get("close")
+                try:
+                    close = float(close)
+                except (TypeError, ValueError):
+                    close = 0.0
+                if close > 0:
+                    result[symbol] = close
+                else:
+                    logger.warning("Missing previous close for %s", symbol)
+
+        logger.info("Resolved previous close for %d/%d symbols", len(result), len(symbols))
+        return result
+
+    def get_ltp_nse_cash(
+        self, symbols: List[str], batch_size: int = 50, timeout: Optional[int] = 10
+    ) -> Dict[str, float]:
+        """
+        Batched LTP snapshot for NSE CASH symbols.
+
+        This is the REST fallback used only when the websocket feed is
+        unavailable - the live feed is the primary price source.
+
+        An explicit timeout is essential: the SDK defaults to no timeout, and a
+        stalled request would otherwise freeze the polling loop indefinitely.
+        """
+        result: Dict[str, float] = {}
+        if not symbols:
+            return result
+
+        from growwapi import GrowwAPI
+
+        for batch, prefixed in self._nse_cash_batches(symbols, batch_size):
+            try:
+                resp = self.client.session.get_ltp(
+                    segment=GrowwAPI.SEGMENT_CASH,
+                    exchange_trading_symbols=prefixed,
+                    timeout=timeout,
+                )
+            except Exception as e:
+                logger.warning(
+                    "LTP request failed for %d symbols (%s ...): %s",
+                    len(batch),
+                    batch[0],
+                    e,
+                )
+                continue
+
+            if not isinstance(resp, dict):
+                continue
+
+            for key, value in resp.items():
+                symbol = key[4:] if key.startswith("NSE_") else key
+                try:
+                    price = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if price > 0:
+                    result[symbol] = price
+
+        return result
 
     def get_ltp(self, symbols: List[str]) -> Dict[str, float]:
         """

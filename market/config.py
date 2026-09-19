@@ -5,11 +5,14 @@ variable (so it can live in ``.env`` alongside the Groww credentials).
 No credentials are read or stored here.
 """
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Tuple
 
+from market.sector_aggregation import EQUAL_WEIGHT, MARKET_CAP
 from market.universe import DEFAULT_UNIVERSE_KEY
+from market.weights import DEFAULT_WEIGHTS_PATH
 
 # Sector tile ordering strategies (see docs/SECTOR_HEATMAP.md).
 ORDER_BY_PERFORMANCE = "performance"
@@ -28,6 +31,24 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, "") or default)
     except (TypeError, ValueError):
         return default
+
+
+def _env_choice(name: str, default: str, allowed) -> str:
+    """An env value restricted to a known set; anything else falls back.
+
+    A typo in .env should not crash the dashboard, but it must not silently
+    change what the numbers mean either - hence the log line.
+    """
+    raw = (os.getenv(name, "") or "").strip().lower()
+    if not raw:
+        return default
+    if raw in allowed:
+        return raw
+    logging.getLogger(__name__).warning(
+        "Ignoring %s=%r - expected one of %s. Using %r.",
+        name, raw, ", ".join(sorted(allowed)), default,
+    )
+    return default
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -50,11 +71,24 @@ class HeatmapConfig:
     # --- universe -------------------------------------------------------
     universe_key: str = DEFAULT_UNIVERSE_KEY
 
+    # --- aggregation ----------------------------------------------------
+    # How a sector's percentage change is computed from its constituents.
+    # "equal_weight" (default) treats every stock alike; "market_cap" weights
+    # by the figures in the weights file below. Both are selectable in the UI.
+    aggregation_method: str = EQUAL_WEIGHT
+    # Weights are read from this file at startup and never fetched live.
+    # Generate it with scripts/fetch_index_weights.py.
+    weights_path: str = DEFAULT_WEIGHTS_PATH
+
     # --- UI -------------------------------------------------------------
     ui_refresh_seconds: float = 1.0
     sector_order: str = ORDER_BY_PERFORMANCE
     #: Tiles per row in the clickable heatmap grid.
     heatmap_columns: int = 4
+    #: Show the leaders/laggards tables beneath the heatmap.
+    show_highlight_tables: bool = True
+    #: Cap on rows in each of those tables. 0 means "every qualifying sector".
+    highlight_table_limit: int = 0
     # Colour scale saturates at +/- this many percent, so a flat day still
     # shows contrast instead of an all-grey board.
     min_colour_scale_pct: float = 0.75
@@ -86,6 +120,11 @@ class HeatmapConfig:
     # once per trading day; the refresh exists to pick up a new session).
     previous_close_refresh_seconds: int = 900
     api_batch_size: int = 50
+    # Outside market hours the broker's OHLC "close" field reports *today's*
+    # close, so starting the dashboard after 15:30 would read +0.00% on every
+    # tile. When this is on, the previous close then comes from daily candles
+    # instead. Turn it off to skip that lookup and accept the flat board.
+    historical_previous_close: bool = True
 
     @classmethod
     def from_env(cls) -> "HeatmapConfig":
@@ -102,6 +141,13 @@ class HeatmapConfig:
             ui_refresh_seconds=_env_float("PULSE_HEATMAP_UI_REFRESH_SECONDS", 1.0),
             sector_order=order,
             heatmap_columns=max(1, _env_int("PULSE_HEATMAP_COLUMNS", 4)),
+            aggregation_method=_env_choice(
+                "PULSE_HEATMAP_AGGREGATION", EQUAL_WEIGHT, (EQUAL_WEIGHT, MARKET_CAP)
+            ),
+            weights_path=os.getenv("PULSE_HEATMAP_WEIGHTS_FILE", "")
+            or DEFAULT_WEIGHTS_PATH,
+            show_highlight_tables=_env_bool("PULSE_HEATMAP_HIGHLIGHT_TABLES", True),
+            highlight_table_limit=max(0, _env_int("PULSE_HEATMAP_HIGHLIGHT_LIMIT", 0)),
             min_colour_scale_pct=_env_float("PULSE_HEATMAP_MIN_COLOUR_SCALE_PCT", 0.75),
             feed_drain_seconds=_env_float("PULSE_HEATMAP_FEED_DRAIN_SECONDS", 0.5),
             stale_after_seconds=_env_float("PULSE_HEATMAP_STALE_AFTER_SECONDS", 10.0),
@@ -114,4 +160,7 @@ class HeatmapConfig:
                 "PULSE_HEATMAP_PREV_CLOSE_REFRESH_SECONDS", 900
             ),
             api_batch_size=_env_int("PULSE_HEATMAP_API_BATCH_SIZE", 50),
+            historical_previous_close=_env_bool(
+                "PULSE_HEATMAP_HISTORICAL_PREV_CLOSE", True
+            ),
         )

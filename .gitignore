@@ -10,3 +10,11 @@ env/
 .claude/
 
 docs/_archived
+__pycache__/
+*/__pycache__/
+**/__pycache__/
+
+# Raw broker instrument masters kept by scripts/fetch_instrument_master.py
+# --keep-raw. 35 MB, re-downloadable, never source. The generated
+# data/dhan_instruments.json IS committed - that is what the dashboard reads.
+data/instruments/
