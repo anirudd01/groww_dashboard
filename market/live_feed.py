@@ -10,8 +10,10 @@ which returns a thread-safe copy of the current state.
 
 Brokers sit behind ``market.providers``: the service asks for providers in
 configured preference order (default Dhan, then Groww) and uses the first one
-that authenticates and resolves instruments. If that provider's websocket
-cannot deliver, the service fails over to the next provider.
+that authenticates and resolves instruments. A socket that drops, goes silent
+or fails to open is reconnected on the *same* broker first, within a second,
+and only handed to the next broker once those retries are spent - the
+preferred broker carries data the fallbacks do not, so it is worth keeping.
 
 Price sources, in order of preference:
   1. The provider's websocket - continuous ticks (primary).
@@ -110,6 +112,13 @@ class LiveMarketDataService:
         self._connect_thread: Optional[threading.Thread] = None
         self._connect_result = None
         self._next_connect_attempt = 0.0
+        # How many times we have tried to get the active provider's websocket
+        # back since it last delivered data - counting dropped connections,
+        # silent connections and failed connects alike, because the response
+        # to all three is the same: reconnect this broker, and only give the
+        # board to the next one once that has stopped working. Reset by the
+        # first real tick, so a broker that hiccups once starts clean again.
+        self._recovery_attempts = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -208,17 +217,40 @@ class LiveMarketDataService:
 
         self._set_status(state=STATUS_DISCONNECTED, detail="Connecting to the live feed")
 
-        connected_at: Optional[float] = None
+        # When the websocket last made progress. It starts at connect time, so
+        # a feed that never delivers anything is caught, and moves forward on
+        # every tick, so a feed that connects fine and then goes quiet
+        # mid-session is caught by exactly the same timer. Measuring from the
+        # connection instead would declare every long-lived feed dead the
+        # moment it passed that window.
+        last_progress: Optional[float] = None
         next_rest_poll = 0.0
 
         while not self._stop_event.is_set():
             now = time.monotonic()
 
-            # 1. Establish / re-establish the websocket (on its own thread).
-            if self._feed is None and self._connect_feed():
-                connected_at = time.monotonic()
+            # 1. Has this broker's socket run out of chances? Decided before
+            # the connect below, so a doomed attempt is never started against
+            # a broker we are about to drop.
+            if remaining and self._should_try_next_provider():
+                logger.warning(
+                    "%s websocket did not come back in %d attempts - "
+                    "trying the next provider",
+                    self._provider.label,
+                    self._recovery_attempts,
+                )
+                if self._activate_provider(remaining):
+                    last_progress = None
 
-            # 2. Drain whatever the websocket has buffered (local work only).
+            # 2. Establish / re-establish the websocket (on its own thread).
+            if self._feed is None and self._connect_feed():
+                last_progress = time.monotonic()
+
+            # 3. Drain whatever the websocket has buffered (local work only).
+            # Remembered so the pass can tell whether the drain dropped the
+            # feed - _drain_feed tears down internally on a drop or a read
+            # error, as well as on the silence branch below.
+            had_feed = self._feed is not None
             if self._feed is not None:
                 if self._drain_feed():
                     if not self._ws_delivering:
@@ -227,25 +259,44 @@ class LiveMarketDataService:
                             self._provider.label,
                         )
                     self._ws_delivering = True
+                    last_progress = time.monotonic()
+                    # Data is flowing again: whatever went wrong before is
+                    # over, so the next hiccup gets a full set of retries.
+                    self._recovery_attempts = 0
                     self._set_status(source=SOURCE_WEBSOCKET, detail="")
                 elif (
-                    connected_at is not None
-                    and (time.monotonic() - connected_at)
-                    > self.config.feed_bootstrap_seconds
+                    last_progress is not None
+                    and (time.monotonic() - last_progress)
+                    > self.config.feed_silence_seconds
                     and session_state() == SESSION_OPEN
                 ):
+                    # Silent socket. Drop it and reconnect the *same* broker
+                    # straight away - conceding the board to a fallback over
+                    # one quiet spell costs more than it saves, especially
+                    # when the preferred broker carries data the fallback
+                    # does not (day bars, the index board).
+                    self._recovery_attempts += 1
                     logger.warning(
-                        "%s websocket delivered nothing for %.0fs during market hours",
+                        "%s websocket delivered nothing for %.1fs during market "
+                        "hours - reconnecting (attempt %d)",
                         self._provider.label,
-                        self.config.feed_bootstrap_seconds,
+                        time.monotonic() - last_progress,
+                        self._recovery_attempts,
                     )
                     self._teardown_feed()
-                    connected_at = None
-                    # Give the next provider a turn at the websocket.
-                    if remaining and self._activate_provider(remaining):
-                        self._next_connect_attempt = 0.0
+                    last_progress = None
 
-            # 3. Fallback: batched REST polling, clearly labelled as such.
+            # The feed was torn down on this pass, so the reconnect is queued
+            # behind the REST poll below, which blocks this thread for a second
+            # or two (Dhan throttles quote calls to 1/s). Go round immediately
+            # so the failover check and the connection attempt happen first and
+            # the REST poll then runs while the connect is in flight. This can
+            # fire at most once per teardown: the next pass has no feed to have
+            # lost, so it cannot spin.
+            if had_feed and self._feed is None:
+                continue
+
+            # 4. Fallback: batched REST polling, clearly labelled as such.
             if (
                 self.config.rest_fallback_enabled
                 and not self._ws_delivering
@@ -253,13 +304,7 @@ class LiveMarketDataService:
             ):
                 next_rest_poll = now + self.config.rest_poll_seconds
                 if self._poll_rest():
-                    self._set_status(
-                        source=SOURCE_REST,
-                        detail=(
-                            f"{self._provider.label} websocket unavailable - "
-                            "polling REST snapshots"
-                        ),
-                    )
+                    self._set_status(source=SOURCE_REST, detail=self._rest_detail())
                 else:
                     self._set_status(
                         source=SOURCE_NONE,
@@ -303,6 +348,9 @@ class LiveMarketDataService:
             self._provider = provider
             self._teardown_feed()
             self._next_connect_attempt = 0.0
+            # The new provider's socket has not failed yet; the outgoing
+            # provider's attempts say nothing about it.
+            self._recovery_attempts = 0
             # Base class returns {}; only a provider that overrides it has a
             # real endpoint worth calling.
             self._day_bars_supported = (
@@ -446,15 +494,68 @@ class LiveMarketDataService:
     # ------------------------------------------------------------------
     # Websocket
     # ------------------------------------------------------------------
+    def _should_try_next_provider(self) -> bool:
+        """Has this broker's websocket used up its chances to come back?
+
+        One counter covers both ways a socket fails, because the remedy for
+        both is the same and only the last resort differs:
+
+        * it connects and then drops or goes silent - caught by the drain
+          path and the silence timer;
+        * it never connects at all - that path has no feed object to drain,
+          so nothing else in the loop would ever notice, and the board would
+          sit on this broker's REST polling for the rest of the session with
+          a working broker unused behind it.
+
+        Only while the market is open: outside the session a quiet socket is
+        quiet because there is nothing to send, and swapping brokers over
+        that would be noise.
+        """
+        return (
+            self._feed is None
+            and self._recovery_attempts >= self.config.feed_recovery_attempts
+            and session_state() == SESSION_OPEN
+        )
+
+    def _connect_backoff(self) -> float:
+        """How long to wait before the next websocket attempt.
+
+        Short while we are still trying to recover a broker that was working
+        a moment ago - a dropped socket is usually back on the next attempt,
+        and every second spent waiting is a second the board spends on REST.
+        Long once every broker in the chain has had its turn and none of them
+        works: there is nothing left to race for, and with Groww in particular
+        connection churn measurably makes the next handshake slower.
+        """
+        if self._recovery_attempts < self.config.feed_recovery_attempts:
+            return self.config.feed_reconnect_seconds
+        return self.config.feed_retry_seconds
+
     def _connect_feed(self) -> bool:
         """Kick off a websocket attempt without blocking the worker loop.
 
         Returns True only once a feed is connected and subscribed.
         """
         if self._connect_result is not None:
-            feed, error = self._connect_result
+            attempted, feed, error = self._connect_result
             self._connect_result = None
             self._connect_thread = None
+            if attempted is not self._provider:
+                # We failed over while this attempt was still in flight. The
+                # socket that came back belongs to the broker we just dropped,
+                # so adopting it would stream one broker's prices under
+                # another's name. Discard it and let the new provider connect.
+                logger.info(
+                    "Discarding an in-flight %s feed - the provider changed to %s",
+                    getattr(attempted, "label", "?"),
+                    self._provider.label,
+                )
+                if feed is not None:
+                    try:
+                        feed.close()
+                    except Exception:
+                        logger.debug("Stale feed close failed (ignored)", exc_info=True)
+                return False
             if feed is not None:
                 self._feed = feed
                 with self._lock:
@@ -464,8 +565,17 @@ class LiveMarketDataService:
                     self._provider.label,
                     len(self._refs),
                 )
+                # Connected, but not yet delivering. _recovery_attempts is
+                # cleared by the first real tick, not here, so a socket that
+                # opens and then stays mute cannot retry forever.
                 return True
-            logger.warning("%s feed connection failed: %s", self._provider.label, error)
+            self._recovery_attempts += 1
+            logger.warning(
+                "%s feed connection failed (attempt %d): %s",
+                self._provider.label,
+                self._recovery_attempts,
+                error,
+            )
             with self._lock:
                 self._status.subscribed_count = 0
             self._set_status(detail=f"{self._provider.label} websocket unavailable: {error}")
@@ -476,7 +586,7 @@ class LiveMarketDataService:
 
         if time.monotonic() < self._next_connect_attempt:
             return False
-        self._next_connect_attempt = time.monotonic() + self.config.feed_retry_seconds
+        self._next_connect_attempt = time.monotonic() + self._connect_backoff()
 
         logger.info("Connecting to the %s live feed ...", self._provider.label)
         self._connect_thread = threading.Thread(
@@ -491,11 +601,16 @@ class LiveMarketDataService:
     def _connect_worker(
         self, provider: MarketDataProvider, refs: List[InstrumentRef]
     ) -> None:
-        """Runs on its own thread; publishes its outcome via _connect_result."""
+        """Runs on its own thread; publishes its outcome via _connect_result.
+
+        The provider is carried through the result because this can take
+        minutes (Groww's handshake does) and the service may have failed over
+        to a different broker in the meantime.
+        """
         try:
-            self._connect_result = (provider.open_feed(refs), None)
+            self._connect_result = (provider, provider.open_feed(refs), None)
         except Exception as e:
-            self._connect_result = (None, e)
+            self._connect_result = (provider, None, e)
 
     def _teardown_feed(self) -> None:
         feed, self._feed = self._feed, None
@@ -521,7 +636,15 @@ class LiveMarketDataService:
             return False
 
         if not feed.is_alive:
-            logger.warning("%s feed dropped", self._provider.label)
+            # A dropped socket is the one case we can detect instantly, so
+            # reconnect on the very next pass rather than waiting out the
+            # silence timer that would otherwise have caught it.
+            self._recovery_attempts += 1
+            logger.warning(
+                "%s feed dropped - reconnecting (attempt %d)",
+                self._provider.label,
+                self._recovery_attempts,
+            )
             self._teardown_feed()
             self._set_status(detail=f"{self._provider.label} feed disconnected")
             return False
@@ -534,7 +657,13 @@ class LiveMarketDataService:
             # feeds return nothing here and the breadth panel adapts.
             self._apply_day_bars(feed.day_bars())
         except Exception as e:
-            logger.warning("Feed read failed: %s", e)
+            self._recovery_attempts += 1
+            logger.warning(
+                "%s feed read failed (attempt %d): %s",
+                self._provider.label,
+                self._recovery_attempts,
+                e,
+            )
             self._teardown_feed()
             self._set_status(detail=f"Feed error: {e}")
             return False
@@ -544,6 +673,24 @@ class LiveMarketDataService:
     # ------------------------------------------------------------------
     # REST fallback
     # ------------------------------------------------------------------
+    def _rest_detail(self) -> str:
+        """Why we are polling. "Still connecting" is not "broken".
+
+        Groww's handshake routinely takes tens of seconds and several
+        internal retries, so the first REST polls of a session happen while
+        the websocket is still being negotiated - nothing has gone wrong yet,
+        and a banner saying the socket is unavailable reads as a fault. Only
+        once a connection attempt has actually come back failed is that the
+        honest word for it.
+        """
+        label = self._provider.label if self._provider else "The broker"
+        if self._recovery_attempts == 0:
+            return (
+                f"Still negotiating the {label} websocket - this can take "
+                "up to a minute, and the board switches over on its own."
+            )
+        return f"{label} websocket unavailable - polling REST snapshots"
+
     def _poll_rest(self) -> bool:
         if self._provider is None or not self._refs:
             return False

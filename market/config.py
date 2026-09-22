@@ -99,10 +99,23 @@ class HeatmapConfig:
     feed_drain_seconds: float = 0.5
     # No tick for this long while the market is open => show STALE.
     stale_after_seconds: float = 10.0
-    # If the websocket produces no tick within this window after connecting,
-    # treat it as unusable and fall back (when the fallback is enabled).
-    feed_bootstrap_seconds: float = 20.0
-    # Backoff between websocket (re)connection attempts.
+    # A connected websocket that produces no tick for this long during market
+    # hours is treated as gone and reconnected. It also covers a feed that
+    # never delivered anything at all, since the clock starts at connect time.
+    feed_silence_seconds: float = 10.0
+    # Backoff before reconnecting the *same* broker after its socket dropped
+    # or went quiet. Deliberately short: a dropped socket is usually back on
+    # the next attempt, and the preferred broker is worth getting back fast
+    # rather than conceding the board to a fallback over one hiccup.
+    feed_reconnect_seconds: float = 1.0
+    # How many of those quick reconnects to try before handing the socket to
+    # the next broker. Covers both failure modes with one counter: a socket
+    # that connects then goes silent, and one that never connects at all
+    # (which has no feed to drain, so nothing else would ever notice it).
+    feed_recovery_attempts: int = 2
+    # Backoff once every broker has been tried and none of them works. The
+    # board is on REST by then, so retrying gently beats hammering - and with
+    # Groww, connection churn measurably makes the next handshake worse.
     feed_retry_seconds: float = 30.0
 
     # --- REST fallback --------------------------------------------------
@@ -151,7 +164,11 @@ class HeatmapConfig:
             min_colour_scale_pct=_env_float("PULSE_HEATMAP_MIN_COLOUR_SCALE_PCT", 0.75),
             feed_drain_seconds=_env_float("PULSE_HEATMAP_FEED_DRAIN_SECONDS", 0.5),
             stale_after_seconds=_env_float("PULSE_HEATMAP_STALE_AFTER_SECONDS", 10.0),
-            feed_bootstrap_seconds=_env_float("PULSE_HEATMAP_FEED_BOOTSTRAP_SECONDS", 20.0),
+            feed_silence_seconds=_env_float("PULSE_HEATMAP_FEED_SILENCE_SECONDS", 10.0),
+            feed_reconnect_seconds=_env_float("PULSE_HEATMAP_FEED_RECONNECT_SECONDS", 1.0),
+            feed_recovery_attempts=max(
+                1, _env_int("PULSE_HEATMAP_FEED_RECOVERY_ATTEMPTS", 2)
+            ),
             feed_retry_seconds=_env_float("PULSE_HEATMAP_FEED_RETRY_SECONDS", 30.0),
             rest_fallback_enabled=_env_bool("PULSE_HEATMAP_REST_FALLBACK", True),
             rest_poll_seconds=_env_float("PULSE_HEATMAP_REST_POLL_SECONDS", 3.0),

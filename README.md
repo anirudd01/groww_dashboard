@@ -51,7 +51,7 @@ pulse_tester/
 │   ├── sector_highlights.py      # Leading / lagging sector tables
 │   └── index_board.py            # NSE sectoral index board
 │
-├── tests/                        # Unit tests for the non-UI logic (212 tests)
+├── tests/                        # Unit tests for the non-UI logic (303 tests)
 │   ├── test_sector_heatmap.py     # % change, aggregation, ranking, staleness, universe
 │   ├── test_providers.py          # Provider interface, registry, Dhan packet decoding
 │   ├── test_ui_colours.py         # Colour ramp, tile keys/labels/CSS, styled table
@@ -180,7 +180,7 @@ ticks, and says so explicitly when prices came from the REST fallback instead.
 ### 6. (Optional) Run the tests
 
 ```bash
-python -m unittest discover -s tests -t .    # 273 tests, no extra dependencies
+python -m unittest discover -s tests -t .    # 303 tests, no extra dependencies
 ```
 
 ---
@@ -193,7 +193,7 @@ python -m unittest discover -s tests -t .    # 273 tests, no extra dependencies
 - **The sector heatmap is broker-agnostic.** `market/providers/` defines a `MarketDataProvider` + `FeedHandle` interface with two implementations today — **Dhan** (DhanHQ v2, preferred) and **Groww** (an adapter over the existing stack). `PULSE_MARKET_PROVIDERS` sets the preference order (default `dhan,groww`); the service adopts the first broker that authenticates and fails over if its websocket cannot deliver. Kite/Zerodha is a registry placeholder for later.
 - **Two boards share one engine.** The Nifty 50 board aggregates constituents into sectors; the NSE Sectoral Indices board shows real index values from Dhan's `IDX_I` segment, where each tile is one index and nothing is averaged. Each board runs its own feed (Dhan allows 5 connections per client id) and a board you have not opened is never started. The index drill-down shows the Nifty 50 members of the matching sector, labelled explicitly as *not* the index's real constituent list — neither broker publishes that.
 - **Sector percentages are equal-weighted by default, market-cap weighted on request.** Equal weighting answers "how did the average stock in this sector do"; cap weighting answers "how did its big names do". Neither broker exposes market cap, so free-float weights are generated offline by `scripts/fetch_index_weights.py` into `data/index_weights.json` and only *read* at runtime — the dashboard never fetches fundamentals while the market is open. If weights are missing it falls back to equal weighting and says so rather than presenting an unweighted number as weighted.
-- **It reuses, rather than duplicates, the existing Groww stack:** it authenticates through the same `GrowwAPIClient` singleton and extends `GrowwAPIService` with NSE-CASH helpers (instrument resolution, previous close via `get_ohlc`, batched LTP). Its live feed runs on a background daemon thread owned by `LiveMarketDataService`, deliberately outside Streamlit's rerun lifecycle, so reruns and view changes never rebuild the websocket. Full design notes, including the current Groww websocket limitation and the REST fallback, are in [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md).
+- **It reuses, rather than duplicates, the existing Groww stack:** it authenticates through the same `GrowwAPIClient` singleton and extends `GrowwAPIService` with NSE-CASH helpers (instrument resolution, previous close via `get_ohlc`, batched LTP). Its live feed runs on a background daemon thread owned by `LiveMarketDataService`, deliberately outside Streamlit's rerun lifecycle, so reruns and view changes never rebuild the websocket. Full design notes and the REST fallback are in [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md); how Groww's websocket differs from Dhan's, and what the adapter does about it, is in [`docs/api/GROWW_API_FEED.md`](docs/api/GROWW_API_FEED.md#websocket-behaviour-in-practice-observed).
 
 ---
 
@@ -224,6 +224,12 @@ and websocket APIs are called directly.
 
 - **Clicking a heatmap tile does nothing** — you are on the Treemap view. Streamlit cannot receive Plotly treemap clicks (it listens for `plotly_click`; treemaps emit `plotly_treemapclick`). Switch the sidebar to **Tiles (clickable)**, which is the default.
 - **Sector heatmap shows "LIVE (Dhan REST polling)"** — the websocket is not delivering, so prices are batched REST snapshots (labelled as such, never shown as socket-live). Most common cause: the Dhan access token was minted **before** the Data API plan was activated — regenerate it after subscribing. Diagnose with `python scripts/check_heatmap_universe.py --provider dhan`, which reports `dataPlan` explicitly.
-- **Sector heatmap shows "LIVE (Groww REST polling)"** — Dhan was unavailable and Groww's socket gateway never completes its NATS handshake (it neither authorises nor rejects the connection), so `GrowwFeed` cannot connect. The SDK usage matches Groww's docs exactly and the docs' own example fails the same way, so this is not a code fault. See "Known limitations" in [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md) for the full diagnosis to send to Groww support.
+- **Terminal says "Dhan websocket delivered nothing for 10.0s - reconnecting"** — the socket went quiet or dropped, and the service is getting it back. A dropped Dhan socket reconnects in ~2 s and the board stays on Dhan; REST covers the gap, which is why nothing changes on screen. Only if two reconnects in a row fail does the board move to the next broker. See "Recovery before failover" in [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md).
+
+- **Sector heatmap shows "LIVE (Groww REST polling)" for the first few seconds** — normal. Groww's socket handshake is slow (1 s in the best case, tens of seconds routinely), so the board polls REST until it lands and then switches to `LIVE (websocket)` by itself, typically within 10–20 s. The banner says whether it is still negotiating or has actually failed.
+
+- **Groww logs a run of empty `ERROR ... nats_client: Error:` lines, then works** — also normal, and the single most misleading thing this feed does. Each line is a `TimeoutError` from Groww's gateway with an empty message; `nats-py` retries every ~4 s until one lands. It is not a fault and needs no action. Groww's websocket behaves quite differently from Dhan's in several other ways too — buffered rather than pushed, no drop notification, no `close()` — all measured and explained in [`docs/api/GROWW_API_FEED.md`](docs/api/GROWW_API_FEED.md#websocket-behaviour-in-practice-observed). **Read that before assuming the two brokers' sockets behave alike.**
+
+- **Groww REST starts failing with `Extra data: line 1 column 5` or `Authentication failed: The requested resource was not found`** — Groww throttles its REST and auth endpoints, and restarting the dashboard repeatedly while debugging will trip it. Neither is a socket problem; wait a few minutes.
 
 See [`docs/`](docs/) for deeper API reference and historical design notes, [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md) for the sector heatmap, and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is planned next.
