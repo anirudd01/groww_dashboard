@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Tuple
 
+from market.providers.registry import DEFAULT_PROVIDER_ORDER
 from market.sector_aggregation import EQUAL_WEIGHT, MARKET_CAP
 from market.universe import DEFAULT_UNIVERSE_KEY
 from market.weights import DEFAULT_WEIGHTS_PATH
@@ -65,8 +66,8 @@ class HeatmapConfig:
     # --- providers ------------------------------------------------------
     # Broker preference order. The service uses the first one that
     # authenticates and resolves instruments; the rest are fallbacks.
-    # Known: dhan, groww. Planned: kite.
-    providers: Tuple[str, ...] = ("dhan", "groww")
+    # Known: dhan, indmoney, groww, kite (alias: zerodha).
+    providers: Tuple[str, ...] = DEFAULT_PROVIDER_ORDER
 
     # --- universe -------------------------------------------------------
     universe_key: str = DEFAULT_UNIVERSE_KEY
@@ -147,7 +148,7 @@ class HeatmapConfig:
         raw_providers = (os.getenv("PULSE_MARKET_PROVIDERS", "") or "").strip()
         providers = tuple(
             part.strip().lower() for part in raw_providers.split(",") if part.strip()
-        ) or ("dhan", "groww")
+        ) or DEFAULT_PROVIDER_ORDER
         return cls(
             providers=providers,
             universe_key=os.getenv("PULSE_HEATMAP_UNIVERSE", DEFAULT_UNIVERSE_KEY),

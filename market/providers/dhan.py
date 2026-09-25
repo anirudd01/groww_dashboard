@@ -25,13 +25,13 @@ import os
 import struct
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
 import requests
 
 from market.instruments import load_instruments, regenerate_hint
-from market.market_hours import IST, now_ist, todays_session_date
+from market.market_hours import now_ist, todays_session_date
 from market.providers.base import (
     SEGMENT_CASH,
     SEGMENT_INDEX,
@@ -39,6 +39,12 @@ from market.providers.base import (
     FeedHandle,
     InstrumentRef,
     MarketDataProvider,
+)
+# Re-exported: these began life here, and callers still import them from dhan.
+from market.providers.candles import (  # noqa: F401
+    _candle_dates,
+    prior_close_from_candles,
+    positive as _positive,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,69 +180,6 @@ def _history_gate() -> None:
         if wait > 0:
             time.sleep(wait)
         _LAST_HISTORY_AT = time.monotonic()
-
-
-def _candle_dates(stamps) -> List[Optional[date]]:
-    """IST dates for a candle series' epoch timestamps, None where unreadable."""
-    dates: List[Optional[date]] = []
-    for stamp in stamps or []:
-        try:
-            dates.append(datetime.fromtimestamp(int(stamp), IST).date())
-        except (TypeError, ValueError, OSError, OverflowError):
-            dates.append(None)
-    return dates
-
-
-def prior_close_from_candles(payload: dict, session_date: Optional[date] = None):
-    """The previous session's close from a daily-candle response.
-
-    ``payload`` is Dhan's parallel-array format: ``{"close": [...],
-    "timestamp": [...], ...}`` in ascending date order.
-
-    ``session_date`` is the date the *current price* belongs to, or None when
-    that price comes from a session earlier than today (weekend, or before
-    today's open). This is the whole subtlety:
-
-    - Given a session date, the answer is the last candle strictly *before*
-      it. That is correct whether or not today's own candle has been written
-      yet - after 15:30 it steps over today, and in the gap before Dhan
-      publishes today's candle it still lands on the right day.
-    - Without one, the most recent candle *is* the session the current price
-      came from, so the answer is the candle before it.
-
-    Returns None rather than guessing when the series is too short or the
-    close is not a usable price.
-    """
-    if not isinstance(payload, dict):
-        return None
-    closes = payload.get("close") or []
-    if len(closes) < 2:
-        return None
-
-    dates = _candle_dates(payload.get("timestamp"))
-    readable = any(day is not None for day in dates)
-    if session_date is not None and readable and len(dates) == len(closes):
-        for close, day in zip(reversed(closes), reversed(dates)):
-            if day is not None and day < session_date:
-                return _positive(close)
-        return None
-
-    # No session date, or timestamps we cannot read: treat the last candle as
-    # the current session and take the one before it.
-    return _positive(closes[-2])
-
-
-def _positive(value) -> Optional[float]:
-    """``value`` as a float when it is a usable price, otherwise None.
-
-    Dhan sends 0 for any field it has no value for yet. Zero must stay
-    "unknown" rather than becoming a price.
-    """
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number > 0 else None
 
 
 def client_id_from_token(access_token: str) -> str:

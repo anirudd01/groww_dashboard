@@ -7,8 +7,10 @@ Run with:
     streamlit run sector_heatmap_dashboard.py
 """
 
+import dataclasses
 import logging
 import os
+import threading
 
 import streamlit as st
 
@@ -31,6 +33,11 @@ except ImportError:  # pragma: no cover - mirrors the other dashboards
 from market.config import HeatmapConfig, ORDER_ALPHABETICAL, ORDER_BY_PERFORMANCE
 from market.live_feed import LiveMarketDataService
 from market.market_hours import session_state
+from market.providers.registry import (
+    available_provider_names,
+    canonical_provider_name,
+    provider_label,
+)
 from market.models import (
     PREV_CLOSE_DAILY_CANDLE,
     SOURCE_REST,
@@ -94,21 +101,63 @@ DEFAULT_EQUITY_UNIVERSE = "NIFTY50"
 STYLE_TILES = "tiles"
 STYLE_TREEMAP = "treemap"
 
+#: Sidebar provider choice meaning "the configured preference order, with
+#: failover". Any other value pins the boards to that one broker.
+PROVIDER_AUTO = "auto"
+
 
 # ---------------------------------------------------------------------------
 # Service bootstrap
 # ---------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
-def get_service(universe_key: str) -> LiveMarketDataService:
-    """One live-feed service per universe, shared across reruns and sessions.
+def _service_registry():
+    """``{(universe_key, provider_choice): service}`` plus the lock guarding it.
 
-    st.cache_resource keeps the background thread and its websocket alive
-    independently of Streamlit's rerun cycle, so navigating between views
-    never reconnects the feed.
+    Held in st.cache_resource so the background threads and their websockets
+    outlive Streamlit's rerun cycle - navigating between views never
+    reconnects a feed.
     """
-    config = HeatmapConfig.from_env()
-    universe = get_universe(universe_key)
-    return LiveMarketDataService(universe=universe, config=config).start()
+    return {}, threading.Lock()
+
+
+def get_service(universe_key: str, provider_choice: str = PROVIDER_AUTO) -> LiveMarketDataService:
+    """One live-feed service per universe for the chosen provider.
+
+    Switching provider stops the board's previous service before starting
+    the new one: brokers cap concurrent sockets (INDmoney at 3, Dhan at 5),
+    and a feed nobody is looking at would otherwise hold one of them open.
+    The registry is process-wide, so the switch applies to every open tab.
+    """
+    services, lock = _service_registry()
+    key = (universe_key, provider_choice)
+    with lock:
+        for other in [k for k in services if k[0] == universe_key and k != key]:
+            logger.info("Provider switched for %s - stopping the %s feed", universe_key, other[1])
+            services.pop(other).stop()
+        service = services.get(key)
+        if service is None:
+            config = HeatmapConfig.from_env()
+            if provider_choice != PROVIDER_AUTO:
+                # Pinned: exactly this broker, no failover, so a comparison
+                # between brokers never quietly shows a third one's numbers.
+                config = dataclasses.replace(config, providers=(provider_choice,))
+            service = LiveMarketDataService(
+                universe=get_universe(universe_key), config=config
+            ).start()
+            services[key] = service
+        return service
+
+
+def provider_options():
+    """Sidebar choices: Auto first, then every implemented broker."""
+    return [PROVIDER_AUTO] + available_provider_names()
+
+
+def provider_option_label(choice: str, config: HeatmapConfig) -> str:
+    if choice == PROVIDER_AUTO:
+        chain = " → ".join(provider_label(name) for name in config.providers)
+        return f"Auto ({chain})"
+    return provider_label(choice)
 
 
 def init_session_state() -> None:
@@ -466,7 +515,10 @@ def render_index_detail(index_service: LiveMarketDataService, label: str) -> Non
             )
         return
 
-    equity_snapshot = get_service(get_universe(DEFAULT_EQUITY_UNIVERSE).key).snapshot()
+    equity_snapshot = get_service(
+        get_universe(DEFAULT_EQUITY_UNIVERSE).key,
+        st.session_state.get("provider_choice", PROVIDER_AUTO),
+    ).snapshot()
     members = equity_snapshot.for_sector(definition.sector)
 
     st.markdown(f"##### Nifty 50 members classified as {definition.sector}")
@@ -645,6 +697,29 @@ def main() -> None:
             ),
         )
 
+        st.markdown("### Data provider")
+        options = provider_options()
+        default_choice = canonical_provider_name(os.getenv("PULSE_HEATMAP_PROVIDER", ""))
+        if st.session_state.get("provider_choice") not in options:
+            st.session_state.provider_choice = (
+                default_choice if default_choice in options else PROVIDER_AUTO
+            )
+        provider_choice = st.radio(
+            "Data provider",
+            options=options,
+            format_func=lambda v: provider_option_label(v, config),
+            key="provider_choice",
+            label_visibility="collapsed",
+            help=(
+                "Auto uses the first broker in PULSE_MARKET_PROVIDERS that "
+                "works and fails over to the next. Picking one broker uses "
+                "only that broker, so two brokers can be compared honestly."
+            ),
+        )
+        st.caption(
+            "Switching reconnects the board's feed. It applies to every open tab."
+        )
+
         st.markdown("### Display")
         order = st.radio(
             "Sector tile order",
@@ -701,7 +776,7 @@ def main() -> None:
     # sector page never connects a second websocket you are not looking at.
     active_key = INDEX_UNIVERSE_KEY if page == PAGE_INDICES else universe.key
     try:
-        service = get_service(active_key)
+        service = get_service(active_key, provider_choice)
     except Exception as e:
         st.error(f"Could not start the live market data service: {e}")
         st.stop()

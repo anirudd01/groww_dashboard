@@ -39,6 +39,19 @@ logger = logging.getLogger(__name__)
 #: Default location, relative to the repository root. One file per broker,
 #: because a security id is only meaningful to the broker that issued it.
 DEFAULT_INSTRUMENTS_PATH = os.path.join("data", "dhan_instruments.json")
+#: INDmoney (INDstocks) ids. Cash-equity ids happen to equal Dhan's - both are
+#: the NSE token - but index ids are INDmoney's own (``40000001`` for Nifty 50
+#: where Dhan says ``13``), so the two files are never interchangeable.
+INDMONEY_INSTRUMENTS_PATH = os.path.join("data", "indmoney_instruments.json")
+#: Zerodha Kite ids. ``security_id`` is Kite's own ``instrument_token``
+#: (``738561`` for RELIANCE, not the NSE token ``2885``), and each row also
+#: carries the ``tradingsymbol`` Kite's REST quotes are keyed by.
+KITE_INSTRUMENTS_PATH = os.path.join("data", "kite_instruments.json")
+
+#: The script that regenerates each broker's file.
+DHAN_SCRIPT = "scripts/fetch_instrument_master.py"
+INDMONEY_SCRIPT = "scripts/fetch_indmoney_instruments.py"
+KITE_SCRIPT = "scripts/fetch_kite_instruments.py"
 
 #: Beyond this the loader warns that the file is getting old. Not an error:
 #: security ids of existing instruments are stable, and NSE reconstitutes the
@@ -107,10 +120,10 @@ class InstrumentSet:
         return f"{self.symbol_count} instrument ids - {self.provider or '?'}, generated {when}"
 
 
-def regenerate_hint(path: str) -> str:
+def regenerate_hint(path: str, script: str = DHAN_SCRIPT) -> str:
     """The one instruction that fixes every problem this module reports."""
     return (
-        f"Run 'python scripts/fetch_instrument_master.py' to regenerate {path} "
+        f"Run 'python {script}' to regenerate {path} "
         "(downloads the broker's instrument master once; not needed at runtime)."
     )
 
@@ -125,18 +138,21 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def load_instruments(path: Optional[str] = None) -> InstrumentSet:
+def load_instruments(
+    path: Optional[str] = None, script: str = DHAN_SCRIPT
+) -> InstrumentSet:
     """Read the instruments file. Never raises - callers check ``is_usable``.
 
     A malformed segment or row is dropped with a log line rather than failing
-    the whole file, so one bad entry costs one symbol.
+    the whole file, so one bad entry costs one symbol. ``script`` only changes
+    which generator the error messages point at.
     """
     path = path or os.getenv("PULSE_INSTRUMENTS_FILE") or DEFAULT_INSTRUMENTS_PATH
 
     if not os.path.exists(path):
         return InstrumentSet(
             path=path,
-            error=f"No instruments file at {path}. {regenerate_hint(path)}",
+            error=f"No instruments file at {path}. {regenerate_hint(path, script)}",
         )
 
     try:
@@ -191,6 +207,6 @@ def load_instruments(path: Optional[str] = None) -> InstrumentSet:
             "indices twice a year, so it is worth regenerating. %s",
             path,
             loaded.age_days or 0,
-            regenerate_hint(path),
+            regenerate_hint(path, script),
         )
     return loaded

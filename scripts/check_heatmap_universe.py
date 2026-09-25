@@ -103,7 +103,7 @@ def main() -> int:
         choices=("sectors", "indices"),
         help="Shorthand for --universe: 'indices' checks the NSE sectoral index board",
     )
-    parser.add_argument("--provider", help="Test only this broker (dhan/groww)")
+    parser.add_argument("--provider", help="Test only this broker (dhan/indmoney/groww/kite)")
     parser.add_argument("--seconds", type=int, default=20, help="How long to watch the feed")
     args = parser.parse_args()
 

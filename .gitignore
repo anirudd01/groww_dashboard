@@ -14,6 +14,13 @@ __pycache__/
 */__pycache__/
 **/__pycache__/
 
+# Kite Connect daily session written by scripts/kite_login.py. Holds a live
+# access token - never commit it.
+.kite_session.json
+.kite_session.json.tmp
+# Half-written generated files (renamed into place when complete)
+data/*.tmp
+
 # Raw broker instrument masters kept by scripts/fetch_instrument_master.py
 # --keep-raw. 35 MB, re-downloadable, never source. The generated
 # data/dhan_instruments.json IS committed - that is what the dashboard reads.
