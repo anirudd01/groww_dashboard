@@ -12,9 +12,10 @@ References (DhanHQ API v2):
   - Daily candles     : POST https://api.dhan.co/v2/charts/historical
   - Live feed         : wss://api-feed.dhan.co?version=2&token=..&clientId=..&authType=2
 
-Credentials come from the environment. Only ``DHAN_ACCESS_TOKEN`` is required -
-Dhan embeds the client id in the token, so ``DHAN_CLIENT_ID`` is an optional
-override. Neither is ever logged.
+Credentials: ``DHAN_CLIENT_ID``, ``DHAN_PIN`` and ``DHAN_TOTP_SECRET`` in
+``.env``. The access token itself is never configured: ``dhan_session`` mints
+it from TOTP and shares it through the git-ignored ``.dhan_session.json``, so
+every dashboard and script uses the same token. Nothing is ever logged.
 """
 
 import asyncio
@@ -32,6 +33,7 @@ import requests
 
 from market.instruments import load_instruments, regenerate_hint
 from market.market_hours import now_ist, todays_session_date
+from market.providers import dhan_session
 from market.providers.base import (
     SEGMENT_CASH,
     SEGMENT_INDEX,
@@ -447,10 +449,20 @@ class DhanProvider(MarketDataProvider):
         client_id: Optional[str] = None,
         timeout: int = 15,
     ):
-        self._token = (access_token or os.getenv("DHAN_ACCESS_TOKEN") or "").strip()
-        self._client_id = self._resolve_client_id(
-            client_id or os.getenv("DHAN_CLIENT_ID")
+        # An explicit token (tests, one-off tools) is used as given and never
+        # refreshed. Otherwise the token comes from dhan_session: the saved
+        # one if usable, else one minted from TOTP in connect().
+        self._explicit_token = (access_token or "").strip()
+        if not self._explicit_token and os.getenv("DHAN_ACCESS_TOKEN"):
+            logger.warning(
+                "Ignoring DHAN_ACCESS_TOKEN in the environment - Dhan tokens are "
+                "generated from TOTP now (DHAN_CLIENT_ID, DHAN_PIN, DHAN_TOTP_SECRET)"
+            )
+        self._configured_client_id = client_id if client_id is not None else os.getenv("DHAN_CLIENT_ID")
+        self._token = self._explicit_token or dhan_session.saved_token(
+            dhan_session.client_id_from_env()
         )
+        self._client_id = self._resolve_client_id(self._configured_client_id)
         self._timeout = timeout
         # The generated instrument-id file, loaded lazily and kept for the
         # life of the provider. No download, no pandas.
@@ -499,7 +511,29 @@ class DhanProvider(MarketDataProvider):
 
     # -- config / auth --------------------------------------------------
     def is_configured(self) -> bool:
-        return bool(self._token and self._client_id)
+        """A token in hand, or everything needed to mint one. No network I/O."""
+        if self._explicit_token:
+            return bool(self._client_id)
+        return bool(self._token and self._client_id) or dhan_session.has_totp_credentials()
+
+    def _refresh_token(self, rejected: str = "") -> None:
+        """Take the shared session token, minting a new one if needed.
+
+        ``rejected`` is a token the server just refused: ask for a
+        replacement rather than the saved copy of the same token.
+        """
+        if self._explicit_token:
+            return
+        try:
+            self._token = dhan_session.get_access_token(force_new=bool(rejected), rejected=rejected)
+        except dhan_session.DhanAuthError as exc:
+            raise RuntimeError(str(exc)) from exc
+        self._client_id = self._resolve_client_id(self._configured_client_id)
+
+    def _profile(self) -> dict:
+        return self._json(
+            requests.get(f"{REST_BASE}/profile", headers=self._headers(), timeout=self._timeout)
+        )
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -512,9 +546,10 @@ class DhanProvider(MarketDataProvider):
     def connect(self) -> None:
         if not self.is_configured():
             raise RuntimeError(
-                "Dhan credentials missing - set DHAN_ACCESS_TOKEN "
-                "(DHAN_CLIENT_ID is optional; it is read from the token)"
+                "Dhan credentials missing - set DHAN_CLIENT_ID, DHAN_PIN and "
+                "DHAN_TOTP_SECRET in .env"
             )
+        self._refresh_token()
         expiry = token_expiry(self._token)
         if expiry is not None:
             remaining = expiry - int(time.time())
@@ -525,12 +560,15 @@ class DhanProvider(MarketDataProvider):
             logger.info("Dhan access token valid for %.1f more hours", remaining / 3600)
         # /profile is a non-trading endpoint: it validates the token even when
         # the Data API plan is inactive, so it gives a precise diagnosis.
-        profile = self._json(
-            requests.get(
-                f"{REST_BASE}/profile", headers=self._headers(), timeout=self._timeout
-            )
-        )
+        profile = self._profile()
         error = self._error_of(profile)
+        if (error or not profile.get("dhanClientId")) and not self._explicit_token:
+            # The saved token can be revoked early (e.g. a login elsewhere):
+            # mint a replacement once before giving up.
+            logger.info("Dhan rejected the saved token - generating a new one")
+            self._refresh_token(rejected=self._token)
+            profile = self._profile()
+            error = self._error_of(profile)
         if error or not profile.get("dhanClientId"):
             code, message = error or ("", "token rejected")
             raise RuntimeError(f"Dhan authentication failed: {code} {message}".strip())
@@ -867,4 +905,6 @@ class DhanProvider(MarketDataProvider):
         return bars
 
     def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:
+        # A reconnect late in the token's life picks up (or mints) its successor.
+        self._refresh_token()
         return DhanFeedHandle(self._token, self._client_id, refs).start()

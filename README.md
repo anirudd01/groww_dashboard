@@ -1,11 +1,12 @@
 # Pulse Tester: Groww Portfolio, FnO & Market Dashboards
 
-Four Streamlit dashboards for a Groww trading account, sharing a common API client architecture:
+Five Streamlit dashboards: four for a Groww trading account, sharing a common API client architecture, and one built only from TradingView widgets:
 
 - **[`fno_dashboard.py`](fno_dashboard.py)** — Futures & Options (NSE FnO + MCX Commodity) position tracker: real-time LTP, P&L, sentiment analytics, and a Quick Exit action for profitable positions.
 - **[`app.py`](app.py)** — Portfolio & MTF Decoupler: separates actual (cash-owned) delivery holdings from MTF (margin/leveraged) positions, with a margin health simulator.
 - **[`sector_heatmap_dashboard.py`](sector_heatmap_dashboard.py)** — Live sector heatmaps, two boards in one app: the **Nifty 50 board** aggregates the 50 constituents into sectors (equal- or market-cap weighted), and the **NSE Sectoral Indices board** shows the real index values. Both are grids of clickable tiles coloured by live percentage change, with one-click drill-down. Broker-agnostic and switchable from the sidebar: **Dhan** is the default live feed with **INDmoney** as the first fallback, **Groww** and **Zerodha Kite** as further options, or pin any one broker to compare them. Visualisation only — it places no orders and generates no signals. See [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md).
 - **[`fno_movers_dashboard.py`](fno_movers_dashboard.py)** — F&O top gainers and losers, one card per day (last 1/3/5/7 days), with separate tabs for the **Nifty 50** and **all ~210 NSE F&O stocks**. Past days come from a stored close history, and today from one bulk Kite quote. Visualisation only. See [`docs/FNO_MOVERS.md`](docs/FNO_MOVERS.md).
+- **[`tradingview_dashboard.py`](tradingview_dashboard.py)** — **Market pulse**: crude oil (WTI, Brent), natural gas (Henry Hub), USD/INR and EUR/INR, and Indian markets, each category in its own section. There are two views: **ticker tags** (compact pills; hover one for its chart) and **mini charts with TradingView's Top Stories** news alongside. It needs no credentials and the app makes no network calls: TradingView's widgets fetch their own data in the browser. NSE, MCX and GIFT Nifty are **not licensed for TradingView widgets**, so Nifty is shown through its BSE-listed ETFs, crude and gas through the CFDs that track the benchmarks, and the rest as links to tradingview.com. See [`docs/TRADINGVIEW_WIDGETS.md`](docs/TRADINGVIEW_WIDGETS.md), the widget reference to read before touching any TradingView widget.
 
 ---
 
@@ -18,6 +19,7 @@ pulse_tester/
 ├── app.py                        # Portfolio / MTF Decoupler dashboard
 ├── sector_heatmap_dashboard.py   # Live Nifty 50 sector heatmap (Streamlit entry point)
 ├── fno_movers_dashboard.py       # F&O top gainers/losers by day (Streamlit entry point)
+├── tradingview_dashboard.py      # Market pulse: TradingView widgets, no credentials (Streamlit entry point)
 ├── groww_client.py               # Groww API wrapper used by app.py (delivery/MTF/margins)
 │
 ├── groww_api/                    # Groww API client package used by fno_dashboard.py
@@ -30,6 +32,7 @@ pulse_tester/
 │   ├── index_weights.json         # Free-float market caps for sector weighting
 │   ├── fno_universe.json          # NSE F&O stocks + Kite tokens (update_fno_history.py)
 │   ├── fno_daily_closes.csv       # Daily OHLCV per F&O stock (update_fno_history.py)
+│   ├── market.db                  # NOT checked in: 1-minute + daily bars (backfill_intraday.py)
 │   ├── dhan_instruments.json      # Dhan security ids for tracked symbols
 │   ├── indmoney_instruments.json  # INDmoney security ids for tracked symbols
 │   └── kite_instruments.json      # Kite instrument tokens + tradingsymbols
@@ -42,10 +45,14 @@ pulse_tester/
 │   │   ├── groww.py              # Adapter over the existing Groww stack
 │   │   ├── kite.py               # Zerodha Kite Connect REST + binary websocket (read-only)
 │   │   ├── kite_session.py       # Kite login flow + the saved daily session
+│   │   ├── dhan_session.py       # Dhan token minted from TOTP, shared via .dhan_session.json
 │   │   ├── candles.py            # Shared daily-candle previous-close logic
 │   │   └── registry.py           # Name -> provider, preference order
 │   ├── config.py                 # HeatmapConfig - all tunables, env-overridable
 │   ├── fno_movers.py             # F&O universe, close history, daily movers (pure)
+│   ├── clock_offset.py           # PC clock vs NTP, saved to .clock_offset.json; all TOTP codes use it
+│   ├── intraday_store.py         # SQLite schema + upserts for 1-minute/daily bars and the gap view
+│   ├── tradingview_symbols.py    # Market pulse: categories, symbols, proxies, what widgets cannot show
 │   ├── universe.py               # Universe registry (NIFTY50; NIFTYNEXT50 ready)
 │   ├── sector_mapping.py         # symbol -> sector classification (edit here)
 │   ├── index_mapping.py          # which NSE indices the index board shows
@@ -61,9 +68,10 @@ pulse_tester/
 │   ├── colours.py                # Shared diverging colour scale
 │   ├── sector_detail.py          # Constituent table + colour grading
 │   ├── sector_highlights.py      # Leading / lagging sector tables
-│   └── index_board.py            # NSE sectoral index board
+│   ├── index_board.py            # NSE sectoral index board
+│   └── tradingview.py            # TradingView widget HTML for st.iframe (+ in-browser theme detection)
 │
-├── tests/                        # Unit tests for the non-UI logic (403 tests)
+├── tests/                        # Unit tests for the non-UI logic (481 tests)
 │   ├── test_sector_heatmap.py     # % change, aggregation, ranking, staleness, universe
 │   ├── test_providers.py          # Provider interface, registry, Dhan packet decoding
 │   ├── test_indmoney.py           # INDmoney frames, REST mapping, index-name table
@@ -71,7 +79,9 @@ pulse_tester/
 │   ├── test_fno_movers.py         # F&O universe, close file upserts, gap-safe daily moves
 │   ├── test_ui_colours.py         # Colour ramp, tile keys/labels/CSS, styled table
 │   ├── test_weighting_and_breadth.py  # Weighting, breadth, leader/laggard tables
-│   └── test_index_board.py        # Index mapping, universe, tooltips, index table
+│   ├── test_index_board.py        # Index mapping, universe, tooltips, index table
+│   ├── test_tradingview.py        # Market pulse symbols, widget HTML, feed choice, grid heights
+│   └── test_tradingview_app.py    # Headless AppTest: both Market pulse views run
 │
 ├── utils/                        # Shared formatting, sentiment & constants
 │   ├── formatting.py             # format_inr, format_expiry_date/_short, sentiment helpers
@@ -90,13 +100,19 @@ pulse_tester/
 │   ├── fetch_kite_instruments.py # Generates data/kite_instruments.json (public, no login)
 │   ├── kite_login.py             # Daily Zerodha login -> .kite_session.json
 │   ├── fetch_index_weights.py    # Regenerates data/index_weights.json (run manually)
-│   └── update_fno_history.py     # Extends data/fno_daily_closes.csv (daily/weekly, needs Kite login)
+│   ├── update_fno_history.py     # Extends data/fno_daily_closes.csv (daily/weekly, needs Kite login)
+│   ├── backfill_intraday.py      # 1-minute + daily bars for F&O stocks -> data/market.db (needs Kite login)
+│   ├── compare_indmoney_kite.py  # Measured INDmoney vs Kite daily-data comparison
+│   ├── compare_intraday_providers.py # Measured 1-minute history comparison, all four brokers
+│   └── tradingview_symbol_probe.py # Opens a page of widgets to check which symbols stream (stdlib only)
 │
 ├── docs/                         # Reference docs, API notes, and dated project history
 │   ├── PROVIDER_GUIDE.md          # Which broker API (Kite/Dhan/INDmoney/Groww) for which job — read first
 │   ├── PROVIDER_COMPARISON_LOG.md # Dated, measured broker comparisons (the evidence behind the guide)
+│   ├── INTRADAY_HISTORY.md        # SQLite store of 1-minute bars + daily gaps (data/market.db)
 │   ├── SECTOR_HEATMAP.md          # Sector heatmap design notes
 │   ├── FNO_MOVERS.md              # F&O movers: provider comparison, storage choice
+│   ├── TRADINGVIEW_WIDGETS.md     # TradingView widget reference: formats, options, symbol availability, Streamlit notes
 │   ├── ROADMAP.md                 # What is done and what is planned next
 │   ├── API_REFERENCE.md
 │   ├── ARCHITECTURE.md
@@ -128,15 +144,21 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-**For the sector heatmap (Dhan — the default provider), one variable is enough:**
+**For the sector heatmap (Dhan — the default provider), three variables:**
 
 ```bash
-DHAN_ACCESS_TOKEN=your_dhan_access_token
+DHAN_CLIENT_ID=your_10_digit_client_id
+DHAN_PIN=your_6_digit_dhan_pin
+DHAN_TOTP_SECRET=base32_secret_from_setup_totp
 ```
 
-Dhan embeds the client id in the token, so `DHAN_CLIENT_ID` is not needed. The
-token lasts ~24h and requires Dhan's paid **Data API** plan for quotes and the
-live feed; generate the token *after* subscribing.
+There's no access token in `.env`. `market/providers/dhan_session.py` mints a
+24-hour token from TOTP when there's no usable one. It saves the token to the
+git-ignored `.dhan_session.json`, and every dashboard and script shares it.
+It's replaced an hour before expiry, or at once if Dhan rejects it. Get the
+TOTP secret from Dhan Web → DhanHQ Trading APIs → **Setup TOTP**. Market data
+needs Dhan's paid **Data API** plan. Details:
+[Dhan token generation](docs/PROVIDER_GUIDE.md#dhan-token-generation-tested-2026-09-27).
 
 **For INDmoney (free market data), also one variable:**
 
@@ -197,6 +219,7 @@ streamlit run fno_dashboard.py               # FnO tracker + Quick Exit
 streamlit run app.py                         # Portfolio / MTF Decoupler
 streamlit run sector_heatmap_dashboard.py    # Live Nifty 50 sector heatmap
 streamlit run fno_movers_dashboard.py --server.port 8503   # F&O gainers/losers by day
+streamlit run tradingview_dashboard.py --server.port 8504  # Market pulse (TradingView widgets, no .env needed)
 ```
 
 The first two open at `http://localhost:8501`; the launcher scripts put the
@@ -214,6 +237,7 @@ python scripts/fetch_indmoney_instruments.py # -> data/indmoney_instruments.json
 python scripts/fetch_kite_instruments.py     # -> data/kite_instruments.json (public, no login)
 python scripts/fetch_index_weights.py        # -> data/index_weights.json
 python scripts/update_fno_history.py         # -> data/fno_universe.json + fno_daily_closes.csv (needs kite_login.py)
+python scripts/backfill_intraday.py          # -> data/market.db, 60 days of 1-minute bars (needs kite_login.py)
 ```
 
 | Script | What it writes | Re-run it |
@@ -222,6 +246,7 @@ python scripts/update_fno_history.py         # -> data/fno_universe.json + fno_d
 | `fetch_indmoney_instruments.py` | INDmoney's ids for the same symbols (11 KB). Equity ids equal Dhan's; index ids and names are INDmoney's own | Same triggers as Dhan's file |
 | `fetch_kite_instruments.py` | Kite's `instrument_token` (websocket/candles) **and** `tradingsymbol` (REST quotes) for the same symbols (12 KB), from Kite's public 0.7 MB NSE dump | Same triggers as Dhan's file |
 | `fetch_index_weights.py` | Free-float market caps for cap-weighted sector aggregation | Weekly or monthly; share counts move slowly |
+| `backfill_intraday.py` | 1-minute bars and daily open/close for the 210 F&O stocks into SQLite (`data/market.db`, **not** committed), plus a `daily_gaps` view. One 60-day minute call + one daily call per stock (~420 requests, ~5 min). See [`docs/INTRADAY_HISTORY.md`](docs/INTRADAY_HISTORY.md) | Whenever you want fresher bars; one run fills every missing day |
 | `update_fno_history.py` | The F&O stock list, plus each stock's daily OHLCV appended to one CSV. One Kite request per stock however many days are missing (~210 requests, 75-110 s) | Daily after 16:00 IST, or weekly: one run fills every missing day. The movers dashboard warns when the history is more than 4 days old |
 
 If either file is stale the dashboard says so rather than guessing: unresolved
@@ -245,7 +270,7 @@ ticks, and says so explicitly when prices came from the REST fallback instead.
 ### 6. (Optional) Run the tests
 
 ```bash
-python -m unittest discover -s tests -t .    # 403 tests, no extra dependencies
+python -m unittest discover -s tests -t .    # 481 tests, no extra dependencies
 ```
 
 ---
@@ -294,6 +319,10 @@ and websocket APIs are called directly.
 - **Kite: "market data unavailable (HTTP 403 ... PermissionException)"** — the app is on the free *Personal* plan, which has no quotes, historical data or websocket. The paid *Kite Connect* plan is needed.
 - **Kite login: "Token is invalid or has expired"** — the `request_token` in the redirect URL is single-use and lasts a few minutes. Log in again and paste the new URL promptly.
 - **INDmoney websocket won't connect while both boards are open** — INDmoney allows 3 sockets per user. Two boards plus a `check_heatmap_universe.py` run already use all three.
+
+- **Market pulse shows "Permission denied – This symbol is only available on TradingView"** — that exchange is not licensed for TradingView widgets (NSE, MCX, NSEIX/GIFT Nifty, NYMEX and ICE all are not). No setting fixes it. Use a proxy symbol, or list it as a link in `market/tradingview_symbols.py`. Check a symbol with `python scripts/tradingview_symbol_probe.py EXCHANGE:TICKER`.
+- **Market pulse: Indian charts ignore a 1-day range** — deliberate. BSE data in widgets is end of day, which rejects intraday ranges, so those charts use 3 months as a minimum.
+- **Market pulse widgets are blank** — the widgets load from `widgets.tradingview-widget.com` and `s3.tradingview.com` in *your browser*, so an ad blocker or a corporate proxy blocking those hosts blanks them. The Streamlit server needs no internet access at all.
 
 - **Clicking a heatmap tile does nothing** — you are on the Treemap view. Streamlit cannot receive Plotly treemap clicks (it listens for `plotly_click`; treemaps emit `plotly_treemapclick`). Switch the sidebar to **Tiles (clickable)**, which is the default.
 - **Sector heatmap shows "LIVE (Dhan REST polling)"** — the websocket is not delivering, so prices are batched REST snapshots (labelled as such, never shown as socket-live). Most common cause: the Dhan access token was minted **before** the Data API plan was activated — regenerate it after subscribing. Diagnose with `python scripts/check_heatmap_universe.py --provider dhan`, which reports `dataPlan` explicitly.

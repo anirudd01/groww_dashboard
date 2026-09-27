@@ -62,9 +62,10 @@ class GrowwAPIClient:
                     self.auth_error = "GROWW_API_KEY (TOTP Token) or GROWW_TOTP_SECRET is missing."
                     return
 
-                import pyotp
-                totp_gen = pyotp.TOTP(self.totp_secret.replace(" ", "").strip())
-                current_totp = totp_gen.now()
+                # Code from the NTP-corrected clock: this PC's clock drifts (21 s
+                # slow on 2026-09-28), which makes codes from pyotp's now() fail.
+                from market.clock_offset import totp_code
+                current_totp = totp_code(self.totp_secret)
                 token = GrowwAPI.get_access_token(api_key=self.api_key.strip(), totp=current_totp)
                 self.access_token = token
                 self.session = GrowwAPI(token)

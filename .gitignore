@@ -18,6 +18,11 @@ __pycache__/
 # access token - never commit it.
 .kite_session.json
 .kite_session.json.tmp
+# Dhan token minted from TOTP by market/providers/dhan_session.py. Holds a
+# live access token - never commit it.
+.dhan_session.json
+.dhan_session.json.tmp
+.dhan_session.json.lock
 # Half-written generated files (renamed into place when complete)
 data/*.tmp
 
@@ -25,3 +30,14 @@ data/*.tmp
 # --keep-raw. 35 MB, re-downloadable, never source. The generated
 # data/dhan_instruments.json IS committed - that is what the dashboard reads.
 data/instruments/
+
+# 1-minute + daily history for the F&O stocks, built by
+# scripts/backfill_intraday.py. Hundreds of MB and fully re-downloadable.
+data/market.db
+data/market.db-wal
+data/market.db-shm
+
+# This PC's clock offset from NTP, written by market/clock_offset.py and used
+# for TOTP codes. Per-machine.
+.clock_offset.json
+.clock_offset.json.tmp
