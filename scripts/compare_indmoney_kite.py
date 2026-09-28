@@ -2,13 +2,13 @@
 
     python scripts/compare_indmoney_kite.py [--days 45] [--out results.json]
 
-Needs a valid Kite session (python scripts/kite_login.py) and
-IND_MONEY_ACCESS_TOKEN in .env. Checks the instrument mapping, every daily
+Needs a valid Kite session (python scripts/kite_login.py) and the INDmoney
+TOTP credentials in .env (the token is minted by market/providers/indmoney_session.py). Checks the instrument mapping, every daily
 candle field, one live bulk snapshot per broker, and the gaps and movers
 derived from each. Prints a summary and optionally writes the full JSON.
 Never prints tokens. Results are logged in docs/PROVIDER_COMPARISON_LOG.md.
 """
-import argparse, csv, io, json, os, re, sys, time, statistics
+import argparse, csv, io, json, os, sys, time, statistics
 from collections import defaultdict
 from datetime import datetime, date, timedelta, timezone
 import requests
@@ -21,11 +21,21 @@ ARGS = ap.parse_args()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = ARGS.out
 IST = timezone(timedelta(hours=5, minutes=30))
-env = open(os.path.join(ROOT, ".env"), encoding="utf-8").read()
-ind_tok = re.search(r"^IND_MONEY_ACCESS_TOKEN=(.*)$", env, re.M).group(1).strip().strip('"\'')
-ks = json.load(open(os.path.join(ROOT, ".kite_session.json")))
-KH = {"X-Kite-Version": "3", "Authorization": f"token {ks['api_key']}:{ks['access_token']}"}
-IH = {"Authorization": ind_tok}
+sys.path.insert(0, ROOT)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(ROOT, ".env"), override=True)
+except ImportError:
+    pass
+from market.providers.indmoney import IndMoneyProvider  # noqa: E402
+from market.providers.kite import KiteProvider  # noqa: E402
+
+# Both logins go through the providers: Kite's saved session, INDmoney's
+# shared TOTP session (minted only if none is usable).
+_kite, _ind = KiteProvider(), IndMoneyProvider()
+_kite.connect()
+_ind.connect()
+KH, IH = _kite.auth_headers(), _ind.auth_headers()
 KB, IB = "https://api.kite.trade", "https://api.indstocks.com"
 universe = json.load(open(os.path.join(ROOT, "data", "fno_universe.json")))["tokens"]   # symbol -> kite instrument_token
 SYMS = sorted(universe)

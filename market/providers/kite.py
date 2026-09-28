@@ -374,6 +374,10 @@ class KiteProvider(MarketDataProvider):
             "Authorization": f"token {self._api_key}:{self._token}",
         }
 
+    def auth_headers(self) -> Dict[str, str]:
+        """Headers for a raw Kite REST call (scripts). Call ``connect()`` first."""
+        return self._headers()
+
     def _get(self, path: str, params, bucket: Optional[str] = None) -> Tuple[int, dict]:
         """One GET, throttled when ``bucket`` is given and retried once on a 429."""
         response = None

@@ -46,6 +46,8 @@ pulse_tester/
 │   │   ├── kite.py               # Zerodha Kite Connect REST + binary websocket (read-only)
 │   │   ├── kite_session.py       # Kite login flow + the saved daily session
 │   │   ├── dhan_session.py       # Dhan token minted from TOTP, shared via .dhan_session.json
+│   │   ├── indmoney_session.py   # INDmoney token minted from TOTP, shared via .indmoney_session.json
+│   │   ├── token_store.py        # Session-file plumbing both of those share (atomic write, file lock)
 │   │   ├── candles.py            # Shared daily-candle previous-close logic
 │   │   └── registry.py           # Name -> provider, preference order
 │   ├── config.py                 # HeatmapConfig - all tunables, env-overridable
@@ -71,7 +73,7 @@ pulse_tester/
 │   ├── index_board.py            # NSE sectoral index board
 │   └── tradingview.py            # TradingView widget HTML for st.iframe (+ in-browser theme detection)
 │
-├── tests/                        # Unit tests for the non-UI logic (481 tests)
+├── tests/                        # Unit tests for the non-UI logic (501 tests)
 │   ├── test_sector_heatmap.py     # % change, aggregation, ranking, staleness, universe
 │   ├── test_providers.py          # Provider interface, registry, Dhan packet decoding
 │   ├── test_indmoney.py           # INDmoney frames, REST mapping, index-name table
@@ -160,13 +162,19 @@ TOTP secret from Dhan Web → DhanHQ Trading APIs → **Setup TOTP**. Market dat
 needs Dhan's paid **Data API** plan. Details:
 [Dhan token generation](docs/PROVIDER_GUIDE.md#dhan-token-generation-tested-2026-09-27).
 
-**For INDmoney (free market data), also one variable:**
+**For INDmoney (free market data), the same idea:**
 
 ```bash
-IND_MONEY_ACCESS_TOKEN=your_indmoney_access_token
+IND_MONEY_CLIENT_ID=client_id_shown_after_totp_setup   # sent as x-api-key
+IND_MONEY_MPIN=your_mpin
+IND_MONEY_TOTP_SECRET=base32_setup_key
 ```
 
-Generate it at indstocks.com → API Trading → Access Tokens; it lasts 24 hours.
+There's no access token in `.env` here either. `market/providers/indmoney_session.py`
+mints one (valid to 07:00 IST) and shares it through the git-ignored
+`.indmoney_session.json`. A new INDmoney token **revokes** the previous one, so
+it's only minted when none is usable or INDmoney rejects the saved one. Set up
+TOTP at indstocks.com → API Trading → Access Tokens.
 Choose the broker in the heatmap's sidebar (**Data provider**): *Auto* walks
 `PULSE_MARKET_PROVIDERS` with failover, and picking one broker pins the boards
 to it. How INDmoney compares with Dhan, and what it does not serve (Nifty Oil &
@@ -270,7 +278,7 @@ ticks, and says so explicitly when prices came from the REST fallback instead.
 ### 6. (Optional) Run the tests
 
 ```bash
-python -m unittest discover -s tests -t .    # 481 tests, no extra dependencies
+python -m unittest discover -s tests -t .    # 501 tests, no extra dependencies
 ```
 
 ---

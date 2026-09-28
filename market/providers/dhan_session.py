@@ -30,8 +30,6 @@ Behaviour seen against the live API on 2026-09-27, and handled here:
 This module places no orders and calls no order endpoint.
 """
 
-import base64
-import json
 import logging
 import os
 import threading
@@ -44,6 +42,7 @@ import requests
 
 from market import clock_offset
 from market.market_hours import IST, now_ist
+from market.providers import token_store
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +64,7 @@ REFRESH_MARGIN = timedelta(hours=1)
 #: at most 3 s, and usually nothing.
 MIN_SECONDS_LEFT = 3
 #: A lock file older than this is treated as abandoned by a crashed process.
-LOCK_STALE_SECONDS = 120
+LOCK_STALE_SECONDS = token_store.LOCK_STALE_SECONDS
 
 _THREAD_LOCK = threading.Lock()
 
@@ -74,12 +73,7 @@ class DhanAuthError(RuntimeError):
     """Token generation failed; the message says what to fix."""
 
 
-def _env(*names: str) -> str:
-    for name in names:
-        value = (os.getenv(name) or "").strip()
-        if value:
-            return value
-    return ""
+_env = token_store.env_first
 
 
 def client_id_from_env() -> str:
@@ -93,22 +87,11 @@ def has_totp_credentials() -> bool:
 
 
 def session_path() -> str:
-    configured = os.getenv(SESSION_FILE_ENV)
-    if configured:
-        return configured
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(root, DEFAULT_SESSION_PATH)
+    return token_store.repo_file(SESSION_FILE_ENV, DEFAULT_SESSION_PATH)
 
 
-def token_claims(access_token: str) -> dict:
-    """The JWT payload of a Dhan token, decoded but not verified. {} if unreadable."""
-    try:
-        payload = (access_token or "").split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(payload))
-        return claims if isinstance(claims, dict) else {}
-    except Exception:
-        return {}
+#: The JWT payload of a Dhan token, decoded but not verified. {} if unreadable.
+token_claims = token_store.jwt_claims
 
 
 @dataclass
@@ -152,37 +135,20 @@ def session_from_token(access_token: str, client_id: str = "") -> DhanSession:
 
 
 def save_session(session: DhanSession, path: Optional[str] = None) -> str:
-    path = path or session_path()
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    temp = f"{path}.tmp"
-    with open(temp, "w", encoding="utf-8") as handle:
-        json.dump(asdict(session), handle, indent=2)
-        handle.write("\n")
-    os.replace(temp, path)  # never leave a half-written token file behind
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    return path
+    return token_store.write_json_atomic(path or session_path(), asdict(session))
 
 
 def load_session(path: Optional[str] = None) -> Optional[DhanSession]:
     """The saved session, whatever its age, or None. Never raises, no network I/O."""
-    path = path or session_path()
-    if not os.path.exists(path):
+    raw = token_store.read_json(path or session_path(), "Dhan session")
+    if raw is None:
         return None
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            raw = json.load(handle)
-        return DhanSession(
-            client_id=str(raw.get("client_id") or ""),
-            access_token=str(raw.get("access_token") or ""),
-            generated_at=str(raw.get("generated_at") or ""),
-            expires_at=str(raw.get("expires_at") or ""),
-        )
-    except (OSError, ValueError, AttributeError) as exc:
-        logger.warning("Could not read the Dhan session file %s: %s", path, exc)
-        return None
+    return DhanSession(
+        client_id=str(raw.get("client_id") or ""),
+        access_token=str(raw.get("access_token") or ""),
+        generated_at=str(raw.get("generated_at") or ""),
+        expires_at=str(raw.get("expires_at") or ""),
+    )
 
 
 def saved_token(client_id: str = "", path: Optional[str] = None) -> str:
@@ -198,35 +164,11 @@ def saved_token(client_id: str = "", path: Optional[str] = None) -> str:
 # -- generation ----------------------------------------------------------------
 
 
-class _FileLock:
-    """Cross-process lock: an exclusively created file, cleared if abandoned."""
+class _FileLock(token_store.FileLock):
+    """Cross-process lock around token generation (see ``token_store.FileLock``)."""
 
     def __init__(self, path: str, timeout: float = 90.0):
-        self.path = f"{path}.lock"
-        self.timeout = timeout
-
-    def __enter__(self):
-        deadline = time.monotonic() + self.timeout
-        while True:
-            try:
-                os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-                return self
-            except FileExistsError:
-                try:
-                    if time.time() - os.path.getmtime(self.path) > LOCK_STALE_SECONDS:
-                        os.remove(self.path)
-                        continue
-                except OSError:
-                    continue
-                if time.monotonic() > deadline:
-                    raise DhanAuthError(f"Timed out waiting for {self.path} - delete it if no other process is running")
-                time.sleep(0.5)
-
-    def __exit__(self, *exc):
-        try:
-            os.remove(self.path)
-        except OSError:
-            pass
+        super().__init__(path, timeout, error=DhanAuthError, stale_after=LOCK_STALE_SECONDS)
 
 
 def generate_session(timeout: int = 20, sleep=time.sleep) -> DhanSession:

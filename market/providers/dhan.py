@@ -543,6 +543,10 @@ class DhanProvider(MarketDataProvider):
             "Content-Type": "application/json",
         }
 
+    def auth_headers(self) -> Dict[str, str]:
+        """Headers for a raw Dhan REST call (scripts). Call ``connect()`` first."""
+        return self._headers()
+
     def connect(self) -> None:
         if not self.is_configured():
             raise RuntimeError(

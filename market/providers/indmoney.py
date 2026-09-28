@@ -10,8 +10,11 @@ References (INDstocks API v1, docs/indstocks-api-docs.md):
   - Daily candles  : GET https://api.indstocks.com/market/historical/1day
   - Live feed      : wss://ws-prices.indstocks.com/api/v1/ws/prices
 
-Credentials: ``IND_MONEY_ACCESS_TOKEN`` only, sent raw (no ``Bearer``) in the
-``Authorization`` header. It lasts 24h. Never logged.
+Credentials: ``IND_MONEY_CLIENT_ID``, ``IND_MONEY_MPIN`` and
+``IND_MONEY_TOTP_SECRET``. The access token is minted from them and shared
+between processes by ``indmoney_session`` - never read from ``.env``. It is
+sent raw (no ``Bearer``) in the ``Authorization`` header, lasts until 07:00
+IST, and is never logged.
 
 Behaviour verified against the live API on 2026-09-25, where the published
 docs are silent or wrong (details in docs/api/INDMONEY_API.md):
@@ -47,6 +50,7 @@ from market.instruments import (
     regenerate_hint,
 )
 from market.market_hours import IST, now_ist, todays_session_date
+from market.providers import indmoney_session
 from market.providers.base import (
     SEGMENT_CASH,
     SEGMENT_INDEX,
@@ -61,8 +65,9 @@ logger = logging.getLogger(__name__)
 
 REST_BASE = "https://api.indstocks.com"
 FEED_URL = "wss://ws-prices.indstocks.com/api/v1/ws/prices"
+#: No longer read - kept so a stale value in .env can be warned about.
 TOKEN_ENV = "IND_MONEY_ACCESS_TOKEN"
-TOKEN_PAGE = "https://www.indstocks.com/app/api-trading/access-tokens"
+TOKEN_PAGE = indmoney_session.TOKEN_PAGE
 
 #: Universe segment -> (REST prefix, socket prefix).
 SEGMENT_PREFIXES = {
@@ -328,30 +333,92 @@ class IndMoneyProvider(MarketDataProvider):
     label = "INDmoney"
 
     def __init__(self, access_token: Optional[str] = None, timeout: int = 15):
-        self._token = (access_token or os.getenv(TOKEN_ENV) or "").strip()
+        # An explicit token (tests, one-off tools) is used as given and never
+        # refreshed. Otherwise the token comes from indmoney_session: the
+        # saved one if usable, else one minted from TOTP in connect().
+        self._explicit_token = (access_token or "").strip()
+        if not self._explicit_token and os.getenv(TOKEN_ENV):
+            logger.warning(
+                "Ignoring %s in the environment - INDmoney tokens are generated from TOTP now "
+                "(%s, %s, %s)", TOKEN_ENV, indmoney_session.CLIENT_ID_ENV,
+                indmoney_session.MPIN_ENVS[0], indmoney_session.TOTP_SECRET_ENVS[0],
+            )
+        self._token = self._explicit_token or indmoney_session.saved_token()
         self._timeout = timeout
         self._instrument_file = None
 
     # -- config / auth --------------------------------------------------
     def is_configured(self) -> bool:
-        return bool(self._token) and not self._token.lower().startswith(("your_", "<"))
+        """A token in hand, or everything needed to mint one. No network I/O."""
+        if self._explicit_token:
+            return not self._explicit_token.lower().startswith(("your_", "<"))
+        return bool(self._token) or indmoney_session.has_totp_credentials()
+
+    def _refresh_token(self, rejected: str = "") -> None:
+        """Take the shared session token, minting a new one if needed.
+
+        ``rejected`` is a token the server just refused: ask for a
+        replacement rather than the saved copy of the same token.
+        """
+        if self._explicit_token:
+            return
+        try:
+            self._token = indmoney_session.get_access_token(force_new=bool(rejected), rejected=rejected)
+        except indmoney_session.IndMoneyAuthError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": self._token, "Accept": "application/json"}
 
+    def auth_headers(self) -> Dict[str, str]:
+        """Headers for a raw INDmoney REST call (scripts). Call ``connect()`` first."""
+        return self._headers()
+
+    @staticmethod
+    def _token_rejected(status: int, body: dict) -> bool:
+        # A 403 can also be a UserException (segment not activated), which a
+        # new token would not fix - and minting one revokes the current one.
+        if status == 401:
+            return True
+        detail = f"{body.get('error_type', '')} {body.get('message', '')}".lower()
+        return status == 403 and "token" in detail
+
     def _get(self, path: str, params: dict, bucket: str) -> Tuple[int, dict]:
-        """One throttled GET, retried once on a 429. Returns (status, body)."""
-        response = None
-        for attempt in range(2):
+        """One throttled GET. Returns (status, body).
+
+        Retried once on a 429. A rejected token is retried once as is (one
+        spurious ``TokenException`` was seen mid-run on 2026-09-25), then with
+        the shared session's replacement.
+        """
+        status, body, rejections = 0, {}, 0
+        for attempt in range(4):
             _gate(bucket)
             response = requests.get(
                 f"{REST_BASE}{path}", headers=self._headers(), params=params, timeout=self._timeout
             )
-            if response.status_code != 429:
-                break
-            if attempt == 0:
+            status = response.status_code
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            body = body if isinstance(body, dict) else {}
+            if status == 429 and attempt == 0:
                 logger.debug("INDmoney %s rate limited - retrying", path)
                 time.sleep(1.0)
+                continue
+            if self._token_rejected(status, body) and not self._explicit_token and rejections < 2:
+                rejections += 1
+                if rejections == 1:
+                    time.sleep(1.5)
+                else:
+                    logger.warning("INDmoney rejected the access token - taking a new one")
+                    self._refresh_token(rejected=self._token)
+                continue
+            break
+        return status, body
+
+    def _profile(self) -> Tuple[int, dict]:
+        response = requests.get(f"{REST_BASE}/user/profile", headers=self._headers(), timeout=self._timeout)
         try:
             body = response.json()
         except ValueError:
@@ -360,7 +427,11 @@ class IndMoneyProvider(MarketDataProvider):
 
     def connect(self) -> None:
         if not self.is_configured():
-            raise RuntimeError(f"INDmoney credentials missing - set {TOKEN_ENV}")
+            raise RuntimeError(
+                f"INDmoney credentials missing - set {indmoney_session.CLIENT_ID_ENV}, "
+                f"{indmoney_session.MPIN_ENVS[0]} and {indmoney_session.TOTP_SECRET_ENVS[0]} in .env"
+            )
+        self._refresh_token()
         expiry = token_expiry(self._token)
         if expiry is not None:
             remaining = expiry - int(time.time())
@@ -370,17 +441,17 @@ class IndMoneyProvider(MarketDataProvider):
                 )
             logger.info("INDmoney access token valid for %.1f more hours", remaining / 3600)
 
-        response = requests.get(
-            f"{REST_BASE}/user/profile", headers=self._headers(), timeout=self._timeout
-        )
-        try:
-            profile = response.json()
-        except ValueError:
-            profile = {}
-        error = error_of(response.status_code, profile)
+        status, profile = self._profile()
+        if self._token_rejected(status, profile) and not self._explicit_token:
+            # The saved token was revoked (dashboard, or another machine minted
+            # one): take a replacement once.
+            self._refresh_token(rejected=self._token)
+            status, profile = self._profile()
+        error = error_of(status, profile)
         if error:
             raise RuntimeError(
-                f"INDmoney authentication failed ({error}). Regenerate the token at {TOKEN_PAGE}"
+                f"INDmoney authentication failed ({error}). Check the TOTP credentials in .env "
+                f"and that TOTP is still enabled at {TOKEN_PAGE}"
             )
         user = (profile.get("data") or {}).get("user_id", "")
         logger.info("INDmoney authenticated (user %s...)", str(user)[:4])
@@ -548,4 +619,5 @@ class IndMoneyProvider(MarketDataProvider):
         return bars
 
     def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:
+        self._refresh_token()
         return IndMoneyFeedHandle(self._token, refs).start()

@@ -23,6 +23,11 @@ __pycache__/
 .dhan_session.json
 .dhan_session.json.tmp
 .dhan_session.json.lock
+# INDmoney token minted from TOTP by market/providers/indmoney_session.py.
+# Holds a live token.
+.indmoney_session.json
+.indmoney_session.json.tmp
+.indmoney_session.json.lock
 # Half-written generated files (renamed into place when complete)
 data/*.tmp
 

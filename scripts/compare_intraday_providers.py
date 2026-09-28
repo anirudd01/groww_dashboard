@@ -43,8 +43,11 @@ else:
         end_day -= timedelta(days=1)
 END = datetime.combine(end_day, datetime.min.time(), IST).replace(hour=15, minute=30)
 
-ks = json.load(open(os.path.join(ROOT, ".kite_session.json")))
-KH = {"X-Kite-Version": "3", "Authorization": f"token {ks['api_key']}:{ks['access_token']}"}
+from market.providers.kite import KiteProvider  # noqa: E402
+
+_kite = KiteProvider()
+_kite.connect()  # today's saved login (python scripts/kite_login.py)
+KH = _kite.auth_headers()
 nse = list(csv.DictReader(io.StringIO(requests.get("https://api.kite.trade/instruments/NSE", timeout=60).text)))
 ref = {r["tradingsymbol"]: r for r in nse if r["segment"] == "NSE" and r["tradingsymbol"] in SYMS}
 KT = {s: ref[s]["instrument_token"] for s in SYMS}
@@ -73,7 +76,7 @@ def kite(syms, start, end):
     return status, out
 
 
-IH = {"Authorization": os.getenv("IND_MONEY_ACCESS_TOKEN", "")}
+IH = {}  # filled by available() from the shared INDmoney session
 
 
 def indmoney(syms, start, end):
@@ -128,7 +131,7 @@ def dhan(syms, start, end):
     out = {}
     for s in syms:
         a, b = span(start, end)
-        r = requests.post("https://api.dhan.co/v2/charts/intraday", headers={**DH, "Content-Type": "application/json"},
+        r = requests.post("https://api.dhan.co/v2/charts/intraday", headers=DH,
                           json={"securityId": NT[s], "exchangeSegment": "NSE_EQ", "instrument": "EQUITY",
                                 "interval": "1", "oi": False, "fromDate": a, "toDate": b}, timeout=60)
         time.sleep(0.25)
@@ -144,10 +147,17 @@ def dhan(syms, start, end):
 def available():
     """Which brokers can be tested right now."""
     ok = {"kite": kite}
-    if requests.get("https://api.indstocks.com/user/profile", headers=IH, timeout=15).ok:
-        ok["indmoney"] = indmoney
+    from market.providers.indmoney import IndMoneyProvider
+    ind_provider = IndMoneyProvider()
+    if not ind_provider.is_configured():
+        print("indmoney: skipped (set IND_MONEY_CLIENT_ID, IND_MONEY_MPIN and IND_MONEY_TOTP_SECRET in .env)")
     else:
-        print("indmoney: skipped (token rejected - mint one from TOTP)")
+        try:
+            ind_provider.connect()  # saved token, or a new one from TOTP
+            IH.update(ind_provider.auth_headers())
+            ok["indmoney"] = indmoney
+        except RuntimeError as e:
+            print("indmoney: skipped", str(e)[:160])
     global GROWW
     try:
         from groww_api.client import GrowwAPIClient
@@ -163,7 +173,7 @@ def available():
     else:
         try:
             dhan_provider.connect()  # saved token, or a new one from TOTP
-            DH.update({"access-token": dhan_provider._token, "client-id": dhan_provider._client_id})
+            DH.update(dhan_provider.auth_headers())
             ok["dhan"] = dhan
         except RuntimeError as e:
             print("dhan: skipped", str(e)[:160])

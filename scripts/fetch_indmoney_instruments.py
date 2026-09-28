@@ -7,8 +7,9 @@ dashboard never downloads an instrument master itself.
     python scripts/fetch_indmoney_instruments.py --verbose
     python scripts/fetch_indmoney_instruments.py --keep-raw     # also save the CSVs
 
-Unlike Dhan's public scrip master, INDmoney's needs an access token
-(``IND_MONEY_ACCESS_TOKEN`` in ``.env``). It is two files:
+Unlike Dhan's public scrip master, INDmoney's needs an access token, taken
+from the shared INDmoney session (minted from the TOTP credentials in ``.env``
+by ``market/providers/indmoney_session.py`` if none is saved). It is two files:
 
 * ``/market/instruments?source=equity`` - 3 MB, ~22,700 rows, 26 columns.
 * ``/market/instruments?source=index``  - ~130 rows and **three columns only**
@@ -51,7 +52,6 @@ from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX  # noqa: E402
 logger = logging.getLogger("fetch_indmoney_instruments")
 
 INSTRUMENTS_URL = "https://api.indstocks.com/market/instruments"
-TOKEN_ENV = "IND_MONEY_ACCESS_TOKEN"
 
 RAW_DIR = os.path.join("data", "instruments")
 RAW_PREFIX = "indmoney-instruments-"
@@ -168,10 +168,15 @@ def main() -> int:
     except ImportError:
         pass
 
-    token = (os.getenv(TOKEN_ENV) or "").strip()
-    if not token:
-        logger.error("%s is not set - INDmoney's instrument files need an access token.", TOKEN_ENV)
+    from market.providers.indmoney import IndMoneyProvider
+
+    provider = IndMoneyProvider()
+    try:
+        provider.connect()  # the saved token, or a new one from TOTP
+    except RuntimeError as exc:
+        logger.error("INDmoney login failed - the instrument files need an access token: %s", exc)
         return 1
+    token = provider.auth_headers()["Authorization"]
 
     logger.info("Universes to resolve:")
     wanted, universes = tracked_symbols()
@@ -185,7 +190,7 @@ def main() -> int:
         )
     except Exception as exc:  # noqa: BLE001 - a CLI should explain, not traceback
         logger.error("FAILED to fetch INDmoney's instrument lists: %s", exc)
-        logger.error("A 401/403 means the access token has expired - regenerate it.")
+        logger.error("A 401/403 means the access token was revoked - run this again to take a new one.")
         return 1
 
     instruments = {SEGMENT_CASH: equities, SEGMENT_INDEX: indices}
