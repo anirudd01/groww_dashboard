@@ -88,3 +88,15 @@ def build_index_table(stocks: List[StockMarketData]) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows, columns=INDEX_DETAIL_COLUMNS)
+
+
+def split_index_table(frame: pd.DataFrame):
+    """(gainers, losers) of an index table, each strongest move first.
+
+    Gainers are strictly positive, losers strictly negative; flat and no-data
+    rows belong to neither. Losers lead with the biggest fall.
+    """
+    change = frame["Change %"]
+    gainers = frame[change > 0].sort_values("Change %", ascending=False)
+    losers = frame[change < 0].sort_values("Change %", ascending=True)
+    return gainers.reset_index(drop=True), losers.reset_index(drop=True)

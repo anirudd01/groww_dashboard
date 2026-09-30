@@ -7,6 +7,9 @@ bulk Kite quote for all ~210 stocks.
 
 Visualisation only - it places no orders and generates no signals.
 
+These are the "F&O Nifty 50" and "F&O All Stocks" pages of pulse_dashboard.py;
+running this file directly shows just those two:
+
     streamlit run fno_movers_dashboard.py --server.port 8503
 """
 
@@ -46,8 +49,6 @@ from market.universe import get_universe
 logger = logging.getLogger(__name__)
 
 LIVE_TTL_SECONDS = 30
-
-st.set_page_config(page_title="F&O movers", page_icon=":material/trending_up:", layout="wide")
 
 
 # -- data --------------------------------------------------------------------
@@ -97,10 +98,36 @@ def movers_frame(moves) -> pd.DataFrame:
 
 
 COLUMNS = {
-    "Change %": st.column_config.NumberColumn(format="%+.2f%%"),
     "Close": st.column_config.NumberColumn(format="%.2f"),
     "Prev close": st.column_config.NumberColumn(format="%.2f"),
 }
+
+# (lightest, darkest) RGB for the smallest and largest move in a table.
+GREEN_SHADES = ((198, 239, 206), (0, 110, 40))
+RED_SHADES = ((255, 205, 205), (170, 10, 10))
+
+
+def shade_change(column: pd.Series) -> list:
+    """Green for gains, red for losses; the largest move in the table is darkest."""
+    biggest = column.abs().max()
+    styles = []
+    for value in column:
+        if not value or not biggest:
+            styles.append("")
+            continue
+        light, dark = GREEN_SHADES if value > 0 else RED_SHADES
+        weight = abs(value) / biggest
+        r, g, b = (round(lo + (hi - lo) * weight) for lo, hi in zip(light, dark))
+        text = "#ffffff" if weight > 0.45 else "#1a1a1a"
+        styles.append(f"background-color: rgb({r},{g},{b}); color: {text}; font-weight: 600")
+    return styles
+
+
+def styled_movers(moves):
+    frame = movers_frame(moves)
+    if frame.empty:
+        return frame
+    return frame.style.apply(shade_change, subset=["Change %"]).format({"Change %": "{:+.2f}%"})
 
 
 def day_card(day: str, moves, symbols: set, limit: int, live: bool) -> None:
@@ -117,84 +144,112 @@ def day_card(day: str, moves, symbols: set, limit: int, live: bool) -> None:
         left, right = st.columns(2)
         with left:
             st.markdown(":green[**Top gainers**]")
-            st.dataframe(movers_frame(gainers), hide_index=True, column_config=COLUMNS)
+            st.dataframe(styled_movers(gainers), hide_index=True, column_config=COLUMNS)
         with right:
             st.markdown(":red[**Top losers**]")
-            st.dataframe(movers_frame(losers), hide_index=True, column_config=COLUMNS)
+            st.dataframe(styled_movers(losers), hide_index=True, column_config=COLUMNS)
 
 
 # -- page --------------------------------------------------------------------
 
-st.title("F&O movers")
-st.caption("Top gainers and losers by day. Each move is that day's close against the previous trading day's close.")
 
-universe = load_universe()
-if not universe.is_usable:
-    st.error(universe.error, icon=":material/error:")
-    st.stop()
-if not os.path.exists(CLOSES_PATH):
-    st.error(f"No close history at {CLOSES_PATH}. Run 'python {UPDATE_SCRIPT}'.", icon=":material/error:")
-    st.stop()
+VIEW_NIFTY50 = "nifty50"
+VIEW_ALL = "all"
 
-with st.sidebar:
-    days_to_show = st.segmented_control("Days", [1, 3, 5, 7], default=3, required=True)
-    limit = st.segmented_control("Rows per table", [5, 10, 15, 20], default=10, required=True)
-    show_live = st.toggle("Include today (live)", value=True,
-                          help="One bulk Kite quote for all F&O stocks, refreshed at most every 30 s.")
-    if st.button("Refresh live prices", icon=":material/refresh:"):
-        live_quotes.clear()
 
-rows, stored_moves = load_history(CLOSES_PATH, os.path.getmtime(CLOSES_PATH))
-moves_by_day = dict(stored_moves)
-today = now_ist().date().isoformat()
-state = session_state()
+def main(view: str = VIEW_ALL) -> None:
+    """One F&O movers page: the Nifty 50 or every F&O stock."""
+    st.title("F&O movers: " + ("Nifty 50" if view == VIEW_NIFTY50 else "All F&O stocks"))
+    st.caption("Top gainers and losers by day. Each move is that day's close against the previous trading day's close.")
 
-live_note = ""
-if show_live and today not in moves_by_day and state != SESSION_WEEKEND:
-    quotes, error, fetched_at = live_quotes(tuple(sorted(universe.tokens.items())))
-    if error:
-        live_note = f"Today not shown: {error}"
-    elif quotes:
-        in_session = state in (SESSION_OPEN, SESSION_PRE_MARKET)
-        todays = live_moves(quotes, today, rows, in_session)
-        if todays:
-            moves_by_day[today] = todays
-            live_note = f"Today: {len(todays)} stocks, Kite quote at {fetched_at:%H:%M:%S} IST ({state.lower()})"
+    universe = load_universe()
+    if not universe.is_usable:
+        st.error(universe.error, icon=":material/error:")
+        st.stop()
+    if not os.path.exists(CLOSES_PATH):
+        st.error(f"No close history at {CLOSES_PATH}. Run 'python {UPDATE_SCRIPT}'.", icon=":material/error:")
+        st.stop()
 
-days = sorted(moves_by_day, reverse=True)[:days_to_show]
-stored_days = sorted({d for d, _ in rows})
+    with st.sidebar:
+        days_to_show = st.segmented_control("Days", [1, 3, 5, 7], default=3, required=True)
+        limit = st.segmented_control("Rows per table", [5, 10, 15, 20], default=10, required=True)
+        show_live = st.toggle("Include today (live)", value=True,
+                              help="One bulk Kite quote for all F&O stocks, refreshed at most every 30 s.")
+        if st.button("Refresh live prices", icon=":material/refresh:"):
+            live_quotes.clear()
 
-with st.container(horizontal=True):
-    st.metric("F&O stocks", len(universe.tokens), border=True)
-    st.metric("Stored days", len(stored_days), border=True,
-              help=f"{stored_days[0]} to {stored_days[-1]}" if stored_days else None)
-    st.metric("Last stored day", stored_days[-1] if stored_days else "-", border=True)
-if live_note:
-    st.caption(live_note)
-if stored_days and (pd.Timestamp(today) - pd.Timestamp(stored_days[-1])).days > 4:
-    st.warning(f"The history ends on {stored_days[-1]}. Run 'python {UPDATE_SCRIPT}' to catch up.",
-               icon=":material/history:")
+    rows, stored_moves = load_history(CLOSES_PATH, os.path.getmtime(CLOSES_PATH))
+    moves_by_day = dict(stored_moves)
+    today = now_ist().date().isoformat()
+    state = session_state()
 
-nifty50 = set(get_universe("NIFTY50").symbols) & set(universe.tokens)
-all_fno = set(universe.tokens)
+    live_note = ""
+    if show_live and today not in moves_by_day and state != SESSION_WEEKEND:
+        quotes, error, fetched_at = live_quotes(tuple(sorted(universe.tokens.items())))
+        if error:
+            live_note = f"Today not shown: {error}"
+        elif quotes:
+            in_session = state in (SESSION_OPEN, SESSION_PRE_MARKET)
+            todays = live_moves(quotes, today, rows, in_session)
+            if todays:
+                moves_by_day[today] = todays
+                live_note = f"Today: {len(todays)} stocks, Kite quote at {fetched_at:%H:%M:%S} IST ({state.lower()})"
 
-tab_nifty, tab_all = st.tabs([f"Nifty 50 ({len(nifty50)})", f"All F&O stocks ({len(all_fno)})"])
-for tab, symbols in ((tab_nifty, nifty50), (tab_all, all_fno)):
-    with tab:
-        for day in days:
-            day_card(day, moves_by_day[day], symbols, limit, live=(day == today and day not in stored_moves))
+    days = sorted(moves_by_day, reverse=True)[:days_to_show]
+    stored_days = sorted({d for d, _ in rows})
 
-with st.sidebar:
-    st.divider()
-    export = io.StringIO()
-    pd.DataFrame(
-        [{"date": m.date, "symbol": m.symbol, "change_pct": round(m.change_pct, 4),
-          "close": m.close, "prev_close": m.previous_close,
-          "nifty50": m.symbol in nifty50}
-         for day in days for m in moves_by_day[day]]
-    ).to_csv(export, index=False)
-    st.download_button("Download shown days (CSV)", export.getvalue(), "fno_movers.csv",
-                       mime="text/csv", icon=":material/download:")
-    with open(CLOSES_PATH, "rb") as handle:
-        st.download_button("Download full close history", handle.read(), "fno_daily_closes.csv",
-                           mime="text/csv", icon=":material/table:")
+    with st.container(horizontal=True):
+        st.metric("F&O stocks", len(universe.tokens), border=True)
+        st.metric("Stored days", len(stored_days), border=True,
+                  help=f"{stored_days[0]} to {stored_days[-1]}" if stored_days else None)
+        st.metric("Last stored day", stored_days[-1] if stored_days else "-", border=True)
+    st.caption(
+        "Data source: Kite. Past days come from the stored closes "
+        f"({CLOSES_PATH}, written by {UPDATE_SCRIPT} from Kite's daily candles); "
+        "today comes from one Kite quote. This page does not use the sidebar "
+        "data-provider setting of the heatmap pages."
+    )
+    if live_note:
+        st.caption(live_note)
+    if stored_days and (pd.Timestamp(today) - pd.Timestamp(stored_days[-1])).days > 4:
+        st.warning(f"The history ends on {stored_days[-1]}. Run 'python {UPDATE_SCRIPT}' to catch up.",
+                   icon=":material/history:")
+
+    nifty50 = set(get_universe("NIFTY50").symbols) & set(universe.tokens)
+    all_fno = set(universe.tokens)
+
+    symbols = nifty50 if view == VIEW_NIFTY50 else all_fno
+    st.caption(f"{len(symbols)} stocks")
+    for day in days:
+        day_card(day, moves_by_day[day], symbols, limit, live=(day == today and day not in stored_moves))
+
+    with st.sidebar:
+        st.divider()
+        export = io.StringIO()
+        pd.DataFrame(
+            [{"date": m.date, "symbol": m.symbol, "change_pct": round(m.change_pct, 4),
+              "close": m.close, "prev_close": m.previous_close,
+              "nifty50": m.symbol in nifty50}
+             for day in days for m in moves_by_day[day]]
+        ).to_csv(export, index=False)
+        st.download_button("Download shown days (CSV)", export.getvalue(), "fno_movers.csv",
+                           mime="text/csv", icon=":material/download:")
+        with open(CLOSES_PATH, "rb") as handle:
+            st.download_button("Download full close history", handle.read(), "fno_daily_closes.csv",
+                               mime="text/csv", icon=":material/table:")
+
+
+def page_nifty50() -> None:
+    main(VIEW_NIFTY50)
+
+
+def page_all() -> None:
+    main(VIEW_ALL)
+
+
+if __name__ == "__main__":
+    st.set_page_config(page_title="F&O movers", page_icon=":material/trending_up:", layout="wide")
+    st.navigation([
+        st.Page(page_nifty50, title="Nifty 50", url_path="nifty50", default=True),
+        st.Page(page_all, title="All F&O stocks", url_path="all"),
+    ], position="top").run()

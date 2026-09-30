@@ -1,10 +1,12 @@
-"""Live Nifty 50 sector heatmap - Streamlit entry point.
+"""Live sector heatmap pages (Nifty 50 sectors, NSE sectoral indices, treemap).
 
 A market-visualisation tool only. It places no orders, produces no signals and
 makes no predictions.
 
-Run with:
-    streamlit run sector_heatmap_dashboard.py
+The pages are functions that ``pulse_dashboard.py`` registers in its top
+navigation bar, next to the F&O movers page. Running this file directly
+starts that combined app:
+    streamlit run pulse_dashboard.py
 """
 
 import dataclasses
@@ -72,7 +74,12 @@ from ui.sector_highlights import (
     combined_scale_limit,
     style_highlight_table,
 )
-from ui.index_board import build_index_table, format_index_summary, index_tooltip
+from ui.index_board import (
+    build_index_table,
+    format_index_summary,
+    index_tooltip,
+    split_index_table,
+)
 from ui.sector_tiles import render_sector_tiles
 
 logging.basicConfig(
@@ -81,13 +88,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sector_heatmap")
 
-#: Pages. The index board is a separate page rather than a mode of the
-#: first one: it has its own feed, its own universe and its own drill-down.
-PAGE_SECTORS = "sectors"
-PAGE_INDICES = "indices"
-PAGE_LABELS = {
-    PAGE_SECTORS: "Nifty 50 Sectors",
-    PAGE_INDICES: "NSE Sectoral Indices",
+#: Boards the treemap page can draw.
+BOARD_SECTORS = "sectors"
+BOARD_INDICES = "indices"
+BOARD_LABELS = {
+    BOARD_SECTORS: "Nifty 50 Sectors",
+    BOARD_INDICES: "NSE Sectoral Indices",
 }
 
 VIEW_HEATMAP = "heatmap"
@@ -95,11 +101,6 @@ VIEW_SECTOR = "sector"
 
 #: The equity board backing an index drill-down.
 DEFAULT_EQUITY_UNIVERSE = "NIFTY50"
-
-# Tiles are real Streamlit buttons and can be clicked; the Plotly treemap
-# cannot report clicks back to Streamlit (see ui/sector_tiles.py).
-STYLE_TILES = "tiles"
-STYLE_TREEMAP = "treemap"
 
 #: Sidebar provider choice meaning "the configured preference order, with
 #: failover". Any other value pins the boards to that one broker.
@@ -161,7 +162,6 @@ def provider_option_label(choice: str, config: HeatmapConfig) -> str:
 
 
 def init_session_state() -> None:
-    st.session_state.setdefault("page", PAGE_SECTORS)
     st.session_state.setdefault("view", VIEW_HEATMAP)
     st.session_state.setdefault("selected_sector", None)
     st.session_state.setdefault("index_view", VIEW_HEATMAP)
@@ -456,17 +456,24 @@ def render_index_board(service: LiveMarketDataService, order: str) -> None:
         st.rerun(scope="app")
 
     st.divider()
-    st.markdown("##### All indices")
-    st.dataframe(
-        style_index_table(build_index_table(snapshot.stocks), service.config),
-        width="stretch",
-        hide_index=True,
-    )
+    # Gainers above losers so neither needs a long scroll. One colour scale
+    # over both, so +1% and -1% are equally dark.
+    table = build_index_table(snapshot.stocks)
+    gainers, losers = split_index_table(table)
+    limit = scale_limit(list(table["Change %"]), service.config.min_colour_scale_pct)
+    for title, frame, empty in (
+        ("Gainers", gainers, "No index is up right now."),
+        ("Losers", losers, "No index is down right now."),
+    ):
+        st.markdown(f"##### {title}")
+        if frame.empty:
+            st.caption(empty)
+        else:
+            st.dataframe(style_index_table(frame, limit), width="stretch", hide_index=True)
 
 
-def style_index_table(frame, config):
+def style_index_table(frame, limit: float):
     """Format the index table and colour-grade its Change % column."""
-    limit = scale_limit(list(frame["Change %"]), config.min_colour_scale_pct)
     return frame.style.format(
         {
             "LTP": lambda v: "-" if pd.isna(v) else f"{v:,.2f}",
@@ -543,9 +550,7 @@ def render_index_detail(index_service: LiveMarketDataService, label: str) -> Non
     )
 
 
-def render_heatmap_view(
-    service: LiveMarketDataService, order: str, style: str, method: str
-) -> None:
+def render_heatmap_view(service: LiveMarketDataService, order: str, method: str) -> None:
     snapshot = service.snapshot()
     render_status_bar(snapshot.status)
 
@@ -568,38 +573,6 @@ def render_heatmap_view(
 
     if not ordered:
         st.info("Waiting for the first market snapshot ...")
-        return
-
-    if style == STYLE_TREEMAP:
-        # Display only: Plotly treemaps emit plotly_treemapclick, which
-        # Streamlit does not listen for, so tiles here cannot be clicked.
-        st.plotly_chart(
-            build_sector_treemap(
-                ordered, min_colour_scale_pct=service.config.min_colour_scale_pct
-            ),
-            width="stretch",
-        )
-        st.caption(
-            "Treemap view is display-only - Streamlit cannot receive treemap "
-            "clicks. Use the selector below, or switch to Tiles to click through."
-        )
-        names = [s.sector for s in sorted(ordered, key=lambda s: s.sector)]
-        picker, button = st.columns([4, 1])
-        with picker:
-            choice = st.selectbox(
-                "Sector", names, index=None, placeholder="Select a sector ...",
-                label_visibility="collapsed", key="sector_picker",
-            )
-        with button:
-            if st.button("View constituents", width="stretch") and choice:
-                go_to_sector(choice)
-                st.rerun(scope="app")
-
-        st.divider()
-        render_breadth_summary(ordered)
-        if service.config.show_highlight_tables:
-            st.divider()
-            render_highlight_tables(snapshot, ordered, service.config)
         return
 
     clicked = render_sector_tiles(
@@ -660,55 +633,99 @@ def render_sector_view(service: LiveMarketDataService, sector: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-def main() -> None:
-    st.set_page_config(
-        page_title="Pulse Tester: Sector Heatmap",
-        page_icon=":material/dashboard:",
-        layout="wide",
-        initial_sidebar_state="collapsed",
-    )
-    init_session_state()
 
-    config = HeatmapConfig.from_env()
-    try:
-        universe = get_universe(config.universe_key)
-    except (KeyError, ValueError) as e:
-        st.error(str(e))
-        st.stop()
 
-    heading = st.empty()
+def render_treemap_view(
+    service: LiveMarketDataService, board: str, order: str, method: str
+) -> None:
+    """The Plotly treemap of either board.
 
-    with st.sidebar:
-        st.markdown("### Board")
-        page = st.radio(
-            "Board",
-            options=[PAGE_SECTORS, PAGE_INDICES],
-            format_func=lambda v: PAGE_LABELS[v],
-            index=0 if st.session_state.page == PAGE_SECTORS else 1,
-            key="page",
-            label_visibility="collapsed",
-            help=(
-                "Nifty 50 Sectors aggregates the 50 constituents we track. "
-                "NSE Sectoral Indices shows the real index values, whose "
-                "constituent lists are wider."
-            ),
+    Display only: Plotly treemaps emit ``plotly_treemapclick``, which Streamlit
+    does not listen for, so a tile cannot be clicked. The tile pages are the
+    way to drill down.
+    """
+    snapshot = service.snapshot()
+    render_status_bar(snapshot.status)
+
+    if board == BOARD_INDICES:
+        sectors = aggregate_sectors(snapshot.stocks)
+    else:
+        weight_set = get_weights(service.config.weights_path)
+        if method == MARKET_CAP and not weight_set.is_usable:
+            st.warning(
+                f"Market-cap weighting is unavailable, showing equal weighted. "
+                f"{weight_set.error}"
+            )
+            method = EQUAL_WEIGHT
+        sectors = aggregate_sectors(
+            snapshot.stocks, method=method, weights=weight_set.weights
         )
+    ordered = (
+        sort_sectors_alphabetically(sectors)
+        if order == ORDER_ALPHABETICAL
+        else rank_sectors(sectors)
+    )
+    if not ordered:
+        st.info("Waiting for the first market snapshot ...")
+        return
 
+    st.plotly_chart(
+        build_sector_treemap(
+            ordered, min_colour_scale_pct=service.config.min_colour_scale_pct
+        ),
+        width="stretch",
+    )
+    st.caption(
+        "Treemap colour = percentage change; darker means a bigger move. Tile "
+        "size is constant and carries no meaning. The treemap is display-only - "
+        "use the tile pages to click through to constituents."
+    )
+    if board == BOARD_SECTORS:
+        st.divider()
+        render_breadth_summary(ordered)
+        if service.config.show_highlight_tables:
+            st.divider()
+            render_highlight_tables(snapshot, ordered, service.config)
+
+
+# ---------------------------------------------------------------------------
+# Sidebar and pages
+# ---------------------------------------------------------------------------
+@dataclasses.dataclass(frozen=True)
+class Controls:
+    provider_choice: str
+    order: str
+    method: str
+
+
+def _persistent_radio(label: str, key: str, options, default, **kwargs):
+    """A keyed radio whose choice survives visiting a page that has no such radio.
+
+    Streamlit drops the state of a widget that a page does not render, so
+    without this the provider would reset to the default after a trip to the
+    F&O page.
+    """
+    kept = f"_kept_{key}"
+    if key not in st.session_state:
+        remembered = st.session_state.get(kept)
+        st.session_state[key] = remembered if remembered in options else default
+    value = st.radio(label, options=options, key=key, **kwargs)
+    st.session_state[kept] = value
+    return value
+
+
+def sidebar_controls(config: HeatmapConfig, show_maths: bool = True) -> Controls:
+    """The sidebar shared by every live-heatmap page."""
+    with st.sidebar:
         st.markdown("### Data provider")
         options = provider_options()
         default_choice = canonical_provider_name(os.getenv("PULSE_HEATMAP_PROVIDER", ""))
-        if st.session_state.get("provider_choice") not in options:
-            st.session_state.provider_choice = (
-                default_choice if default_choice in options else PROVIDER_AUTO
-            )
-        provider_choice = st.radio(
+        provider_choice = _persistent_radio(
             "Data provider",
-            options=options,
+            "provider_choice",
+            options,
+            default_choice if default_choice in options else PROVIDER_AUTO,
             format_func=lambda v: provider_option_label(v, config),
-            key="provider_choice",
             label_visibility="collapsed",
             help=(
                 "Auto uses the first broker in PULSE_MARKET_PROVIDERS that "
@@ -721,91 +738,80 @@ def main() -> None:
         )
 
         st.markdown("### Display")
-        order = st.radio(
+        order = _persistent_radio(
             "Sector tile order",
-            options=[ORDER_BY_PERFORMANCE, ORDER_ALPHABETICAL],
+            "sector_order",
+            [ORDER_BY_PERFORMANCE, ORDER_ALPHABETICAL],
+            config.sector_order
+            if config.sector_order in (ORDER_BY_PERFORMANCE, ORDER_ALPHABETICAL)
+            else ORDER_BY_PERFORMANCE,
             format_func=lambda v: (
                 "Strongest first (tiles move)"
                 if v == ORDER_BY_PERFORMANCE
                 else "Alphabetical (tiles stay put)"
             ),
-            index=0 if config.sector_order == ORDER_BY_PERFORMANCE else 1,
-            key="sector_order",
         )
         st.caption(
             "Colour and percentages update every second in both modes; only "
             "the tile positions differ."
         )
 
-        st.markdown("### Sector maths")
-        weight_set = get_weights(config.weights_path)
-        method = st.radio(
-            "Sector % is",
-            options=[EQUAL_WEIGHT, MARKET_CAP],
-            format_func=lambda v: AGGREGATION_LABELS[v],
-            index=0 if config.aggregation_method == EQUAL_WEIGHT else 1,
-            key="aggregation_method",
-            help=(
-                "Equal weighted: the average constituent's move. "
-                "Market-cap weighted: the sector's larger names count for more."
-            ),
-        )
-        if method == MARKET_CAP:
-            if weight_set.is_usable:
-                st.caption(weight_set.describe())
-                if weight_set.is_stale:
-                    st.caption(
-                        ":warning: Weights are over "
-                        f"{int(weight_set.age_days)} days old. Re-run "
-                        "scripts/fetch_index_weights.py."
-                    )
-            else:
-                st.caption(f":warning: {weight_set.error}")
+        method = config.aggregation_method
+        if show_maths:
+            st.markdown("### Sector maths")
+            weight_set = get_weights(config.weights_path)
+            method = _persistent_radio(
+                "Sector % is",
+                "aggregation_method",
+                [EQUAL_WEIGHT, MARKET_CAP],
+                config.aggregation_method,
+                format_func=lambda v: AGGREGATION_LABELS[v],
+                help=(
+                    "Equal weighted: the average constituent's move. "
+                    "Market-cap weighted: the sector's larger names count for more."
+                ),
+            )
+            if method == MARKET_CAP:
+                if weight_set.is_usable:
+                    st.caption(weight_set.describe())
+                    if weight_set.is_stale:
+                        st.caption(
+                            ":warning: Weights are over "
+                            f"{int(weight_set.age_days)} days old. Re-run "
+                            "scripts/fetch_index_weights.py."
+                        )
+                else:
+                    st.caption(f":warning: {weight_set.error}")
+    return Controls(provider_choice, order, method)
 
-        style = st.radio(
-            "Heatmap style",
-            options=[STYLE_TILES, STYLE_TREEMAP],
-            format_func=lambda v: (
-                "Tiles (clickable)" if v == STYLE_TILES else "Treemap (display only)"
-            ),
-            index=0,
-            key="heatmap_style",
-        )
 
-    # Only the active board's feed is started, so opening the dashboard on the
-    # sector page never connects a second websocket you are not looking at.
-    active_key = INDEX_UNIVERSE_KEY if page == PAGE_INDICES else universe.key
+def _start_service(universe_key: str, provider_choice: str) -> LiveMarketDataService:
+    # Only the active page's feed is started, so opening the app on one page
+    # never connects a websocket for a page you are not looking at.
     try:
-        service = get_service(active_key, provider_choice)
+        return get_service(universe_key, provider_choice)
     except Exception as e:
         st.error(f"Could not start the live market data service: {e}")
         st.stop()
 
-    heading.markdown(
-        f"## {'NSE Sectoral Indices' if page == PAGE_INDICES else universe.label + ' Sector Heatmap'}"
-    )
 
-    refresh = f"{max(0.5, service.config.ui_refresh_seconds)}s"
+def _refresh(service: LiveMarketDataService) -> str:
+    return f"{max(0.5, service.config.ui_refresh_seconds)}s"
 
-    if page == PAGE_INDICES:
-        if st.session_state.index_view == VIEW_SECTOR and st.session_state.selected_index:
-            if st.button(":material/arrow_back: Back to Index Heatmap"):
-                go_to_index_board()
-                st.rerun()
 
-            @st.fragment(run_every=refresh)
-            def _index_detail_fragment():
-                render_index_detail(service, st.session_state.selected_index)
-
-            _index_detail_fragment()
-        else:
-
-            @st.fragment(run_every=refresh)
-            def _index_board_fragment():
-                render_index_board(service, order)
-
-            _index_board_fragment()
-        return
+def page_sectors() -> None:
+    """Nifty 50 sector tiles, with drill-down to a sector's constituents."""
+    init_session_state()
+    config = HeatmapConfig.from_env()
+    try:
+        universe = get_universe(config.universe_key)
+    except (KeyError, ValueError) as e:
+        st.error(str(e))
+        st.stop()
+    controls = sidebar_controls(config)
+    service = _start_service(universe.key, controls.provider_choice)
+    st.markdown(f"## {universe.label} Sector Heatmap")
+    refresh = _refresh(service)
 
     if st.session_state.view == VIEW_SECTOR and st.session_state.selected_sector:
         if st.button(":material/arrow_back: Back to Sector Heatmap"):
@@ -821,10 +827,69 @@ def main() -> None:
 
         @st.fragment(run_every=refresh)
         def _heatmap_fragment():
-            render_heatmap_view(service, order, style, method)
+            render_heatmap_view(service, controls.order, controls.method)
 
         _heatmap_fragment()
 
 
+def page_indices() -> None:
+    """Real NSE sectoral index tiles, with drill-down."""
+    init_session_state()
+    config = HeatmapConfig.from_env()
+    controls = sidebar_controls(config, show_maths=False)
+    service = _start_service(INDEX_UNIVERSE_KEY, controls.provider_choice)
+    st.markdown("## NSE Sectoral Indices")
+    refresh = _refresh(service)
+
+    if st.session_state.index_view == VIEW_SECTOR and st.session_state.selected_index:
+        if st.button(":material/arrow_back: Back to Index Heatmap"):
+            go_to_index_board()
+            st.rerun()
+
+        @st.fragment(run_every=refresh)
+        def _index_detail_fragment():
+            render_index_detail(service, st.session_state.selected_index)
+
+        _index_detail_fragment()
+    else:
+
+        @st.fragment(run_every=refresh)
+        def _index_board_fragment():
+            render_index_board(service, controls.order)
+
+        _index_board_fragment()
+
+
+def _page_treemap(board: str) -> None:
+    """Display-only treemap of the Nifty 50 sectors or the NSE indices."""
+    init_session_state()
+    config = HeatmapConfig.from_env()
+    try:
+        universe = get_universe(config.universe_key)
+    except (KeyError, ValueError) as e:
+        st.error(str(e))
+        st.stop()
+    controls = sidebar_controls(config, show_maths=board == BOARD_SECTORS)
+    st.markdown(f"## Treemap: {BOARD_LABELS[board]}")
+    key = INDEX_UNIVERSE_KEY if board == BOARD_INDICES else universe.key
+    service = _start_service(key, controls.provider_choice)
+
+    @st.fragment(run_every=_refresh(service))
+    def _treemap_fragment():
+        render_treemap_view(service, board, controls.order, controls.method)
+
+    _treemap_fragment()
+
+
+def page_treemap_sectors() -> None:
+    _page_treemap(BOARD_SECTORS)
+
+
+def page_treemap_indices() -> None:
+    _page_treemap(BOARD_INDICES)
+
+
 if __name__ == "__main__":
+    from pulse_dashboard import main
+
     main()

@@ -566,33 +566,46 @@ class IndMoneyProvider(MarketDataProvider):
         session_date = todays_session_date()
 
         by_code = {rest_code(r): r.symbol for r in refs}
-        codes = list(by_code)
         closes: Dict[str, float] = {}
-        failed_batches = 0
-        for i in range(0, len(codes), HISTORY_BATCH):
-            chunk = codes[i : i + HISTORY_BATCH]
-            try:
-                status, body = self._get(
-                    "/market/historical/1day", {"scrip-codes": ",".join(chunk), **window}, "data"
-                )
-            except requests.RequestException as e:
-                logger.debug("INDmoney historical request failed: %s", e)
-                status, body = 0, {}
-            error = error_of(status, body) if status else "request failed"
-            if error:
-                failed_batches += 1
-                logger.debug("INDmoney historical error: %s", error)
-                if failed_batches >= 2 and not closes:
-                    logger.warning("INDmoney daily candles unavailable - abandoning the lookup")
-                    break
-                continue
-            for code, block in (body.get("data") or {}).items():
-                symbol = by_code.get(code)
-                if symbol is None or not isinstance(block, dict):
+
+        def fetch(codes: List[str]) -> bool:
+            """One pass over ``codes``. False if the lookup should be abandoned."""
+            failed_batches = 0
+            for i in range(0, len(codes), HISTORY_BATCH):
+                chunk = codes[i : i + HISTORY_BATCH]
+                try:
+                    status, body = self._get(
+                        "/market/historical/1day", {"scrip-codes": ",".join(chunk), **window}, "data"
+                    )
+                except requests.RequestException as e:
+                    logger.debug("INDmoney historical request failed: %s", e)
+                    status, body = 0, {}
+                error = error_of(status, body) if status else "request failed"
+                if error:
+                    failed_batches += 1
+                    logger.debug("INDmoney historical error: %s", error)
+                    if failed_batches >= 2 and not closes:
+                        logger.warning("INDmoney daily candles unavailable - abandoning the lookup")
+                        return False
                     continue
-                close = prior_close_from_candles(candles_to_series(block.get("candles")), session_date)
-                if close:
-                    closes[symbol] = close
+                for code, block in (body.get("data") or {}).items():
+                    symbol = by_code.get(code)
+                    if symbol is None or not isinstance(block, dict):
+                        continue
+                    close = prior_close_from_candles(candles_to_series(block.get("candles")), session_date)
+                    if close:
+                        closes[symbol] = close
+            return True
+
+        # A batch that fails or comes back short would otherwise leave up to
+        # five instruments with no previous close for the whole session (a
+        # board of grey tiles). Ask once more for whatever is still missing,
+        # as _quotes_complete does for the quote endpoints.
+        if fetch(list(by_code)) and closes:
+            gaps = [code for code, symbol in by_code.items() if symbol not in closes]
+            if gaps:
+                logger.info("INDmoney candles missed %d instrument(s) - asking again", len(gaps))
+                fetch(gaps)
 
         logger.info("INDmoney resolved previous close for %d/%d from daily candles", len(closes), len(refs))
         return closes
