@@ -14,8 +14,14 @@ GIFT Nifty are not licensed for widgets - is in docs/TRADINGVIEW_WIDGETS.md.
 
 Visualisation only - it places no orders and generates no signals.
 
-    streamlit run tradingview_dashboard.py --server.port 8504
+    streamlit run apps/tradingview_dashboard.py --server.port 8504
 """
+
+import os as _os
+import sys as _sys
+
+# Repo root on the path, so `market`, `ui` and `utils` import when this file is run directly.
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import streamlit as st
 

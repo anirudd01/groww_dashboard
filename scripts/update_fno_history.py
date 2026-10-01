@@ -4,6 +4,7 @@
     python scripts/update_fno_history.py --days 400   # backfill ~a year (same cost)
     python scripts/update_fno_history.py --symbols RELIANCE,TCS
     python scripts/update_fno_history.py --full --days 60   # re-fetch stored days too (after a split)
+    python scripts/update_fno_history.py --fix-splits       # find suspected splits/bonuses and re-fetch just those stocks
 
 Run it once to backfill, then once a day after 16:00 IST (or weekly - one run
 fills every missing day). It needs today's Kite session
@@ -31,7 +32,7 @@ import logging
 import os
 import sys
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 
 import requests
 
@@ -44,8 +45,10 @@ from market.fno_movers import (  # noqa: E402
     build_universe,
     candle_rows,
     load_closes,
+    load_confirmed_moves,
     save_closes,
     save_universe,
+    suspected_corporate_actions,
     upsert_closes,
 )
 from market.market_hours import now_ist  # noqa: E402
@@ -86,6 +89,10 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=30, help="Calendar days to fetch for a stock with no history")
     parser.add_argument("--full", action="store_true",
                         help="Re-fetch the whole --days window even where rows are stored (refreshes split-adjusted closes)")
+    parser.add_argument("--fix-splits", action="store_true",
+                        help="Re-fetch, over the whole stored range, only the stocks whose history shows a "
+                             "split-like fall, then report which were corporate actions (the jump disappears "
+                             "once Kite's adjusted candles replace the rows) and which were real moves")
     parser.add_argument("--symbols", help="Comma-separated subset (default: every F&O stock)")
     parser.add_argument("--closes", default=CLOSES_PATH)
     parser.add_argument("--universe", default=UNIVERSE_PATH)
@@ -138,6 +145,18 @@ def main() -> int:
     exclude = None if settled else today.isoformat()
 
     rows = load_closes(args.closes)
+    suspects = []
+    if args.fix_splits:
+        suspects = suspected_corporate_actions(rows, load_confirmed_moves())
+        if not suspects:
+            logger.info("No suspected splits or bonuses in %s - nothing to re-fetch.", args.closes)
+            return 0
+        names = sorted({a.symbol for a in suspects})
+        logger.info("Suspected: %s. Re-fetching those stocks over the whole stored range.",
+                    "; ".join(f"{a.symbol} {a.date} ({a.change_pct:+.1f}%)" for a in suspects))
+        tokens = {s: t for s, t in tokens.items() if s in names}
+        args.full = True
+        args.days = (today - date.fromisoformat(min(day for day, _ in rows))).days + 1
     last_by_symbol = {}
     for day, symbol in rows:
         if day > last_by_symbol.get(symbol, ""):
@@ -160,6 +179,13 @@ def main() -> int:
             logger.info("  %d/%d", i, len(tokens))
 
     save_closes(rows, args.closes)
+    if args.fix_splits:
+        still = {(a.symbol, a.date) for a in suspected_corporate_actions(rows, load_confirmed_moves())}
+        for action in suspects:
+            outcome = ("still a fall of %+.1f%% after re-fetching: a real move (or a demerger or buyback), left as is"
+                       % action.change_pct if (action.symbol, action.date) in still
+                       else "adjusted: Kite's candles now show it as a corporate action")
+            logger.info("  %s %s: %s", action.symbol, action.date, outcome)
     days = sorted({d for d, _ in rows})
     logger.info(
         "Done in %.0f s: %d rows added/updated, %d stocks x %d days in %s (%s .. %s)",

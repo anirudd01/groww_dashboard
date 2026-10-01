@@ -46,3 +46,7 @@ data/market.db-shm
 # for TOTP codes. Per-machine.
 .clock_offset.json
 .clock_offset.json.tmp
+data/extended_session_probe.csv
+
+# Tests stay local for now; to be committed later (see README, "Tests are not committed yet")
+tests/

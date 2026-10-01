@@ -2,11 +2,11 @@
 
 Five Streamlit dashboards: four for a Groww trading account, sharing a common API client architecture, and one built only from TradingView widgets:
 
-- **[`fno_dashboard.py`](fno_dashboard.py)** — Futures & Options (NSE FnO + MCX Commodity) position tracker: real-time LTP, P&L, sentiment analytics, and a Quick Exit action for profitable positions.
-- **[`app.py`](app.py)** — Portfolio & MTF Decoupler: separates actual (cash-owned) delivery holdings from MTF (margin/leveraged) positions, with a margin health simulator.
-- **[`pulse_dashboard.py`](pulse_dashboard.py)** — One app with a top navbar: **Nifty 50 Sectors**, **NSE Sectoral Indices**, **F&O Nifty 50**, **F&O All Stocks**, **Treemap: Nifty 50 Sectors** and **Treemap: NSE Indices** (from [`sector_heatmap_dashboard.py`](sector_heatmap_dashboard.py) and [`fno_movers_dashboard.py`](fno_movers_dashboard.py)). Live sector heatmaps, two boards: the **Nifty 50 board** aggregates the 50 constituents into sectors (equal- or market-cap weighted), and the **NSE Sectoral Indices board** shows the real index values. Both are grids of clickable tiles coloured by live percentage change, with one-click drill-down. Broker-agnostic and switchable from the sidebar: **Dhan** is the default live feed with **INDmoney** as the first fallback, **Groww** and **Zerodha Kite** as further options, or pin any one broker to compare them. Visualisation only — it places no orders and generates no signals. See [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md).
-- **[`fno_movers_dashboard.py`](fno_movers_dashboard.py)** — F&O top gainers and losers, one card per day (last 1/3/5/7 days), as two navbar pages: the **Nifty 50** and **all ~210 NSE F&O stocks**. Past days come from a stored close history, and today from one bulk Kite quote. Visualisation only. See [`docs/FNO_MOVERS.md`](docs/FNO_MOVERS.md).
-- **[`tradingview_dashboard.py`](tradingview_dashboard.py)** — **Market pulse**: crude oil (WTI, Brent), natural gas (Henry Hub), USD/INR and EUR/INR, and Indian markets, each category in its own section. There are two views: **ticker tags** (compact pills; hover one for its chart) and **mini charts with TradingView's Top Stories** news alongside. It needs no credentials and the app makes no network calls: TradingView's widgets fetch their own data in the browser. NSE, MCX and GIFT Nifty are **not licensed for TradingView widgets**, so Nifty is shown through its BSE-listed ETFs, crude and gas through the CFDs that track the benchmarks, and the rest as links to tradingview.com. See [`docs/TRADINGVIEW_WIDGETS.md`](docs/TRADINGVIEW_WIDGETS.md), the widget reference to read before touching any TradingView widget.
+- **[`apps/fno_dashboard.py`](apps/fno_dashboard.py)** — Futures & Options (NSE FnO + MCX Commodity) position tracker: real-time LTP, P&L, sentiment analytics, and a Quick Exit action for profitable positions.
+- **[`apps/app.py`](apps/app.py)** — Portfolio & MTF Decoupler: separates actual (cash-owned) delivery holdings from MTF (margin/leveraged) positions, with a margin health simulator.
+- **[`pulse_dashboard.py`](pulse_dashboard.py)** — One app with a top navbar: **Nifty 50 Sectors**, **NSE Sectoral Indices**, **F&O Nifty 50**, **F&O All Stocks**, **Treemap: Nifty 50 Sectors** and **Treemap: NSE Indices** (from [`apps/sector_heatmap_dashboard.py`](apps/sector_heatmap_dashboard.py) and [`apps/fno_movers_dashboard.py`](apps/fno_movers_dashboard.py)). Live sector heatmaps, two boards: the **Nifty 50 board** aggregates the 50 constituents into sectors (equal- or market-cap weighted), and the **NSE Sectoral Indices board** shows the real index values. Both are grids of clickable tiles coloured by live percentage change, with one-click drill-down. Broker-agnostic and switchable from the sidebar: **Dhan** is the default live feed with **INDmoney** as the first fallback, **Groww** and **Zerodha Kite** as further options, or pin any one broker to compare them. Visualisation only — it places no orders and generates no signals. See [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md).
+- **[`apps/fno_movers_dashboard.py`](apps/fno_movers_dashboard.py)** — F&O top gainers and losers, one card per day (last 1/3/5/7 days), as two navbar pages: the **Nifty 50** and **all ~210 NSE F&O stocks**. Past days come from a stored close history, and today from one bulk Kite quote. Visualisation only. See [`docs/FNO_MOVERS.md`](docs/FNO_MOVERS.md).
+- **[`apps/tradingview_dashboard.py`](apps/tradingview_dashboard.py)** — **Market pulse**: crude oil (WTI, Brent), natural gas (Henry Hub), USD/INR and EUR/INR, and Indian markets, each category in its own section. There are two views: **ticker tags** (compact pills; hover one for its chart) and **mini charts with TradingView's Top Stories** news alongside. It needs no credentials and the app makes no network calls: TradingView's widgets fetch their own data in the browser. NSE, MCX and GIFT Nifty are **not licensed for TradingView widgets**, so Nifty is shown through its BSE-listed ETFs, crude and gas through the CFDs that track the benchmarks, and the rest as links to tradingview.com. See [`docs/TRADINGVIEW_WIDGETS.md`](docs/TRADINGVIEW_WIDGETS.md), the widget reference to read before touching any TradingView widget.
 
 ---
 
@@ -15,15 +15,15 @@ Five Streamlit dashboards: four for a Groww trading account, sharing a common AP
 ```
 pulse_tester/
 │
-├── fno_dashboard.py              # FnO dashboard (NSE + MCX), Quick Exit
-├── app.py                        # Portfolio / MTF Decoupler dashboard
-├── pulse_dashboard.py            # Streamlit entry point: top navbar, six pages (sectors, indices, F&O Nifty 50, F&O all stocks, two treemaps)
-├── sector_heatmap_dashboard.py   # Sector heatmap page functions (used by pulse_dashboard.py)
-├── fno_movers_dashboard.py       # F&O top gainers/losers by day (Streamlit entry point)
-├── tradingview_dashboard.py      # Market pulse: TradingView widgets, no credentials (Streamlit entry point)
-├── groww_client.py               # Groww API wrapper used by app.py (delivery/MTF/margins)
-│
-├── groww_api/                    # Groww API client package used by fno_dashboard.py
+├── pulse_dashboard.py            # Main entry point: top navbar, six pages (sectors, indices, F&O Nifty 50, F&O all stocks, two treemaps)
+├── apps/                         # Every other Streamlit app (each also runs on its own)
+│   ├── fno_dashboard.py          # FnO dashboard (NSE + MCX), Quick Exit
+│   ├── app.py                    # Portfolio / MTF Decoupler dashboard
+│   ├── sector_heatmap_dashboard.py  # Sector heatmap page functions (used by pulse_dashboard.py)
+│   ├── fno_movers_dashboard.py   # F&O top gainers/losers (page functions + standalone entry point)
+│   └── tradingview_dashboard.py  # Market pulse: TradingView widgets, no credentials
+├── groww_api/                    # Groww API code (subscription ended, see the note below)
+│   ├── groww_client.py           # GrowwClient: delivery/MTF/margins, used by apps/app.py
 │   ├── client.py                 # Singleton auth (one authentication per session)
 │   ├── api_calls.py              # API wrappers (positions, LTP, orders, margins)
 │   ├── position_processor.py     # FnO business logic & P&L calculations
@@ -74,7 +74,7 @@ pulse_tester/
 │   ├── index_board.py            # NSE sectoral index board
 │   └── tradingview.py            # TradingView widget HTML for st.iframe (+ in-browser theme detection)
 │
-├── tests/                        # Unit tests for the non-UI logic (501 tests)
+├── tests/                        # Unit tests for the non-UI logic (515 tests). Git-ignored for now, see below
 │   ├── test_sector_heatmap.py     # % change, aggregation, ranking, staleness, universe
 │   ├── test_providers.py          # Provider interface, registry, Dhan packet decoding
 │   ├── test_indmoney.py           # INDmoney frames, REST mapping, index-name table
@@ -96,7 +96,7 @@ pulse_tester/
 │   └── groww_cloud_commodity_15pct_exit_strategy.py
 │
 ├── scripts/
-│   ├── test_api.py               # CLI connectivity/diagnostic check for groww_client.py
+│   ├── test_api.py               # CLI connectivity/diagnostic check for groww_api/groww_client.py
 │   ├── check_heatmap_universe.py # Verifies tokens, previous closes & the live feed
 │   ├── fetch_instrument_master.py # Generates data/dhan_instruments.json (run monthly)
 │   ├── fetch_indmoney_instruments.py # Generates data/indmoney_instruments.json
@@ -117,14 +117,10 @@ pulse_tester/
 │   ├── FNO_MOVERS.md              # F&O movers: provider comparison, storage choice
 │   ├── TRADINGVIEW_WIDGETS.md     # TradingView widget reference: formats, options, symbol availability, Streamlit notes
 │   ├── ROADMAP.md                 # What is done and what is planned next
-│   ├── API_REFERENCE.md
-│   ├── ARCHITECTURE.md
 │   ├── QUICK_START.md
 │   ├── api/                      # Groww, INDmoney and Kite API notes (INDMONEY_API.md: Dhan comparison)
-│   └── _archived/                # Superseded design/status docs, kept for history
+│   └── _archived/                # Superseded docs (old architecture, status, Groww API index, changelog); git-ignored, local only
 │
-├── run_fno_dashboard.bat / .ps1  # Windows launchers for fno_dashboard.py
-├── run_sector_heatmap.bat / .ps1 # Windows launchers for the sector heatmap (port 8502)
 ├── requirements.txt
 └── .env.example                  # Credentials template
 ```
@@ -207,8 +203,8 @@ Kite code is read-only: it calls no order endpoint. Details are in
 > subscription has ended, so every Groww login fails with `Authorisation failed.
 > Your API token does not have the required permissions`. This is an account
 > state, not a code fault, so there is no point retrying. The `GROWW_*` values
-> are removed from `.env`. Until the subscription is renewed, `app.py`,
-> `fno_dashboard.py` and the heatmap's Groww provider will not authenticate; the
+> are removed from `.env`. Until the subscription is renewed, `apps/app.py`,
+> `apps/fno_dashboard.py` and the heatmap's Groww provider will not authenticate; the
 > heatmap skips Groww (it is unconfigured) and uses the other brokers. To bring
 > it back, renew the subscription, regenerate the key on Groww's Cloud API Keys
 > page, and put the values below back in `.env`.
@@ -234,11 +230,11 @@ GROWW_ACCESS_TOKEN=your_access_token
 ### 3. Run a dashboard
 
 ```bash
-streamlit run fno_dashboard.py               # FnO tracker + Quick Exit
-streamlit run app.py                         # Portfolio / MTF Decoupler
+streamlit run apps/fno_dashboard.py               # FnO tracker + Quick Exit
+streamlit run apps/app.py                         # Portfolio / MTF Decoupler
 streamlit run pulse_dashboard.py             # Sector heatmaps + F&O movers + treemap, one top navbar
-streamlit run fno_movers_dashboard.py --server.port 8503   # F&O movers pages on their own
-streamlit run tradingview_dashboard.py --server.port 8504  # Market pulse (TradingView widgets, no .env needed)
+streamlit run apps/fno_movers_dashboard.py --server.port 8503   # F&O movers pages on their own
+streamlit run apps/tradingview_dashboard.py --server.port 8504  # Market pulse (TradingView widgets, no .env needed)
 ```
 
 The first two open at `http://localhost:8501`; the launcher scripts put the
@@ -275,7 +271,7 @@ missing weights fall back to equal weighting with a visible note.
 ### 5. (Optional) Verify connectivity from the CLI
 
 ```bash
-python scripts/test_api.py                   # groww_client.py connectivity
+python scripts/test_api.py                   # Groww connectivity (groww_api/groww_client.py)
 python scripts/check_heatmap_universe.py     # heatmap data pipeline + live feed
 python scripts/check_heatmap_universe.py --provider dhan --seconds 20
 python scripts/check_heatmap_universe.py --board indices --provider dhan
@@ -294,11 +290,15 @@ python -m unittest discover -s tests -t .    # 501 tests, no extra dependencies
 
 ---
 
+## Tests are not committed yet
+
+`tests/` is in `.gitignore`: the suite stays on this machine for now and will be committed later. Run it with `.venv\Scripts\python.exe -m unittest discover -s tests`. `tests/__init__.py` and `tests/support.py` were committed earlier and stay tracked (ignore rules do not untrack files); every other test file is untracked.
+
 ## Architecture Notes
 
-- **Two separate API client layers exist on purpose:** `groww_client.py` (`GrowwClient`) backs `app.py`, while the `groww_api/` package (`GrowwAPIClient` + `GrowwAPIService` + `PositionProcessor`) backs `fno_dashboard.py`. The `groww_api/` package uses a singleton auth pattern so the app authenticates once per session instead of on every cache refresh.
-- **Shared formatting/sentiment logic** lives in `utils/` and is imported by both `fno_dashboard.py` and `groww_client.py` (for `format_inr`/`format_inr_full`) to avoid duplicated implementations.
-- **Quick Exit** (in `fno_dashboard.py`) places a LIMIT SELL order at LTP − 0.5% for profitable positions, sorted highest P&L% first, and reads back the order status via `GrowwAPIService.get_order_status`.
+- **Two separate API client layers exist on purpose:** `groww_api/groww_client.py` (`GrowwClient`) backs `apps/app.py`, while the `groww_api/` package (`GrowwAPIClient` + `GrowwAPIService` + `PositionProcessor`) backs `apps/fno_dashboard.py`. The `groww_api/` package uses a singleton auth pattern so the app authenticates once per session instead of on every cache refresh.
+- **Shared formatting/sentiment logic** lives in `utils/` and is imported by both `apps/fno_dashboard.py` and `groww_api/groww_client.py` (for `format_inr`/`format_inr_full`) to avoid duplicated implementations.
+- **Quick Exit** (in `apps/fno_dashboard.py`) places a LIMIT SELL order at LTP − 0.5% for profitable positions, sorted highest P&L% first, and reads back the order status via `GrowwAPIService.get_order_status`.
 - **The sector heatmap is broker-agnostic.** `market/providers/` defines a `MarketDataProvider` + `FeedHandle` interface, implemented by **Dhan** (DhanHQ v2, preferred), **INDmoney** (INDstocks API, free, first fallback), **Groww** (an adapter over the existing stack) and **Kite** (Zerodha Kite Connect, last in *Auto*). `PULSE_MARKET_PROVIDERS` sets the preference order for *Auto*; the service adopts the first broker that authenticates and fails over if its websocket cannot deliver. The sidebar's **Data provider** switch can instead pin one broker with no failover, for comparing them. Kite is called without the `kiteconnect` SDK: the SDK's ticker runs on Twisted, whose reactor cannot restart within a process, and this service reconnects feeds as a matter of course.
 - **Two boards share one engine.** The Nifty 50 board aggregates constituents into sectors; the NSE Sectoral Indices board shows real index values (Dhan's `IDX_I` segment, or INDmoney's `NIDX`), where each tile is one index and nothing is averaged. Each board runs its own feed (Dhan allows 5 connections per client id, INDmoney 3 per user) and a board you have not opened is never started. The index drill-down shows the Nifty 50 members of the matching sector, labelled explicitly as *not* the index's real constituent list — neither broker publishes that.
 - **Sector percentages are equal-weighted by default, market-cap weighted on request.** Equal weighting answers "how did the average stock in this sector do"; cap weighting answers "how did its big names do". Neither broker exposes market cap, so free-float weights are generated offline by `scripts/fetch_index_weights.py` into `data/index_weights.json` and only *read* at runtime — the dashboard never fetches fundamentals while the market is open. If weights are missing it falls back to equal weighting and says so rather than presenting an unweighted number as weighted.
@@ -330,7 +330,7 @@ and websocket APIs are called directly.
 - **Groww: "Your API token does not have the required permissions"** — the Groww API subscription has ended (2026-09-30). Renew it and regenerate the key; retrying or changing the code will not help. See the note in Setup.
 - **"Client not authenticated"** — verify `.env` credentials and `GROWW_AUTH_MODE`. Direct access tokens are short-lived; regenerate one when it expires.
 - **Restarting after a credential change** — `GrowwAPIClient`/`GrowwClient` authenticate once per running process. The sidebar's "Refresh Data" button only clears the Streamlit data cache; after changing `.env` credentials, fully restart the Streamlit process to re-authenticate.
-- **Dashboard won't start** — confirm the venv is activated and Streamlit is installed (`python -m streamlit run fno_dashboard.py`).
+- **Dashboard won't start** — confirm the venv is activated and Streamlit is installed (`python -m streamlit run apps/fno_dashboard.py`).
 
 - **INDmoney: "authentication failed ... TokenException"** — the 24h token has expired or was revoked. Generate a new one at indstocks.com → API Trading → Access Tokens and restart the dashboard.
 - **INDmoney index board shows 16/17, with Nifty Oil & Gas missing** — expected. INDmoney lists that index but serves no data for it; see [`docs/api/INDMONEY_API.md`](docs/api/INDMONEY_API.md).

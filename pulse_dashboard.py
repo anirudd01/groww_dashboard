@@ -10,8 +10,8 @@ Visualisation only - it places no orders and generates no signals.
 
 import streamlit as st
 
-import fno_movers_dashboard
-import sector_heatmap_dashboard as sectors
+from apps import fno_movers_dashboard
+from apps import sector_heatmap_dashboard as sectors
 
 
 def main() -> None:

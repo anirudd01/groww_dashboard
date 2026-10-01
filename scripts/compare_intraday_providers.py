@@ -5,10 +5,16 @@
 For five liquid stocks it measures, per broker:
   1. the widest 1-minute window one call accepts (sweeps 7..90 days),
   2. seconds per call and stocks per call,
-  3. every 1-minute OHLCV over the last 7 days against Kite,
+  3. every 1-minute OHLCV over the last 7 days against Kite, matched by
+     **minute label** (never by position) and only inside the continuous
+     session, 09:15-15:14. Bars at other times (pre-open, the 15:15-15:30
+     closing auction window, post-close) are counted, not compared,
   4. whether each day's minute bars reproduce the official daily open/high/low
      (Kite's daily candle) and how much of the day's volume they hold,
-  5. bars per day and the first/last bar time.
+  5. bars per day and the first/last bar time,
+  6. label alignment: the bar-label shift (-2..+2 minutes) at which each broker
+     agrees best with Kite. 0 means the same open-time labelling; anything else
+     means a mismatch is a time offset, not a price difference.
 
 A broker whose token is missing or rejected is skipped with a note, so the
 script runs with whatever is logged in. Needs a Kite session (the reference).
@@ -33,6 +39,20 @@ ap.add_argument("--out", help="also write the full results as JSON to this path"
 ARGS = ap.parse_args()
 
 IST = timezone(timedelta(hours=5, minutes=30))
+#: The continuous session, by bar label. Kite and Dhan bars stop at 15:14; the
+#: 15:15-15:30 closing-auction (CAS) window has no ordinary bars.
+SESSION_FIRST, SESSION_LAST = "09:15", "15:14"
+
+
+def in_session(ts):
+    """True for a 'YYYY-MM-DD HH:MM' label inside the continuous session."""
+    return SESSION_FIRST <= ts[11:] <= SESSION_LAST
+
+
+def shifted(ts, minutes):
+    return (datetime.strptime(ts, "%Y-%m-%d %H:%M") + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M")
+
+
 SYMS = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "SBIN"]
 WINDOWS = [7, 8, 15, 30, 31, 60, 61, 90, 91]
 if ARGS.end:
@@ -208,17 +228,41 @@ R["vs_kite"] = {}
 for name in P:
     if name == "kite":
         continue
-    n, eq, only_k, only_o = 0, [0] * 5, 0, 0
+    n, eq, only_k, only_o, outside = 0, [0] * 5, 0, 0, 0
     for s in SYMS:
-        k, o = bars["kite"].get(s, {}), bars[name].get(s, {})
+        full = bars[name].get(s, {})
+        outside += sum(not in_session(t) for t in full)
+        k = {t: v for t, v in bars["kite"].get(s, {}).items() if in_session(t)}
+        o = {t: v for t, v in full.items() if in_session(t)}
         only_k += len(k.keys() - o.keys()); only_o += len(o.keys() - k.keys())
         for t in k.keys() & o.keys():
             n += 1
             for i in range(5):
                 eq[i] += abs(float(k[t][i]) - float(o[t][i] or 0)) < 0.001
-    R["vs_kite"][name] = {"common": n, "only_kite": only_k, "only_other": only_o,
+    R["vs_kite"][name] = {"common": n, "only_kite": only_k, "only_other": only_o, "bars_outside_session": outside,
                           **{f: round(e / n * 100, 1) if n else None for f, e in zip("OHLCV", eq)}}
     print(name, "vs kite (% equal):", R["vs_kite"][name])
+
+# 3b. label alignment: which shift of the other broker's labels agrees best with Kite
+R["alignment"] = {}
+for name in P:
+    if name == "kite":
+        continue
+    scores = {}
+    for m in (-2, -1, 0, 1, 2):
+        hit = tot = 0
+        for s in SYMS:
+            k = {t: v for t, v in bars["kite"].get(s, {}).items() if in_session(t)}
+            o = bars[name].get(s, {})
+            for t, v in k.items():
+                w = o.get(shifted(t, m))
+                if w is not None:
+                    tot += 1
+                    hit += abs(float(v[3]) - float(w[3])) < 0.001
+        scores[m] = round(hit / tot * 100, 1) if tot else None
+    best = max((m for m in scores if scores[m] is not None), key=lambda m: scores[m], default=None)
+    R["alignment"][name] = {"close_equal_pct_by_shift": scores, "best_shift_minutes": best}
+    print(name, "label alignment (close-equal % by shift):", scores, "-> best shift", best)
 
 # 4. minute bars vs the official daily candle
 daily = {}
@@ -232,7 +276,7 @@ for name in P:
     n, o_, h_, l_, vol = 0, 0, 0, 0, []
     for s in SYMS:
         for d, c in daily[s].items():
-            day = sorted((t, v) for t, v in bars[name].get(s, {}).items() if t.startswith(d) and "09:15" <= t[11:] <= "15:29")
+            day = sorted((t, v) for t, v in bars[name].get(s, {}).items() if t.startswith(d) and in_session(t))
             if not day:
                 continue
             n += 1
@@ -240,6 +284,7 @@ for name in P:
             h_ += abs(max(v[1] for _, v in day) - c[2]) < 0.001
             l_ += abs(min(v[2] for _, v in day) - c[3]) < 0.001
             vol.append(round(sum(int(v[4] or 0) for _, v in day) / c[5] * 100, 1))
+    # Volume below 100% is expected: the daily candle also holds the 15:15-15:30 auction volume.
     R["vs_daily"][name] = {"stock_days": n, "open": o_, "high": h_, "low": l_,
                            "volume_pct_range": [min(vol), max(vol)] if vol else None}
     print(name, "vs official daily:", R["vs_daily"][name])

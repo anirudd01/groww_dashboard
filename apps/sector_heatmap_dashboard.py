@@ -9,6 +9,12 @@ starts that combined app:
     streamlit run pulse_dashboard.py
 """
 
+import os as _os
+import sys as _sys
+
+# Repo root on the path, so `market`, `ui` and `utils` import when this file is run directly.
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import dataclasses
 import logging
 import os

@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 
 UNIVERSE_PATH = os.path.join("data", "fno_universe.json")
 CLOSES_PATH = os.path.join("data", "fno_daily_closes.csv")
+#: Falls that look like a split but were checked and are real moves: {"SYMBOL": {"YYYY-MM-DD": "why"}}.
+#: Hand-edited; nothing writes it.
+CONFIRMED_MOVES_PATH = os.path.join("data", "fno_confirmed_moves.json")
 UPDATE_SCRIPT = "scripts/update_fno_history.py"
 
 CLOSE_COLUMNS = ("date", "symbol", "open", "high", "low", "close", "volume")
@@ -299,3 +302,166 @@ def top_movers(moves: List[Move], limit: int = 10, symbols: Optional[set] = None
     gainers = ranked[:limit]
     losers = sorted(pool, key=lambda m: (m.change_pct, m.symbol))[:limit]
     return gainers, losers
+
+
+# -- multi-day change --------------------------------------------------------
+
+
+@dataclass
+class PeriodMove:
+    """One stock's change between two trading days ``window`` apart."""
+
+    symbol: str
+    start_date: str
+    end_date: str
+    start_close: float
+    end_close: float
+    #: Closes from ``start_date`` to ``end_date`` (days the stock has no row are skipped)
+    history: List[float] = field(default_factory=list)
+
+    @property
+    def change_pct(self) -> float:
+        return (self.end_close - self.start_close) / self.start_close * 100.0
+
+    @property
+    def up_days(self) -> int:
+        """Days in the window that closed above the day before."""
+        return sum(1 for a, b in zip(self.history, self.history[1:]) if b > a)
+
+    @property
+    def days(self) -> int:
+        return max(0, len(self.history) - 1)
+
+
+def period_changes(
+    rows: Dict[Tuple[str, str], dict],
+    window: int,
+    today_moves: Optional[List[Move]] = None,
+) -> List[PeriodMove]:
+    """Change over the last ``window`` trading days, for every stock that has both ends.
+
+    The window ends on the latest day available: today's live price when
+    ``today_moves`` is given and today is not stored yet, otherwise the last
+    stored day. It starts ``window`` trading days earlier *in the file* (so
+    weekends and holidays need no calendar). A stock missing a row on either end
+    day is left out, the same rule as ``daily_changes``.
+    """
+    if window < 1:
+        return []
+    days = trading_days(rows)
+    closes: Dict[str, Dict[str, float]] = {}
+    for (day, symbol), row in rows.items():
+        close = _number(row.get("close"))
+        if close:
+            closes.setdefault(day, {})[symbol] = close
+    if today_moves:
+        today = today_moves[0].date
+        if today not in closes:
+            closes[today] = {m.symbol: m.close for m in today_moves}
+            days = days + [today]
+    if len(days) < window + 1:
+        return []
+
+    span = days[-1 - window:]
+    result = []
+    for symbol, end_close in closes.get(span[-1], {}).items():
+        start_close = closes.get(span[0], {}).get(symbol)
+        if not start_close:
+            continue
+        history = [closes[d][symbol] for d in span if symbol in closes.get(d, {})]
+        result.append(PeriodMove(symbol, span[0], span[-1], start_close, end_close, history))
+    return result
+
+
+def top_period_movers(
+    moves: List[PeriodMove], limit: int = 10, symbols: Optional[set] = None
+) -> Tuple[List[PeriodMove], List[PeriodMove]]:
+    """``(gainers, losers)`` over a period, best-first, optionally within ``symbols``."""
+    pool = [m for m in moves if symbols is None or m.symbol in symbols]
+    gainers = sorted(pool, key=lambda m: (m.change_pct, m.symbol), reverse=True)[:limit]
+    losers = sorted(pool, key=lambda m: (m.change_pct, m.symbol))[:limit]
+    return gainers, losers
+
+
+# -- suspected splits and bonuses --------------------------------------------
+
+#: Prior close / new close ratios a split or bonus produces: 3:2, 1:1, 2:1, 3:1,
+#: 4:1 bonus or 1:2 .. 1:10 split.
+SPLIT_RATIOS = (1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 10.0)
+#: A real fall this size is rare; below it a ratio match means nothing.
+MIN_SPLIT_DROP_PCT = 25.0
+#: The price also moves on its own on the ex-date, so a match is approximate.
+SPLIT_TOLERANCE = 0.06
+
+
+@dataclass
+class CorporateAction:
+    """A day whose fall looks like a split or bonus rather than a market move."""
+
+    symbol: str
+    date: str
+    previous_close: float
+    close: float
+    ratio: float
+
+    @property
+    def change_pct(self) -> float:
+        return (self.close - self.previous_close) / self.previous_close * 100.0
+
+    @property
+    def label(self) -> str:
+        return f"fell to about 1/{self.ratio:g} of the prior close"
+
+
+def load_confirmed_moves(path: str = CONFIRMED_MOVES_PATH) -> set:
+    """(symbol, date) pairs a person has confirmed as real moves. Empty if there is no file."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return set()
+    return {(symbol, day) for symbol, days in data.items() if isinstance(days, dict) for day in days}
+
+
+def suspected_corporate_actions(
+    rows: Dict[Tuple[str, str], dict], confirmed: Optional[set] = None
+) -> List[CorporateAction]:
+    """Days where a stock's close fell by a split-like ratio, newest first.
+
+    Kite adjusts its candles retroactively, but rows already stored keep the old
+    prices, so an ex-date shows as a huge one-day fall. This only *suspects*: a
+    demerger, a buyback or a genuine crash can match too. ``update_fno_history.py
+    --fix-splits`` settles each case by re-fetching the stock, since a real
+    corporate action disappears once Kite's adjusted candles replace the rows.
+    ``confirmed`` is a set of (symbol, date) pairs already checked and known to
+    be real moves; they are not reported.
+    """
+    found = []
+    for moves in daily_changes(rows).values():
+        for move in moves:
+            if move.change_pct > -MIN_SPLIT_DROP_PCT:
+                continue
+            if confirmed and (move.symbol, move.date) in confirmed:
+                continue
+            ratio = move.previous_close / move.close
+            nearest = min(SPLIT_RATIOS, key=lambda candidate: abs(ratio / candidate - 1))
+            if abs(ratio / nearest - 1) <= SPLIT_TOLERANCE:
+                found.append(CorporateAction(move.symbol, move.date, move.previous_close, move.close, nearest))
+    return sorted(found, key=lambda a: (a.date, a.symbol), reverse=True)
+
+
+def drop_suspected_moves(moves: List[Move], actions: List[CorporateAction]) -> List[Move]:
+    """Daily moves without the (symbol, date) pairs that look like a split."""
+    skip = {(a.symbol, a.date) for a in actions}
+    return [m for m in moves if (m.symbol, m.date) not in skip]
+
+
+def drop_suspected_periods(moves: List[PeriodMove], actions: List[CorporateAction]) -> List[PeriodMove]:
+    """Period moves whose window contains a suspected split for that stock."""
+    by_symbol: Dict[str, List[str]] = {}
+    for action in actions:
+        by_symbol.setdefault(action.symbol, []).append(action.date)
+    return [
+        m for m in moves
+        if not any(m.start_date < d <= m.end_date for d in by_symbol.get(m.symbol, []))
+    ]

@@ -1,3 +1,9 @@
+import os as _os
+import sys as _sys
+
+# Repo root on the path, so `market`, `ui` and `utils` import when this file is run directly.
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+
 import os
 import streamlit as st
 import pandas as pd
@@ -19,7 +25,7 @@ except ImportError:
         except Exception:
             pass
 
-from groww_client import GrowwClient, format_inr, format_inr_full
+from groww_api.groww_client import GrowwClient, format_inr, format_inr_full
 
 # ----------------- STREAMLIT CONFIGURATION -----------------
 st.set_page_config(

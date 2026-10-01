@@ -3,7 +3,7 @@ import sys
 import json
 
 # Allow running as `python scripts/test_api.py` from the repo root while still
-# importing groww_client.py, which lives one directory up.
+# importing groww_api/groww_client.py.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
@@ -21,7 +21,7 @@ except ImportError:
         except Exception:
             pass
 
-from groww_client import GrowwClient
+from groww_api.groww_client import GrowwClient
 
 def test_groww_connection():
 
@@ -79,7 +79,7 @@ def test_groww_connection():
     # 3. Holdings test
     print("\n[3/4] Fetching & Decoupling Delivery/CNC Holdings vs MTF Positions...")
     try:
-        from groww_client import format_inr, format_inr_full
+        from groww_api.groww_client import format_inr, format_inr_full
         processed = client.get_processed_portfolio()
         summary = processed["summary"]
         print(f"   Total Actual Cash Deployed  : {format_inr(summary['total_actual_cash_deployed'])} ({format_inr_full(summary['total_actual_cash_deployed'])})")
@@ -108,7 +108,7 @@ def test_groww_connection():
         print(f"   ❌ Error: {e}")
 
     print("\n==================================================")
-    print("Diagnostic complete! Run 'streamlit run app.py' to launch dashboard.")
+    print("Diagnostic complete! Run 'streamlit run apps/app.py' to launch dashboard.")
     print("==================================================")
 
 if __name__ == "__main__":
