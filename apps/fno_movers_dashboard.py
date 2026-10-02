@@ -1,7 +1,7 @@
 """F&O top gainers and losers, day by day - Streamlit entry point.
 
 Two views: the Nifty 50 (all of which trade in F&O) and every NSE F&O stock.
-Past days come from data/fno_daily_closes.csv, written by
+Past days come from the stored daily closes, written by
 scripts/update_fno_history.py. Today, while the market is open, comes from one
 bulk Kite quote for all ~210 stocks.
 
@@ -21,7 +21,6 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import io
 import logging
-import os
 
 import pandas as pd
 import streamlit as st
@@ -34,8 +33,10 @@ except ImportError:  # pragma: no cover
     pass
 
 from market.fno_movers import (
-    CLOSES_PATH,
+    CLOSE_COLUMNS,
     UPDATE_SCRIPT,
+    closes_available,
+    closes_stamp,
     daily_changes,
     drop_suspected_moves,
     drop_suspected_periods,
@@ -57,6 +58,7 @@ from market.market_hours import (
 )
 from market.providers.base import InstrumentRef
 from market.universe import get_universe
+from ui.shading import shade_change
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +69,9 @@ LIVE_TTL_SECONDS = 30
 
 
 @st.cache_data(ttl="10m", show_spinner=False)
-def load_history(path: str, mtime: float):
-    """Stored closes + per-day moves. ``mtime`` busts the cache when the file changes."""
-    rows = load_closes(path)
+def load_history(stamp: float):
+    """Stored closes + per-day moves. ``stamp`` busts the cache when the database changes."""
+    rows = load_closes()
     return rows, daily_changes(rows), suspected_corporate_actions(rows, load_confirmed_moves())
 
 
@@ -113,26 +115,6 @@ COLUMNS = {
     "Close": st.column_config.NumberColumn(format="%.2f"),
     "Prev close": st.column_config.NumberColumn(format="%.2f"),
 }
-
-# (lightest, darkest) RGB for the smallest and largest move in a table.
-GREEN_SHADES = ((198, 239, 206), (0, 110, 40))
-RED_SHADES = ((255, 205, 205), (170, 10, 10))
-
-
-def shade_change(column: pd.Series) -> list:
-    """Green for gains, red for losses; the largest move in the table is darkest."""
-    biggest = column.abs().max()
-    styles = []
-    for value in column:
-        if not value or not biggest:
-            styles.append("")
-            continue
-        light, dark = GREEN_SHADES if value > 0 else RED_SHADES
-        weight = abs(value) / biggest
-        r, g, b = (round(lo + (hi - lo) * weight) for lo, hi in zip(light, dark))
-        text = "#ffffff" if weight > 0.45 else "#1a1a1a"
-        styles.append(f"background-color: rgb({r},{g},{b}); color: {text}; font-weight: 600")
-    return styles
 
 
 def styled_movers(moves):
@@ -267,8 +249,8 @@ def main(view: str = VIEW_ALL) -> None:
     if not universe.is_usable:
         st.error(universe.error, icon=":material/error:")
         st.stop()
-    if not os.path.exists(CLOSES_PATH):
-        st.error(f"No close history at {CLOSES_PATH}. Run 'python {UPDATE_SCRIPT}'.", icon=":material/error:")
+    if not closes_available():
+        st.error(f"No close history stored. Run 'python {UPDATE_SCRIPT}'.", icon=":material/error:")
         st.stop()
 
     with st.sidebar:
@@ -276,7 +258,7 @@ def main(view: str = VIEW_ALL) -> None:
             days_to_show = st.segmented_control("Days", [1, 3, 5, 7], default=3, required=True)
         else:
             period = st.segmented_control("Period", list(PERIODS), default="5D", required=True,
-                                          help="Trading days in the file, so weekends and holidays are skipped.")
+                                          help="Trading days stored, so weekends and holidays are skipped.")
         limit = st.segmented_control("Rows per table", [5, 10, 15, 20], default=10, required=True)
         hide_suspected = st.toggle("Hide suspected splits/bonuses", value=True,
                                    help="Leave stocks whose close fell by a split-like ratio out of the rankings.")
@@ -285,7 +267,7 @@ def main(view: str = VIEW_ALL) -> None:
         if st.button("Refresh live prices", icon=":material/refresh:"):
             live_quotes.clear()
 
-    rows, stored_moves, actions = load_history(CLOSES_PATH, os.path.getmtime(CLOSES_PATH))
+    rows, stored_moves, actions = load_history(closes_stamp())
     moves_by_day = dict(stored_moves)
     today = now_ist().date().isoformat()
     state = session_state()
@@ -312,7 +294,7 @@ def main(view: str = VIEW_ALL) -> None:
         st.metric("Last stored day", stored_days[-1] if stored_days else "-", border=True)
     st.caption(
         "Data source: Kite. Past days come from the stored closes "
-        f"({CLOSES_PATH}, written by {UPDATE_SCRIPT} from Kite's daily candles); "
+        f"(data/market.db, written by {UPDATE_SCRIPT} from Kite's daily candles); "
         "today comes from one Kite quote. This page does not use the sidebar "
         "data-provider setting of the heatmap pages."
     )
@@ -349,9 +331,11 @@ def main(view: str = VIEW_ALL) -> None:
         ).to_csv(export, index=False)
         st.download_button("Download shown days (CSV)", export.getvalue(), "fno_movers.csv",
                            mime="text/csv", icon=":material/download:")
-        with open(CLOSES_PATH, "rb") as handle:
-            st.download_button("Download full close history", handle.read(), "fno_daily_closes.csv",
-                               mime="text/csv", icon=":material/table:")
+        history = io.StringIO()
+        pd.DataFrame(list(rows.values()), columns=list(CLOSE_COLUMNS)).sort_values(["date", "symbol"]).to_csv(
+            history, index=False)
+        st.download_button("Download full close history", history.getvalue(), "fno_daily_closes.csv",
+                           mime="text/csv", icon=":material/table:")
 
 
 def page_nifty50() -> None:

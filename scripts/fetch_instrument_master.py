@@ -1,4 +1,4 @@
-"""Generate the broker instrument-id file the dashboard reads at startup.
+"""Generate the broker instrument ids the dashboard reads at startup (stored in the database).
 
 Run this **manually** - monthly, or whenever a symbol stops resolving. The
 dashboard never downloads an instrument master itself.
@@ -29,11 +29,11 @@ When to re-run
 - After an NSE index reconstitution.
 - After editing ``market/sector_mapping.py`` or adding a universe.
 - When the dashboard's "Data gaps" panel reports unresolved symbols, or the
-  logs say a symbol is missing from the instruments file.
+  logs say a symbol is missing from the stored instrument ids.
 
 Output
 ------
-``data/dhan_instruments.json`` - a plain ``segment -> symbol -> fields`` map,
+the ``dhan_instruments`` set in ``data/market.db`` - a plain ``segment -> symbol -> fields`` map,
 small enough to read and to diff in a commit, so a reconstitution shows up as a
 handful of changed lines. Loaded by ``market/instruments.py``.
 
@@ -44,7 +44,6 @@ is a public file, so it needs no broker credentials at all.
 import argparse
 import csv
 import io
-import json
 import logging
 import os
 import sys
@@ -56,7 +55,8 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from market.instruments import DEFAULT_INSTRUMENTS_PATH  # noqa: E402
+from market import reference_store, state_store  # noqa: E402
+from market.instruments import DHAN_SET  # noqa: E402
 from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX  # noqa: E402
 from market.universe import UNIVERSES, get_universe  # noqa: E402
 
@@ -206,9 +206,7 @@ def build_payload(instruments, missing, universes: Iterable[str]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--out", default=DEFAULT_INSTRUMENTS_PATH, help="Output JSON path"
-    )
+    parser.add_argument("--db", default=None, help="Database file (default: the shared data/market.db)")
     parser.add_argument("--verbose", action="store_true", help="Log every symbol")
     parser.add_argument(
         "--keep-raw",
@@ -239,10 +237,10 @@ def main() -> int:
         logger.error("FAILED to fetch the instrument master: %s", exc)
         logger.error(
             "The file is public, so this is a network problem rather than a "
-            "credentials one. %s can also be filled in by hand: it is a plain "
+            "credentials one. The %s set can also be filled in by hand: it is a plain "
             "symbol -> security_id map and the ids are visible in Dhan's own "
             "instrument list.",
-            args.out,
+            DHAN_SET,
         )
         return 1
 
@@ -260,14 +258,8 @@ def main() -> int:
         )
 
     payload = build_payload(instruments, missing, universes)
-    directory = os.path.dirname(os.path.abspath(args.out))
-    os.makedirs(directory, exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-
-    size_kb = os.path.getsize(args.out) / 1024
-    logger.info("Wrote %s (%.1f KB, %d instruments)", args.out, size_kb, resolved)
+    reference_store.save_document(DHAN_SET, payload, nested=("instruments",), path=args.db)
+    logger.info("Stored %d instruments as %s in %s", resolved, DHAN_SET, args.db or state_store.db_path())
     if missing:
         logger.warning(
             "Some symbols did not resolve. Check them against NSE - a renamed "

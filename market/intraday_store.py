@@ -12,6 +12,10 @@ rows. A CSV that size has to be read whole to answer "RELIANCE on 12 Sep";
 SQLite answers it from the primary key and upserts a re-fetched window
 without rewriting the file.
 
+This module owns the file and the connection. Other features keep their own tables in the same
+file by handing their schema to ``connect(extra_schema=...)``, and read it through
+``connect_readonly()``: see ``market/dhan_movers_store.py`` (the Dhan gainers/losers history).
+
 Timestamps are IST wall-clock text, ``YYYY-MM-DD HH:MM`` for bars and
 ``YYYY-MM-DD`` for days, so they sort, compare and ``LIKE``-filter as text.
 A bar is stamped with the minute it *starts* (Kite's convention).
@@ -74,14 +78,45 @@ MinuteRow = Tuple[str, str, float, float, float, float, int, Optional[int]]
 DailyRow = Tuple[str, str, float, float, float, float, int]
 
 
-def connect(path: str = DB_PATH) -> sqlite3.Connection:
-    """Open (creating if needed) the store with its schema in place."""
+def connect(path: str = DB_PATH, extra_schema: str = "", timeout: float = 5.0) -> sqlite3.Connection:
+    """Open (creating if needed) the store with its schema in place.
+
+    ``extra_schema`` is another feature's ``CREATE ... IF NOT EXISTS`` script, applied to the same
+    file so one database holds every history. ``timeout`` is how long to wait for another process
+    holding the database, including while the file is first being created.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.executescript(SCHEMA)
+    conn = sqlite3.connect(path, timeout=timeout)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.executescript(SCHEMA)
+        if extra_schema:
+            conn.executescript(extra_schema)
+    except BaseException:
+        conn.close()  # a half-opened handle would keep the file locked (Windows will not delete it)
+        raise
     return conn
+
+
+def store_stamp(path: str = DB_PATH) -> float:
+    """When the database last changed, as a number that rises with every write.
+
+    A cache key: a dashboard passes it to its cached loaders, so a fresh run of a script shows up on
+    the next rerun. It includes the write-ahead log, which is where a write lands first.
+    """
+    return max((os.path.getmtime(p) for p in (path, path + "-wal") if os.path.exists(p)), default=0.0)
+
+
+def connect_readonly(path: str = DB_PATH) -> Optional[sqlite3.Connection]:
+    """A read-only handle on an existing store, or None if there is no file yet.
+
+    Never creates or writes the database, so a dashboard can open it while a script is filling it
+    (the store runs in WAL mode, so readers and the writer do not block each other).
+    """
+    if not os.path.exists(path):
+        return None
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 
 
 def _ist_text(stamp: str, minutes: bool) -> Optional[str]:

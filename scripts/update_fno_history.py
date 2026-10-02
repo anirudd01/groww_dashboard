@@ -16,9 +16,10 @@ and a 1-year backfill both cost ~210 requests - about 75 s at Kite's 3 req/s.
 That per-stock cost is the whole reason to store the history: afterwards the
 dashboard needs no API call for past days, and one bulk quote for today.
 
-Writes (both git-friendly, both only ever written here):
-  data/fno_universe.json      F&O stocks + Kite instrument tokens (from public dumps)
-  data/fno_daily_closes.csv   date,symbol,open,high,low,close,volume
+Writes to the shared database data/market.db (both only ever written here):
+  fno_universe set     F&O stocks + Kite instrument tokens (from public dumps)
+  daily_bars table     symbol, date, open, high, low, close, volume (the table the 1-minute
+                       backfill fills too, so there is one daily history)
 
 Today's candle is stored only after 16:00 IST; before that its "close" is just
 the live price. Every run re-fetches from each stock's last stored day, so a
@@ -40,8 +41,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from market.fno_movers import (  # noqa: E402
-    CLOSES_PATH,
-    UNIVERSE_PATH,
+    UNIVERSE_SET,
     build_universe,
     candle_rows,
     load_closes,
@@ -94,8 +94,6 @@ def main() -> int:
                              "split-like fall, then report which were corporate actions (the jump disappears "
                              "once Kite's adjusted candles replace the rows) and which were real moves")
     parser.add_argument("--symbols", help="Comma-separated subset (default: every F&O stock)")
-    parser.add_argument("--closes", default=CLOSES_PATH)
-    parser.add_argument("--universe", default=UNIVERSE_PATH)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger("market").setLevel(logging.WARNING)
@@ -116,11 +114,11 @@ def main() -> int:
         logger.error("Could not download the instrument lists: %s", exc)
         return 1
     if not tokens:
-        logger.error("No F&O stocks found - refusing to overwrite %s", args.universe)
+        logger.error("No F&O stocks found - refusing to overwrite the stored %s", UNIVERSE_SET)
         return 1
-    save_universe(tokens, unmatched, args.universe)
+    save_universe(tokens, unmatched)
     logger.info("  %d F&O stocks -> %s (%d index futures skipped: %s)",
-                len(tokens), args.universe, len(unmatched), ", ".join(unmatched))
+                len(tokens), UNIVERSE_SET, len(unmatched), ", ".join(unmatched))
 
     if args.symbols:
         wanted = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -144,12 +142,12 @@ def main() -> int:
     settled = (now.hour, now.minute) >= SETTLED_AFTER
     exclude = None if settled else today.isoformat()
 
-    rows = load_closes(args.closes)
+    rows = load_closes()
     suspects = []
     if args.fix_splits:
         suspects = suspected_corporate_actions(rows, load_confirmed_moves())
         if not suspects:
-            logger.info("No suspected splits or bonuses in %s - nothing to re-fetch.", args.closes)
+            logger.info("No suspected splits or bonuses in the stored closes - nothing to re-fetch.")
             return 0
         names = sorted({a.symbol for a in suspects})
         logger.info("Suspected: %s. Re-fetching those stocks over the whole stored range.",
@@ -178,7 +176,7 @@ def main() -> int:
         if i % 50 == 0:
             logger.info("  %d/%d", i, len(tokens))
 
-    save_closes(rows, args.closes)
+    save_closes(rows)
     if args.fix_splits:
         still = {(a.symbol, a.date) for a in suspected_corporate_actions(rows, load_confirmed_moves())}
         for action in suspects:
@@ -188,9 +186,9 @@ def main() -> int:
             logger.info("  %s %s: %s", action.symbol, action.date, outcome)
     days = sorted({d for d, _ in rows})
     logger.info(
-        "Done in %.0f s: %d rows added/updated, %d stocks x %d days in %s (%s .. %s)",
+        "Done in %.0f s: %d rows added/updated, %d stocks x %d days in data/market.db (%s .. %s)",
         time.monotonic() - started, changed, len({s for _, s in rows}), len(days),
-        args.closes, days[0] if days else "-", days[-1] if days else "-",
+        days[0] if days else "-", days[-1] if days else "-",
     )
     if not settled:
         logger.info("Today's candle was left out (before %02d:%02d IST it is only the live price).", *SETTLED_AFTER)

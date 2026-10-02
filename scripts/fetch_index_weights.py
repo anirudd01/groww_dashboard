@@ -1,4 +1,4 @@
-"""Generate the constituent weights file used for market-cap sector weighting.
+"""Generate the constituent weights used for market-cap sector weighting (stored in the database).
 
 Run this **manually**, weekly or monthly - never from the dashboard. Share
 counts move slowly, so weights that are a few weeks old are a rounding error,
@@ -6,7 +6,7 @@ whereas a live fundamentals lookup during market hours would add a network
 dependency that can fail or stall exactly when the dashboard is being used.
 
     python scripts/fetch_index_weights.py
-    python scripts/fetch_index_weights.py --out data/index_weights.json --verbose
+    python scripts/fetch_index_weights.py --verbose
 
 Source
 ------
@@ -42,7 +42,8 @@ from typing import Dict, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from market.sector_mapping import NIFTY_50_SECTORS  # noqa: E402
-from market.weights import DEFAULT_WEIGHTS_PATH  # noqa: E402
+from market import reference_store, state_store  # noqa: E402
+from market.weights import WEIGHTS_SET  # noqa: E402
 
 logger = logging.getLogger("fetch_index_weights")
 
@@ -202,7 +203,7 @@ def build_payload(symbols, verbose: bool = False) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=DEFAULT_WEIGHTS_PATH, help="Output JSON path")
+    parser.add_argument("--db", default=None, help="Database file (default: the shared data/market.db)")
     parser.add_argument("--verbose", action="store_true", help="Log every symbol")
     parser.add_argument(
         "--symbol", action="append", help="Fetch only these symbols (repeatable)"
@@ -222,10 +223,10 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - a CLI should explain, not traceback
         logger.error("FAILED: %s", exc)
         logger.error(
-            "If Yahoo is unreachable or has changed, fill in %s by hand from "
+            "If Yahoo is unreachable or has changed, fill in the %s set by hand from "
             "NSE's published index factsheet - the format is documented in "
             "market/weights.py.",
-            args.out,
+            WEIGHTS_SET,
         )
         return 1
 
@@ -233,14 +234,10 @@ def main() -> int:
         logger.error("No weights were retrieved; refusing to write an empty file.")
         return 1
 
-    directory = os.path.dirname(os.path.abspath(args.out))
-    os.makedirs(directory, exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    reference_store.save_document(WEIGHTS_SET, payload, sections=("weights",), path=args.db)
 
     logger.info("")
-    logger.info("Wrote %s", args.out)
+    logger.info("Stored %s in %s", WEIGHTS_SET, args.db or state_store.db_path())
     logger.info("  %d of %d symbols have weights", len(payload["weights"]), len(symbols))
     if payload["failures"]:
         logger.warning(

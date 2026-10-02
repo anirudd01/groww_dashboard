@@ -8,12 +8,11 @@ No credentials are read or stored here.
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Optional, Tuple
 
 from market.providers.registry import DEFAULT_PROVIDER_ORDER
 from market.sector_aggregation import EQUAL_WEIGHT, MARKET_CAP
 from market.universe import DEFAULT_UNIVERSE_KEY
-from market.weights import DEFAULT_WEIGHTS_PATH
 
 # Sector tile ordering strategies (see docs/SECTOR_HEATMAP.md).
 ORDER_BY_PERFORMANCE = "performance"
@@ -75,11 +74,12 @@ class HeatmapConfig:
     # --- aggregation ----------------------------------------------------
     # How a sector's percentage change is computed from its constituents.
     # "equal_weight" (default) treats every stock alike; "market_cap" weights
-    # by the figures in the weights file below. Both are selectable in the UI.
+    # by the stored weights below. Both are selectable in the UI.
     aggregation_method: str = EQUAL_WEIGHT
-    # Weights are read from this file at startup and never fetched live.
-    # Generate it with scripts/fetch_index_weights.py.
-    weights_path: str = DEFAULT_WEIGHTS_PATH
+    # Weights are read from the database at startup and never fetched live.
+    # Generate them with scripts/fetch_index_weights.py. None is the shared
+    # data/market.db; a path points at another database (PULSE_STATE_DB does too).
+    weights_path: Optional[str] = None
 
     # --- UI -------------------------------------------------------------
     ui_refresh_seconds: float = 1.0
@@ -158,8 +158,7 @@ class HeatmapConfig:
             aggregation_method=_env_choice(
                 "PULSE_HEATMAP_AGGREGATION", EQUAL_WEIGHT, (EQUAL_WEIGHT, MARKET_CAP)
             ),
-            weights_path=os.getenv("PULSE_HEATMAP_WEIGHTS_FILE", "")
-            or DEFAULT_WEIGHTS_PATH,
+            weights_path=os.getenv("PULSE_HEATMAP_WEIGHTS_DB", "") or None,
             show_highlight_tables=_env_bool("PULSE_HEATMAP_HIGHLIGHT_TABLES", True),
             highlight_table_limit=max(0, _env_int("PULSE_HEATMAP_HIGHLIGHT_LIMIT", 0)),
             min_colour_scale_pct=_env_float("PULSE_HEATMAP_MIN_COLOUR_SCALE_PCT", 0.75),

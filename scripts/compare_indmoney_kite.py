@@ -27,6 +27,7 @@ try:
     load_dotenv(os.path.join(ROOT, ".env"), override=True)
 except ImportError:
     pass
+from market.fno_movers import load_universe  # noqa: E402
 from market.providers.indmoney import IndMoneyProvider  # noqa: E402
 from market.providers.kite import KiteProvider  # noqa: E402
 
@@ -37,7 +38,7 @@ _kite.connect()
 _ind.connect()
 KH, IH = _kite.auth_headers(), _ind.auth_headers()
 KB, IB = "https://api.kite.trade", "https://api.indstocks.com"
-universe = json.load(open(os.path.join(ROOT, "data", "fno_universe.json")))["tokens"]   # symbol -> kite instrument_token
+universe = load_universe().tokens   # symbol -> kite instrument_token
 SYMS = sorted(universe)
 R = {"run_started_ist": datetime.now(IST).isoformat(timespec="seconds"), "universe": len(SYMS)}
 print("universe:", len(SYMS))

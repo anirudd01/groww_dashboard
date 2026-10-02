@@ -1,59 +1,59 @@
 """Broker instrument ids for the tracked universes.
 
-Ids are **read from a local JSON file, never fetched at runtime.** Dhan
+Ids are **read from the local database, never fetched at runtime.** Dhan
 publishes them only as a 35 MB CSV, served uncompressed, containing every F&O
 contract on every exchange - 206,659 rows, of which this dashboard uses about
 sixty. Downloading that on every boot cost 15-40 s for data that changes at
 most once a day, and in practice changes meaningfully only when NSE
 reconstitutes an index.
 
-The file is produced offline by ``scripts/fetch_instrument_master.py`` and is
-meant to be regenerated manually - monthly, or whenever a symbol stops
-resolving. It is small enough to read at a glance and to diff in a commit, so a
-reconstitution shows up as a handful of changed lines.
+They are produced offline by ``scripts/fetch_instrument_master.py`` (and the
+INDmoney and Kite equivalents) and stored in the shared SQLite database by
+``market/reference_store.py``. The script is meant to be run manually - monthly,
+or whenever a symbol stops resolving.
 
-Same contract as ``market/weights.py``: generated offline, committed, loaded at
+Same contract as ``market/weights.py``: generated offline, stored, loaded at
 startup, never fetched live.
 
 What is *not* in here
 ---------------------
 Sector membership. That lives in ``market/sector_mapping.py`` and is the
-editable source of truth for which symbols the dashboard tracks. This file only
+editable source of truth for which symbols the dashboard tracks. This only
 answers "what number does the broker call RELIANCE".
 
-If the file is missing or a symbol is absent from it, resolution fails loudly
-and names the script to run. There is no fallback download: a dashboard that
-silently pulls 35 MB during market hours is exactly what this replaces, and an
-id that cannot be verified must never be guessed.
+If the ids are missing or a symbol is absent, resolution fails loudly and names
+the script to run. There is no fallback download: a dashboard that silently
+pulls 35 MB during market hours is exactly what this replaces, and an id that
+cannot be verified must never be guessed.
 """
 
-import json
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+from market import reference_store, state_store
+
 logger = logging.getLogger(__name__)
 
-#: Default location, relative to the repository root. One file per broker,
-#: because a security id is only meaningful to the broker that issued it.
-DEFAULT_INSTRUMENTS_PATH = os.path.join("data", "dhan_instruments.json")
+#: The stored set for each broker, because a security id is only meaningful to the broker that
+#: issued it.
+DHAN_SET = "dhan_instruments"
 #: INDmoney (INDstocks) ids. Cash-equity ids happen to equal Dhan's - both are
 #: the NSE token - but index ids are INDmoney's own (``40000001`` for Nifty 50
-#: where Dhan says ``13``), so the two files are never interchangeable.
-INDMONEY_INSTRUMENTS_PATH = os.path.join("data", "indmoney_instruments.json")
+#: where Dhan says ``13``), so the two sets are never interchangeable.
+INDMONEY_SET = "indmoney_instruments"
 #: Zerodha Kite ids. ``security_id`` is Kite's own ``instrument_token``
 #: (``738561`` for RELIANCE, not the NSE token ``2885``), and each row also
 #: carries the ``tradingsymbol`` Kite's REST quotes are keyed by.
-KITE_INSTRUMENTS_PATH = os.path.join("data", "kite_instruments.json")
+KITE_SET = "kite_instruments"
 
-#: The script that regenerates each broker's file.
+#: The script that regenerates each broker's set.
 DHAN_SCRIPT = "scripts/fetch_instrument_master.py"
 INDMONEY_SCRIPT = "scripts/fetch_indmoney_instruments.py"
 KITE_SCRIPT = "scripts/fetch_kite_instruments.py"
 
-#: Beyond this the loader warns that the file is getting old. Not an error:
+#: Beyond this the loader warns that the ids are getting old. Not an error:
 #: security ids of existing instruments are stable, and NSE reconstitutes the
 #: Nifty indices twice a year (end of March and end of September) plus ad-hoc
 #: changes for mergers and demergers. 90 days therefore spans one scheduled
@@ -71,8 +71,9 @@ class InstrumentSet:
     source: str = ""
     provider: str = ""
     universes: tuple = ()
+    #: Where they came from, for messages: ``dhan_instruments in data/market.db``.
     path: str = ""
-    #: Populated when the file could not be loaded. Shown verbatim rather than
+    #: Populated when the ids could not be loaded. Shown verbatim rather than
     #: degrading into a live download.
     error: str = ""
 
@@ -134,44 +135,38 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(value)
     except (TypeError, ValueError):
-        logger.warning("Instruments file has an unparseable generated_at: %r", value)
+        logger.warning("Instrument ids have an unparseable generated_at: %r", value)
         return None
 
 
 def load_instruments(
-    path: Optional[str] = None, script: str = DHAN_SCRIPT
+    name: str = DHAN_SET, script: str = DHAN_SCRIPT, path: Optional[str] = None
 ) -> InstrumentSet:
-    """Read the instruments file. Never raises - callers check ``is_usable``.
+    """Read a broker's stored instrument ids. Never raises - callers check ``is_usable``.
 
-    A malformed segment or row is dropped with a log line rather than failing
-    the whole file, so one bad entry costs one symbol. ``script`` only changes
-    which generator the error messages point at.
+    ``name`` is the set (``DHAN_SET``, ``INDMONEY_SET`` or ``KITE_SET``) and ``script`` only
+    changes which generator the error messages point at. ``path`` is a database file, for tests;
+    the default is the shared one. A malformed segment or row is dropped with a log line rather
+    than failing the whole set, so one bad entry costs one symbol.
     """
-    path = path or os.getenv("PULSE_INSTRUMENTS_FILE") or DEFAULT_INSTRUMENTS_PATH
+    database = path or state_store.db_path()
+    label = f"{name} in {database}"
+    payload = reference_store.load_document(name, database)
 
-    if not os.path.exists(path):
+    if payload is None:
         return InstrumentSet(
-            path=path,
-            error=f"No instruments file at {path}. {regenerate_hint(path, script)}",
+            path=label,
+            error=f"No instrument ids stored ({label}). {regenerate_hint(label, script)}",
         )
-
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        return InstrumentSet(path=path, error=f"Could not read {path}: {exc}")
-
-    if not isinstance(payload, dict):
-        return InstrumentSet(path=path, error=f"{path} is not a JSON object")
 
     raw = payload.get("instruments")
     if not isinstance(raw, dict):
-        return InstrumentSet(path=path, error=f"{path} has no 'instruments' object")
+        return InstrumentSet(path=label, error=f"{label} has no 'instruments' section")
 
     instruments: Dict[str, Dict[str, dict]] = {}
     for segment, rows in raw.items():
         if not isinstance(rows, dict):
-            logger.warning("Ignoring non-object segment %r in %s", segment, path)
+            logger.warning("Ignoring non-object segment %r in %s", segment, label)
             continue
         cleaned = {
             symbol: fields
@@ -183,14 +178,14 @@ def load_instruments(
             logger.warning(
                 "Ignored %d entry/entries with no security_id in %s (%s)",
                 dropped,
-                path,
+                label,
                 segment,
             )
         instruments[str(segment).upper()] = cleaned
 
     if not any(instruments.values()):
         return InstrumentSet(
-            path=path, error=f"{path} contained no usable instrument ids"
+            path=label, error=f"{label} contained no usable instrument ids"
         )
 
     loaded = InstrumentSet(
@@ -199,14 +194,14 @@ def load_instruments(
         source=str(payload.get("source", "")),
         provider=str(payload.get("provider", "")),
         universes=tuple(payload.get("universes") or ()),
-        path=path,
+        path=label,
     )
     if loaded.is_stale:
         logger.warning(
             "%s was generated %.0f days ago - NSE reconstitutes the Nifty "
             "indices twice a year, so it is worth regenerating. %s",
-            path,
+            label,
             loaded.age_days or 0,
-            regenerate_hint(path, script),
+            regenerate_hint(label, script),
         )
     return loaded

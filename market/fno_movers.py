@@ -2,21 +2,24 @@
 
 Every broker answers "what did this stock close at on each day" only one
 instrument per request, while "what is it at right now" is one bulk request for
-up to 1000 instruments. So the daily closes are kept in a local file, built up
-by ``scripts/update_fno_history.py``, and the dashboard reads it:
+up to 1000 instruments. So the daily closes are kept locally, built up by
+``scripts/update_fno_history.py``, and the dashboard reads them:
 
-* past days come from the file - no API call at all;
+* past days come from the database - no API call at all;
 * today, while the market is open, is one bulk quote on top.
 
-Two files in ``data/``, both written only by that script:
+Everything lives in the shared database ``data/market.db`` (``market/intraday_store.py``):
 
-``fno_universe.json``
-    The stocks with NSE futures (from Kite's public NFO dump), each with its
-    Kite ``instrument_token``. Changes when NSE adds or removes F&O stocks.
-``fno_daily_closes.csv``
-    Long format, one row per (date, symbol): ``date,symbol,open,high,low,
-    close,volume``. Plain comma CSV so it opens in Excel with a double-click
-    and diffs line by line in git. A year of ~210 stocks is ~2.5 MB.
+the ``daily_bars`` table
+    One row per (symbol, date): open, high, low, close, volume, from Kite's daily candles. The
+    1-minute backfill (``scripts/backfill_intraday.py``) fills the same table, so there is one
+    daily history, not two. ``load_closes`` hands it back as ``{(date, symbol): row}``.
+the ``fno_universe`` set (``market/reference_store.py``)
+    The stocks with NSE futures (from Kite's public NFO dump), each with its Kite
+    ``instrument_token``. Changes when NSE adds or removes F&O stocks.
+the ``fno_confirmed_moves`` set (``market/reference_store.py``)
+    Falls someone checked and confirmed as real, so they are not flagged as splits. Kept with
+    ``scripts/confirm_fno_move.py``.
 
 A day's move is that day's close against the **previous stored close for the
 same symbol**. That is only right if no trading day is missing in between, so
@@ -29,20 +32,22 @@ Nothing here talks to a broker; it is pure data handling and fully testable.
 
 import csv
 import io
-import json
 import logging
-import os
+import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
+
+from market import intraday_store, reference_store, state_store
 
 logger = logging.getLogger(__name__)
 
-UNIVERSE_PATH = os.path.join("data", "fno_universe.json")
-CLOSES_PATH = os.path.join("data", "fno_daily_closes.csv")
-#: Falls that look like a split but were checked and are real moves: {"SYMBOL": {"YYYY-MM-DD": "why"}}.
-#: Hand-edited; nothing writes it.
-CONFIRMED_MOVES_PATH = os.path.join("data", "fno_confirmed_moves.json")
+#: The stored set holding the F&O stocks and their Kite tokens (``market/reference_store.py``).
+UNIVERSE_SET = "fno_universe"
+#: Falls that look like a split but were checked and are real moves, as the stored set
+#: ``{"moves": {"SYMBOL": {"YYYY-MM-DD": "why"}}}``. Kept with ``scripts/confirm_fno_move.py``.
+CONFIRMED_SET = "fno_confirmed_moves"
+CONFIRM_SCRIPT = "scripts/confirm_fno_move.py"
 UPDATE_SCRIPT = "scripts/update_fno_history.py"
 
 CLOSE_COLUMNS = ("date", "symbol", "open", "high", "low", "close", "volume")
@@ -109,7 +114,8 @@ def build_universe(nfo_csv: str, nse_csv: str) -> Tuple[Dict[str, str], List[str
     return tokens, unmatched
 
 
-def save_universe(tokens: Dict[str, str], unmatched: List[str], path: str = UNIVERSE_PATH) -> None:
+def save_universe(tokens: Dict[str, str], unmatched: List[str], path: Optional[str] = None) -> None:
+    """Store the F&O stocks, replacing the earlier list. ``path`` is a database file, for tests."""
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "https://api.kite.trade/instruments/NFO + /instruments/NSE",
@@ -121,38 +127,28 @@ def save_universe(tokens: Dict[str, str], unmatched: List[str], path: str = UNIV
         "unmatched": unmatched,
         "tokens": dict(sorted(tokens.items())),
     }
-    _atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    reference_store.save_document(UNIVERSE_SET, payload, sections=("tokens",), path=path)
 
 
-def load_universe(path: str = UNIVERSE_PATH) -> FnoUniverse:
-    """Never raises - check ``is_usable`` and show ``error``."""
-    if not os.path.exists(path):
-        return FnoUniverse(path=path, error=f"No F&O universe at {path}. Run 'python {UPDATE_SCRIPT}'.")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            raw = json.load(handle)
-        tokens = {str(k): str(v) for k, v in (raw.get("tokens") or {}).items() if v}
-    except (OSError, ValueError, AttributeError) as exc:
-        return FnoUniverse(path=path, error=f"Could not read {path}: {exc}")
+def load_universe(path: Optional[str] = None) -> FnoUniverse:
+    """Never raises - check ``is_usable`` and show ``error``. ``path`` is a database file, for tests."""
+    database = path or state_store.db_path()
+    label = f"{UNIVERSE_SET} in {database}"
+    raw = reference_store.load_document(UNIVERSE_SET, database)
+    if raw is None:
+        return FnoUniverse(path=label, error=f"No F&O universe stored ({label}). Run 'python {UPDATE_SCRIPT}'.")
+    tokens = {str(k): str(v) for k, v in (raw.get("tokens") or {}).items() if v}
     generated = None
     try:
         generated = datetime.fromisoformat(raw.get("generated_at") or "")
     except (TypeError, ValueError):
         pass
     if not tokens:
-        return FnoUniverse(path=path, error=f"{path} lists no F&O stocks. Run 'python {UPDATE_SCRIPT}'.")
-    return FnoUniverse(tokens=tokens, generated_at=generated, path=path)
+        return FnoUniverse(path=label, error=f"{label} lists no F&O stocks. Run 'python {UPDATE_SCRIPT}'.")
+    return FnoUniverse(tokens=tokens, generated_at=generated, path=label)
 
 
 # -- close history -----------------------------------------------------------
-
-
-def _atomic_write(path: str, text: str) -> None:
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    temp = f"{path}.tmp"
-    with open(temp, "w", encoding="utf-8", newline="") as handle:
-        handle.write(text)
-    os.replace(temp, path)
 
 
 def _number(value) -> Optional[float]:
@@ -163,39 +159,88 @@ def _number(value) -> Optional[float]:
     return number if number > 0 else None
 
 
-def load_closes(path: str = CLOSES_PATH) -> Dict[Tuple[str, str], dict]:
-    """``{(date, symbol): row}``. Missing file -> empty. Bad rows are skipped."""
+def closes_available(path: Optional[str] = None) -> bool:
+    """Whether any daily history is stored. Does not create the database."""
+    conn = intraday_store.connect_readonly(path or state_store.db_path())
+    if conn is None:
+        return False
+    try:
+        return conn.execute("SELECT 1 FROM daily_bars LIMIT 1").fetchone() is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def closes_stamp(path: Optional[str] = None) -> float:
+    """Changes when the database does: the cache key for a loader of the closes."""
+    return intraday_store.store_stamp(path or state_store.db_path())
+
+
+def load_closes(path: Optional[str] = None) -> Dict[Tuple[str, str], dict]:
+    """``{(date, symbol): row}`` of every stored daily bar. No database -> empty.
+
+    A row is ``{date, symbol, open, high, low, close, volume}`` with every value as text, the shape the
+    callers have always had. ``path`` is a database file, for tests; the default is the shared one.
+    """
     rows: Dict[Tuple[str, str], dict] = {}
-    if not os.path.exists(path):
+    conn = intraday_store.connect_readonly(path or state_store.db_path())
+    if conn is None:
         return rows
-    with open(path, encoding="utf-8", newline="") as handle:
-        for row in csv.DictReader(handle):
-            day, symbol = (row.get("date") or "").strip(), (row.get("symbol") or "").strip()
-            if day and symbol and _number(row.get("close")):
-                rows[(day, symbol)] = {k: row.get(k, "") for k in CLOSE_COLUMNS}
+    try:
+        for day, symbol, *figures in conn.execute(
+                "SELECT date, symbol, open, high, low, close, volume FROM daily_bars ORDER BY date, symbol"):
+            if day and symbol and _number(figures[3]):
+                rows[(day, symbol)] = {"date": day, "symbol": symbol,
+                                       **{name: str(value) for name, value in zip(CLOSE_COLUMNS[2:], figures)}}
+    except sqlite3.Error as exc:
+        logger.warning("Could not read the stored closes: %s", exc)
+        return {}
+    finally:
+        conn.close()
     return rows
 
 
+def _same_figure(a: str, b: str) -> bool:
+    """Two stored figures are the same number, however they were written (``2910`` and ``2910.0``)."""
+    try:
+        return abs(float(a) - float(b)) <= 1e-9 * max(1.0, abs(float(b)))
+    except (TypeError, ValueError):
+        return a == b
+
+
 def upsert_closes(existing: Dict[Tuple[str, str], dict], new_rows: Iterable[dict]) -> int:
-    """Add or replace rows keyed by (date, symbol). Returns how many changed."""
+    """Add or replace rows keyed by (date, symbol), in memory. Returns how many changed."""
     changed = 0
     for row in new_rows:
         key = (str(row["date"]), str(row["symbol"]))
         clean = {k: ("" if row.get(k) is None else str(row.get(k))) for k in CLOSE_COLUMNS}
-        if existing.get(key) != clean:
+        before = existing.get(key)
+        if before is None or not all(_same_figure(before.get(k, ""), clean[k]) for k in CLOSE_COLUMNS):
             existing[key] = clean
             changed += 1
     return changed
 
 
-def save_closes(rows: Dict[Tuple[str, str], dict], path: str = CLOSES_PATH) -> None:
-    """Rewrite the file sorted by date then symbol - stable, diff-friendly."""
-    out = io.StringIO()
-    writer = csv.DictWriter(out, fieldnames=CLOSE_COLUMNS, lineterminator="\n")
-    writer.writeheader()
-    for key in sorted(rows):
-        writer.writerow(rows[key])
-    _atomic_write(path, out.getvalue())
+def save_closes(rows: Dict[Tuple[str, str], dict], path: Optional[str] = None) -> int:
+    """Write rows to the ``daily_bars`` table, replacing any bar with the same (symbol, date).
+
+    A row missing a price is skipped: the table does not accept a bar without all four. Returns how many
+    bars were written. ``path`` is a database file, for tests; the default is the shared one.
+    """
+    bars = []
+    for (day, symbol), row in sorted(rows.items()):
+        prices = [_number(row.get(name)) for name in ("open", "high", "low", "close")]
+        if None in prices:
+            continue
+        bars.append((symbol, day, *prices, int(float(row.get("volume") or 0))))
+    conn = state_store.connect_shared(path, "")
+    try:
+        with conn:
+            intraday_store.upsert_daily(conn, bars)
+    finally:
+        conn.close()
+    return len(bars)
 
 
 def candle_rows(symbol: str, candles, exclude_date: Optional[str] = None) -> List[dict]:
@@ -413,14 +458,48 @@ class CorporateAction:
         return f"fell to about 1/{self.ratio:g} of the prior close"
 
 
-def load_confirmed_moves(path: str = CONFIRMED_MOVES_PATH) -> set:
-    """(symbol, date) pairs a person has confirmed as real moves. Empty if there is no file."""
+def confirmed_moves(path: Optional[str] = None) -> Dict[str, Dict[str, str]]:
+    """``{symbol: {date: why}}`` of the falls someone confirmed as real. Empty if none are stored."""
+    document = reference_store.load_document(CONFIRMED_SET, path or state_store.db_path())
+    moves = (document or {}).get("moves")
+    if not isinstance(moves, dict):
+        return {}
+    return {symbol: {str(day): str(why) for day, why in days.items()}
+            for symbol, days in moves.items() if isinstance(days, dict)}
+
+
+def load_confirmed_moves(path: Optional[str] = None) -> set:
+    """(symbol, date) pairs someone has confirmed as real moves. Empty if none are stored."""
+    return {(symbol, day) for symbol, days in confirmed_moves(path).items() for day in days}
+
+
+def confirm_move(symbol: str, day: str, why: str, path: Optional[str] = None) -> None:
+    """Record that a suspected split on ``day`` was a real move. Raises ``ValueError`` on bad input."""
+    symbol, why = (symbol or "").strip().upper(), (why or "").strip()
+    if not symbol:
+        raise ValueError("A symbol is needed")
+    if not why:
+        raise ValueError("Say why it is a real move: the note is what a later reader sees")
     try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return set()
-    return {(symbol, day) for symbol, days in data.items() if isinstance(days, dict) for day in days}
+        day = date.fromisoformat(day).isoformat()
+    except (TypeError, ValueError):
+        raise ValueError(f"{day!r} is not a date: use YYYY-MM-DD") from None
+    moves = confirmed_moves(path)
+    moves.setdefault(symbol, {})[day] = why
+    reference_store.save_document(CONFIRMED_SET, {"moves": moves}, nested=("moves",), path=path)
+
+
+def unconfirm_move(symbol: str, day: str, path: Optional[str] = None) -> bool:
+    """Take a confirmation back, so the fall is flagged again. True if there was one."""
+    symbol = (symbol or "").strip().upper()
+    moves = confirmed_moves(path)
+    if day not in moves.get(symbol, {}):
+        return False
+    del moves[symbol][day]
+    if not moves[symbol]:
+        del moves[symbol]
+    reference_store.save_document(CONFIRMED_SET, {"moves": moves}, nested=("moves",), path=path)
+    return True
 
 
 def suspected_corporate_actions(

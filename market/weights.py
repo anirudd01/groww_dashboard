@@ -1,36 +1,38 @@
 """Constituent weights for market-cap weighted sector aggregation.
 
-Weights are **read from a local JSON file, never fetched at runtime.** The
+Weights are **read from the local database, never fetched at runtime.** The
 dashboard must not depend on a third-party fundamentals source being reachable
 while the market is open, and a weight that silently changes mid-session would
 make two refreshes of the same screen disagree.
 
-The file is produced offline by ``scripts/fetch_index_weights.py`` and is meant
-to be regenerated manually, weekly or monthly - share counts move slowly, so a
-stale-by-a-week weight is a rounding error, while a failed network call at
-startup would not be.
+They are produced offline by ``scripts/fetch_index_weights.py`` and stored in the
+shared SQLite database by ``market/reference_store.py``. Run the script
+manually, weekly or monthly - share
+counts move slowly, so a stale-by-a-week weight is a rounding error, while a
+failed network call at startup would not be.
 
-If the file is missing, unreadable or empty the dashboard falls back to equal
+If the weights are missing, unreadable or empty the dashboard falls back to equal
 weighting and says so. It never guesses a weight.
 
 Manual alternative
 ------------------
-The JSON is a plain ``symbol -> figures`` map, so it can equally be filled in by
-hand from NSE's published index factsheet if the automated source ever breaks.
-Only the ratios within a sector matter, so any consistent unit works.
+A set is a plain ``symbol -> figures`` map, so it can equally be filled in by
+hand from NSE's published index factsheet if the automated source ever breaks
+(``reference_store.save_document``). Only the ratios within a sector matter, so
+any consistent unit works.
 """
 
-import json
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+from market import reference_store, state_store
+
 logger = logging.getLogger(__name__)
 
-#: Default location, relative to the repository root.
-DEFAULT_WEIGHTS_PATH = os.path.join("data", "index_weights.json")
+#: The stored set.
+WEIGHTS_SET = "index_weights"
 
 #: Which figure in the file is used as the weight. Free-float market cap is the
 #: basis NSE itself uses for index weighting, so it is the default.
@@ -93,42 +95,36 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
     try:
         return datetime.fromisoformat(value)
     except (TypeError, ValueError):
-        logger.warning("Weights file has an unparseable generated_at: %r", value)
+        logger.warning("Weights have an unparseable generated_at: %r", value)
         return None
 
 
 def load_weights(
     path: Optional[str] = None, basis: str = BASIS_FREE_FLOAT
 ) -> WeightSet:
-    """Read the weights file. Never raises - a bad file means equal weighting.
+    """Read the stored weights. Never raises - a bad set means equal weighting.
 
     A weight is only accepted if it is a positive, finite number. Anything else
     (null, zero, negative, a string) is dropped with a log line, so a partially
-    broken file degrades one symbol rather than the whole board.
+    broken set degrades one symbol rather than the whole board. ``path`` is a
+    database file, for tests; the default is the shared one.
     """
-    path = path or DEFAULT_WEIGHTS_PATH
+    database = path or state_store.db_path()
+    label = f"{WEIGHTS_SET} in {database}"
+    payload = reference_store.load_document(WEIGHTS_SET, database)
 
-    if not os.path.exists(path):
+    if payload is None:
         return WeightSet(
-            path=path,
+            path=label,
             error=(
-                f"No weights file at {path}. Run "
-                "'python scripts/fetch_index_weights.py' to generate one."
+                f"No weights stored ({label}). Run "
+                "'python scripts/fetch_index_weights.py' to generate them."
             ),
         )
 
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        return WeightSet(path=path, error=f"Could not read {path}: {exc}")
-
-    if not isinstance(payload, dict):
-        return WeightSet(path=path, error=f"{path} is not a JSON object")
-
     raw = payload.get("weights")
     if not isinstance(raw, dict):
-        return WeightSet(path=path, error=f"{path} has no 'weights' object")
+        return WeightSet(path=label, error=f"{label} has no 'weights' section")
 
     weights: Dict[str, float] = {}
     skipped = []
@@ -149,14 +145,14 @@ def load_weights(
             "Ignored %d symbol(s) with no usable %s in %s: %s",
             len(skipped),
             basis,
-            path,
+            label,
             ", ".join(sorted(skipped)[:10]),
         )
 
     if not weights:
         return WeightSet(
-            path=path,
-            error=f"{path} contained no usable '{basis}' values",
+            path=label,
+            error=f"{label} contained no usable '{basis}' values",
         )
 
     return WeightSet(
@@ -165,5 +161,5 @@ def load_weights(
         source=str(payload.get("source", "")),
         basis=basis,
         universe=str(payload.get("universe", "")),
-        path=path,
+        path=label,
     )

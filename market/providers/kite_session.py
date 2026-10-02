@@ -17,20 +17,19 @@ trading day. The flow (https://kite.trade/docs/connect/v3/user/):
 ``save_session``. The provider then reads it with ``load_session``, which
 refuses a session that belongs to another API key or has passed 06:00.
 
-The session file (``.kite_session.json`` at the repository root) holds a live
-access token, so it is git-ignored. The API secret is never written anywhere;
+The session is the ``kite_session`` row of the shared SQLite database
+(``market/state_store.py``) and holds a live access token. The API secret is never written anywhere;
 it is used once, to compute the checksum.
 
 Credentials, all from ``.env``:
   ``KITE_API_KEY``    (``KITE_APIKEY`` also accepted) - the app's public key
   ``KITE_API_SECRET`` - needed only by the login script
-  ``KITE_ACCESS_TOKEN`` - optional; overrides the session file when set
+  ``KITE_ACCESS_TOKEN`` - optional; overrides the saved session when set
 
 This module places no orders and calls no order endpoint.
 """
 
 import hashlib
-import json
 import logging
 import os
 from dataclasses import asdict, dataclass
@@ -40,6 +39,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
+from market import state_store
 from market.market_hours import IST, now_ist
 
 logger = logging.getLogger(__name__)
@@ -52,10 +52,8 @@ KITE_VERSION = "3"
 API_KEY_ENVS = ("KITE_API_KEY", "KITE_APIKEY")
 API_SECRET_ENV = "KITE_API_SECRET"
 ACCESS_TOKEN_ENV = "KITE_ACCESS_TOKEN"
-SESSION_FILE_ENV = "PULSE_KITE_SESSION_FILE"
-
-#: Relative to the repository root. Git-ignored - it holds a live token.
-DEFAULT_SESSION_PATH = ".kite_session.json"
+#: The ``runtime_state`` row holding the saved session. It holds a live token.
+STATE_NAME = "kite_session"
 LOGIN_SCRIPT = "scripts/kite_login.py"
 
 #: Kite access tokens expire at this IST wall-clock time.
@@ -78,10 +76,6 @@ def api_key_from_env() -> str:
 
 def api_secret_from_env() -> str:
     return _clean(os.getenv(API_SECRET_ENV))
-
-
-def session_path() -> str:
-    return os.getenv(SESSION_FILE_ENV) or DEFAULT_SESSION_PATH
 
 
 def login_url(api_key: str) -> str:
@@ -218,20 +212,9 @@ def exchange_request_token(
     )
 
 
-def save_session(session: KiteSession, path: Optional[str] = None) -> str:
-    path = path or session_path()
-    directory = os.path.dirname(os.path.abspath(path))
-    os.makedirs(directory, exist_ok=True)
-    temp = f"{path}.tmp"
-    with open(temp, "w", encoding="utf-8") as handle:
-        json.dump(asdict(session), handle, indent=2)
-        handle.write("\n")
-    os.replace(temp, path)  # never leave a half-written token file behind
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    return path
+def save_session(session: KiteSession, path: Optional[str] = None) -> None:
+    """Store the session. ``path`` is a database file, for tests; the default is the shared one."""
+    state_store.write(STATE_NAME, asdict(session), path)
 
 
 def load_session(
@@ -243,38 +226,34 @@ def load_session(
     Why a session was rejected is logged, because "Kite is not configured"
     alone would send someone looking at the wrong thing.
     """
-    path = path or session_path()
-    if not os.path.exists(path):
+    raw = state_store.read(STATE_NAME, path)
+    if raw is None:
         return None
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            raw = json.load(handle)
-        session = KiteSession(
-            api_key=str(raw.get("api_key") or ""),
-            access_token=str(raw.get("access_token") or ""),
-            user_id=str(raw.get("user_id") or ""),
-            login_at=str(raw.get("login_at") or ""),
-            expires_at=str(raw.get("expires_at") or ""),
-        )
-    except (OSError, ValueError, AttributeError) as exc:
-        logger.warning("Could not read the Kite session file %s: %s", path, exc)
-        return None
+    session = KiteSession(
+        api_key=str(raw.get("api_key") or ""),
+        access_token=str(raw.get("access_token") or ""),
+        user_id=str(raw.get("user_id") or ""),
+        login_at=str(raw.get("login_at") or ""),
+        expires_at=str(raw.get("expires_at") or ""),
+    )
 
     if not session.access_token:
         return None
     if api_key and session.api_key != api_key:
-        logger.warning(
-            "Kite session in %s belongs to a different API key - run 'python %s'",
-            path, LOGIN_SCRIPT,
-        )
+        logger.warning("The saved Kite session belongs to a different API key - run 'python %s'", LOGIN_SCRIPT)
         return None
     if session.is_expired(now):
         logger.info(
-            "Kite session in %s expired at %s - run 'python %s' to log in for today",
-            path, session.expires_at or "an unknown time", LOGIN_SCRIPT,
+            "The saved Kite session expired at %s - run 'python %s' to log in for today",
+            session.expires_at or "an unknown time", LOGIN_SCRIPT,
         )
         return None
     return session
+
+
+def clear_session(path: Optional[str] = None) -> bool:
+    """Forget the saved session (logout). True if there was one."""
+    return state_store.delete(STATE_NAME, path)
 
 
 def invalidate_session(api_key: str, access_token: str, timeout: int = 15) -> Optional[str]:

@@ -7,8 +7,8 @@ which computes it from ``time.time() + offset()`` instead of the raw clock -
 so no login has to wait out a window "to be safe".
 
 The offset is measured by SNTP (UDP 123; ~60 ms, millisecond precision) on
-first use in each process and saved to ``.clock_offset.json`` at the
-repository root (git-ignored; per-machine). If no NTP server answers - a
+first use in each process and saved as the ``clock_offset`` row of the shared
+SQLite database (``market/state_store.py``; per-machine, git-ignored). If no NTP server answers - a
 firewall can block UDP 123 - it falls back to the HTTP ``Date`` header of a
 few HTTPS sites (1 s resolution), then to the saved value while it is under a
 day old, and finally to 0 with a warning.
@@ -17,10 +17,9 @@ Fixing the Windows clock itself (``w32tm /resync`` as admin) is still worth
 doing; this module just stops the logins depending on it.
 """
 
-import json
 import logging
-import os
 import socket
+import sqlite3
 import statistics
 import struct
 import threading
@@ -28,12 +27,14 @@ import time
 from email.utils import parsedate_to_datetime
 from typing import Callable, Optional, Tuple
 
+from market import state_store
+
 logger = logging.getLogger(__name__)
 
 NTP_SERVERS = ("time.google.com", "time.cloudflare.com", "time.windows.com")
 HTTP_SOURCES = ("https://www.google.com", "https://www.cloudflare.com")
-PATH_ENV = "PULSE_CLOCK_OFFSET_FILE"
-DEFAULT_PATH = ".clock_offset.json"
+#: The ``runtime_state`` row holding the last measurement.
+STATE_NAME = "clock_offset"
 
 #: Re-measure in a long-running process after this long; drift is slow.
 REMEASURE_AFTER = 3600.0
@@ -46,14 +47,6 @@ NTP_EPOCH_DELTA = 2208988800
 
 _LOCK = threading.Lock()
 _cached: Optional[Tuple[float, float]] = None  # (offset, monotonic time measured)
-
-
-def offset_path() -> str:
-    configured = os.getenv(PATH_ENV)
-    if configured:
-        return configured
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(root, DEFAULT_PATH)
 
 
 def ntp_offset(host: str, timeout: float = 2.0) -> Tuple[float, float]:
@@ -114,7 +107,7 @@ def measure(ntp: Callable = ntp_offset, http: Callable = http_offset) -> Tuple[O
     return None, ""
 
 
-def _save(value: float, source: str, path: str) -> None:
+def _save(value: float, source: str, path: Optional[str]) -> None:
     payload = {
         "offset_seconds": round(value, 3),
         "source": source,
@@ -122,24 +115,19 @@ def _save(value: float, source: str, path: str) -> None:
         "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(time.time() + value)),
         "note": "seconds to ADD to this PC's clock to get real time; written by market/clock_offset.py",
     }
-    temp = f"{path}.tmp"
     try:
-        with open(temp, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
-        os.replace(temp, path)
-    except OSError as exc:
-        logger.debug("Could not save %s: %s", path, exc)
+        state_store.write(STATE_NAME, payload, path)
+    except (OSError, sqlite3.Error) as exc:
+        logger.debug("Could not save the clock offset: %s", exc)
 
 
-def _load(path: str) -> Optional[float]:
+def _load(path: Optional[str]) -> Optional[float]:
     """The saved offset if it is under a day old, else None."""
+    raw = state_store.read(STATE_NAME, path)
     try:
-        with open(path, encoding="utf-8") as handle:
-            raw = json.load(handle)
-        if time.time() - float(raw["measured_at_local"]) <= SAVED_VALID_FOR:
+        if raw is not None and time.time() - float(raw["measured_at_local"]) <= SAVED_VALID_FOR:
             return float(raw["offset_seconds"])
-    except (OSError, ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError):
         pass
     return None
 
@@ -151,7 +139,6 @@ def offset(refresh: bool = False, path: Optional[str] = None, measurer: Callable
     ``refresh`` is set - e.g. after a TOTP code was rejected).
     """
     global _cached
-    path = path or offset_path()
     with _LOCK:
         if not refresh and _cached and time.monotonic() - _cached[1] < REMEASURE_AFTER:
             return _cached[0]
@@ -167,7 +154,7 @@ def offset(refresh: bool = False, path: Optional[str] = None, measurer: Callable
                 logger.warning("Could not measure the clock offset and none is saved - using the system clock")
                 value = 0.0
             else:
-                logger.info("Clock offset from %s: %+.1f s (nothing answered to re-measure)", path, value)
+                logger.info("Saved clock offset %+.1f s (nothing answered to re-measure)", value)
         _cached = (value, time.monotonic())
         return value
 

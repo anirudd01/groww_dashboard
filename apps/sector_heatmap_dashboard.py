@@ -19,6 +19,7 @@ import dataclasses
 import logging
 import os
 import threading
+from typing import Optional
 
 import streamlit as st
 
@@ -316,10 +317,10 @@ def render_status_bar(status) -> None:
 # Views
 # ---------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
-def get_weights(path: str):
-    """Load the weights file once per process.
+def get_weights(path: Optional[str]):
+    """Load the stored weights once per process.
 
-    Cached because it is a static file read whose result must not change
+    Cached because it is a static read whose result must not change
     mid-session: two refreshes of the same screen have to agree.
     """
     return load_weights(path)

@@ -1,4 +1,4 @@
-"""Dhan access tokens, generated from TOTP and shared through a session file.
+"""Dhan access tokens, generated from TOTP and shared through the database.
 
 Dhan access tokens last 24 hours. Rather than pasting one into ``.env`` every
 day, this module mints them itself from the account's TOTP secret
@@ -6,11 +6,11 @@ day, this module mints them itself from the account's TOTP secret
 
     POST https://auth.dhan.co/app/generateAccessToken?dhanClientId=..&pin=..&totp=..
 
-and keeps the result in ``.dhan_session.json`` at the repository root
-(git-ignored - it holds a live token). Every process - dashboards, scripts -
-calls ``get_access_token()``, which returns the saved token while it has more
-than ``REFRESH_MARGIN`` left and only then generates a new one, under a file
-lock so two processes starting together make one token between them.
+and keeps the result in the ``dhan_session`` row of the shared SQLite database
+(``market/state_store.py``; it holds a live token). Every process - dashboards, scripts - calls
+``get_access_token()``, which returns the saved token while it has more than
+``REFRESH_MARGIN`` left and only then generates a new one, under a lock so two
+processes starting together make one token between them.
 
 Credentials, all from ``.env``; none is ever logged:
   ``DHAN_CLIENT_ID``   - the 10-digit client id (also inside every token)
@@ -31,7 +31,6 @@ This module places no orders and calls no order endpoint.
 """
 
 import logging
-import os
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -42,6 +41,7 @@ import requests
 
 from market import clock_offset
 from market.market_hours import IST, now_ist
+from market import state_store
 from market.providers import token_store
 
 logger = logging.getLogger(__name__)
@@ -51,10 +51,8 @@ AUTH_URL = "https://auth.dhan.co/app/generateAccessToken"
 CLIENT_ID_ENV = "DHAN_CLIENT_ID"
 PIN_ENVS = ("DHAN_PIN", "DHAN_MPIN")
 TOTP_SECRET_ENVS = ("DHAN_TOTP_SECRET", "DHAN_TOPT_SECRET")
-SESSION_FILE_ENV = "PULSE_DHAN_SESSION_FILE"
-
-#: Relative to the repository root. Git-ignored - it holds a live token.
-DEFAULT_SESSION_PATH = ".dhan_session.json"
+#: The ``runtime_state`` row holding the saved session. It holds a live token.
+STATE_NAME = "dhan_session"
 
 #: A token with less than this left is replaced rather than handed out, so a
 #: board started late in the token's life does not die mid-session.
@@ -84,10 +82,6 @@ def client_id_from_env() -> str:
 def has_totp_credentials() -> bool:
     """Whether .env holds everything needed to mint a token. No network I/O."""
     return bool(client_id_from_env() and _env(*PIN_ENVS) and _env(*TOTP_SECRET_ENVS))
-
-
-def session_path() -> str:
-    return token_store.repo_file(SESSION_FILE_ENV, DEFAULT_SESSION_PATH)
 
 
 #: The JWT payload of a Dhan token, decoded but not verified. {} if unreadable.
@@ -134,13 +128,14 @@ def session_from_token(access_token: str, client_id: str = "") -> DhanSession:
     )
 
 
-def save_session(session: DhanSession, path: Optional[str] = None) -> str:
-    return token_store.write_json_atomic(path or session_path(), asdict(session))
+def save_session(session: DhanSession, path: Optional[str] = None) -> None:
+    """Store the session. ``path`` is a database file, for tests; the default is the shared one."""
+    state_store.write(STATE_NAME, asdict(session), path)
 
 
 def load_session(path: Optional[str] = None) -> Optional[DhanSession]:
     """The saved session, whatever its age, or None. Never raises, no network I/O."""
-    raw = token_store.read_json(path or session_path(), "Dhan session")
+    raw = state_store.read(STATE_NAME, path)
     if raw is None:
         return None
     return DhanSession(
@@ -164,11 +159,9 @@ def saved_token(client_id: str = "", path: Optional[str] = None) -> str:
 # -- generation ----------------------------------------------------------------
 
 
-class _FileLock(token_store.FileLock):
-    """Cross-process lock around token generation (see ``token_store.FileLock``)."""
-
-    def __init__(self, path: str, timeout: float = 90.0):
-        super().__init__(path, timeout, error=DhanAuthError, stale_after=LOCK_STALE_SECONDS)
+def _lock(path: Optional[str]) -> state_store.Lock:
+    """Cross-process lock around token generation (see ``state_store.Lock``)."""
+    return state_store.Lock(STATE_NAME, path, error=DhanAuthError, stale_after=LOCK_STALE_SECONDS)
 
 
 def generate_session(timeout: int = 20, sleep=time.sleep) -> DhanSession:
@@ -215,14 +208,13 @@ def get_access_token(force_new: bool = False, rejected: str = "", path: Optional
     ``rejected``. If another process has already replaced that token, its
     replacement is returned instead of generating a second one.
     """
-    path = path or session_path()
     client_id = client_id_from_env()
     with _THREAD_LOCK:
         if not force_new:
             token = saved_token(client_id, path)
             if token:
                 return token
-        with _FileLock(path):
+        with _lock(path):
             # Another process may have refreshed while we waited for the lock.
             session = load_session(path)
             if session is not None and session.usable() and (not client_id or session.client_id == client_id):

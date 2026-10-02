@@ -6,7 +6,7 @@
     python scripts/backfill_intraday.py --full           # re-fetch stored days too (after a split)
 
 Needs today's Kite session (``python scripts/kite_login.py``) and
-``data/fno_universe.json`` (``python scripts/update_fno_history.py``).
+the ``fno_universe`` set in ``data/market.db`` (``python scripts/update_fno_history.py``).
 
 Cost: Kite returns at most **60 days of 1-minute bars per call**, one stock per
 call (a 61-day window is rejected with 400; tested 2026-09-27). So a 60-day
@@ -36,7 +36,7 @@ import requests
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from market.fno_movers import UNIVERSE_PATH, load_universe  # noqa: E402
+from market.fno_movers import load_universe  # noqa: E402
 from market.intraday_store import (  # noqa: E402
     DB_PATH,
     connect,
@@ -101,7 +101,6 @@ def main() -> int:
     parser.add_argument("--full", action="store_true", help="Re-fetch the whole --days window even where bars are stored")
     parser.add_argument("--symbols", help="Comma-separated subset (default: every F&O stock)")
     parser.add_argument("--db", default=DB_PATH)
-    parser.add_argument("--universe", default=UNIVERSE_PATH)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger("market").setLevel(logging.WARNING)
@@ -113,7 +112,7 @@ def main() -> int:
     except ImportError:
         pass
 
-    universe = load_universe(args.universe)
+    universe = load_universe()
     if not universe.tokens:
         logger.error("%s", universe.error)
         return 1

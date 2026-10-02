@@ -1,4 +1,4 @@
-"""INDmoney access tokens, generated from TOTP and shared through a session file.
+"""INDmoney access tokens, generated from TOTP and shared through the database.
 
 The pasted ``IND_MONEY_ACCESS_TOKEN`` died at 07:00 IST every morning, and
 nothing in the repo could make a new one. This module mints them itself
@@ -7,11 +7,11 @@ nothing in the repo could make a new one. This module mints them itself
     POST https://api.indstocks.com/generate/token
     x-api-key: <IND_MONEY_CLIENT_ID>          body: {"mpin": .., "totp": ..}
 
-and keeps the result in ``.indmoney_session.json`` at the repository root
-(git-ignored - it holds a live token). Every process - dashboards, scripts -
-calls ``get_access_token()``, which returns the saved token while it has more
-than ``REFRESH_MARGIN`` left and only then generates a new one, under a file
-lock (``token_store.FileLock``), exactly as ``dhan_session`` does for Dhan.
+and keeps the result in the ``indmoney_session`` row of the shared SQLite database
+(``market/state_store.py``; it holds a live token). Every process - dashboards, scripts - calls
+``get_access_token()``, which returns the saved token while it has more than
+``REFRESH_MARGIN`` left and only then generates a new one, under a lock
+(``state_store.Lock``), exactly as ``dhan_session`` does for Dhan.
 
 Credentials, all from ``.env``; none is ever logged:
   ``IND_MONEY_CLIENT_ID``   - the Client ID shown after TOTP setup; sent as ``x-api-key``
@@ -46,6 +46,7 @@ import requests
 
 from market import clock_offset
 from market.market_hours import IST, now_ist
+from market import state_store
 from market.providers import token_store
 
 logger = logging.getLogger(__name__)
@@ -56,10 +57,9 @@ TOKEN_PAGE = "https://www.indstocks.com/app/api-trading/access-tokens"
 CLIENT_ID_ENV = "IND_MONEY_CLIENT_ID"
 MPIN_ENVS = ("IND_MONEY_MPIN", "IND_MONEY_PIN")
 TOTP_SECRET_ENVS = ("IND_MONEY_TOTP_SECRET", "IND_MONEY_TOPT_SECRET")
-SESSION_FILE_ENV = "PULSE_INDMONEY_SESSION_FILE"
+#: The ``runtime_state`` row holding the saved session. It holds a live token.
+STATE_NAME = "indmoney_session"
 
-#: Relative to the repository root. Git-ignored - it holds a live token.
-DEFAULT_SESSION_PATH = ".indmoney_session.json"
 
 #: Replace a token with less than this left. Short, because replacing one
 #: revokes it for every other process too.
@@ -95,10 +95,6 @@ def has_totp_credentials() -> bool:
     """Whether .env holds everything needed to mint a token. No network I/O."""
     return bool(client_id_from_env() and token_store.env_first(*MPIN_ENVS)
                 and token_store.env_first(*TOTP_SECRET_ENVS))
-
-
-def session_path() -> str:
-    return token_store.repo_file(SESSION_FILE_ENV, DEFAULT_SESSION_PATH)
 
 
 def _next_expiry(generated: datetime) -> datetime:
@@ -161,13 +157,14 @@ def session_from_token(access_token: str, client_id: str = "", expires_in=None) 
     )
 
 
-def save_session(session: IndMoneySession, path: Optional[str] = None) -> str:
-    return token_store.write_json_atomic(path or session_path(), asdict(session))
+def save_session(session: IndMoneySession, path: Optional[str] = None) -> None:
+    """Store the session. ``path`` is a database file, for tests; the default is the shared one."""
+    state_store.write(STATE_NAME, asdict(session), path)
 
 
 def load_session(path: Optional[str] = None) -> Optional[IndMoneySession]:
     """The saved session, whatever its age, or None. Never raises, no network I/O."""
-    raw = token_store.read_json(path or session_path(), "INDmoney session")
+    raw = state_store.read(STATE_NAME, path)
     if raw is None:
         return None
     return IndMoneySession(
@@ -267,14 +264,13 @@ def get_access_token(force_new: bool = False, rejected: str = "", path: Optional
     ``rejected``. If another process has already replaced that token, its
     replacement is returned instead - generating again would revoke it.
     """
-    path = path or session_path()
     client_id = client_id_from_env()
     with _THREAD_LOCK:
         if not force_new:
             token = saved_token(path)
             if token:
                 return token
-        with token_store.FileLock(path, error=IndMoneyAuthError):
+        with state_store.Lock(STATE_NAME, path, error=IndMoneyAuthError, stale_after=token_store.LOCK_STALE_SECONDS):
             session = load_session(path)
             if _for_this_account(session, client_id) and session.usable():
                 if not force_new or (rejected and session.access_token != rejected):

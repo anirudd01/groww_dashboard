@@ -15,8 +15,9 @@ How it works (https://kite.trade/docs/connect/v3/user/):
    on https://developers.kite.trade, with ``request_token=...`` in the address.
    That page may well fail to load - it does not matter. Copy the address.
 3. Paste it here. The script exchanges it (it is valid for a few minutes, once)
-   for the day's access token and saves it to ``.kite_session.json``, which
-   is git-ignored. The API secret is used for the checksum and never stored.
+   for the day's access token and saves it to the shared database
+   (``data/market.db``, git-ignored). The API secret is used for the checksum
+   and never stored.
 
 Needs ``KITE_API_KEY`` (or ``KITE_APIKEY``) and ``KITE_API_SECRET`` in ``.env``.
 Places no orders. Prints no tokens.
@@ -32,6 +33,7 @@ import requests
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+from market import state_store  # noqa: E402
 from market.providers.kite_session import (  # noqa: E402
     API_KEY_ENVS,
     API_ROOT,
@@ -47,8 +49,8 @@ from market.providers.kite_session import (  # noqa: E402
     invalidate_session,
     load_session,
     login_url,
+    clear_session,
     save_session,
-    session_path,
 )
 
 
@@ -59,7 +61,7 @@ def _masked(user_id: str) -> str:
 def check_status(api_key: str) -> int:
     session = load_session(api_key)
     if session is None:
-        print(f"No valid Kite session in {session_path()} - run this script without --status.")
+        print("No valid saved Kite session - run this script without --status.")
         return 1
     print(f"Saved session for {_masked(session.user_id)}, expires {session.expires_at} "
           f"({session.hours_left():.1f} h left)")
@@ -89,12 +91,9 @@ def logout(api_key: str) -> int:
         print("No valid saved session to revoke.")
         return 0
     error = invalidate_session(api_key, session.access_token)
-    try:
-        os.remove(session_path())
-    except OSError:
-        pass
+    clear_session()
     if error:
-        print(f"Kite did not confirm the logout ({error}); the local session file was removed anyway.")
+        print(f"Kite did not confirm the logout ({error}); the saved session was removed anyway.")
         return 1
     print("Session revoked on Kite and removed locally.")
     return 0
@@ -163,8 +162,8 @@ def main() -> int:
         print(f"\nCould not reach Kite: {exc}")
         return 1
 
-    path = save_session(session)
-    print(f"\nLogged in as {_masked(session.user_id)}. Session saved to {path}")
+    save_session(session)
+    print(f"\nLogged in as {_masked(session.user_id)}. Session saved to the shared database ({state_store.db_path()})")
     print(f"Valid until {session.expires_at} ({session.hours_left():.1f} h).")
     print("Start the dashboard, or verify with: python scripts/check_heatmap_universe.py --provider kite")
     return 0

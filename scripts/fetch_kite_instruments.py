@@ -1,4 +1,4 @@
-"""Generate the Zerodha Kite instrument-id file the dashboard reads.
+"""Generate the Zerodha Kite instrument ids the dashboard reads (stored in the database).
 
 Run this **manually** - monthly, or whenever a symbol stops resolving. The
 dashboard never downloads an instrument master itself.
@@ -23,8 +23,8 @@ index by its Dhan-style symbol (``BANKNIFTY``, ``NIFTYIT``); Kite files most
 indices under the same name, and ``INDEX_NAMES`` below lists the four that
 differ. Anything not listed is looked up by its own name.
 
-Output: ``data/kite_instruments.json``, same shape as
-``data/dhan_instruments.json``. Loaded by ``market/providers/kite.py``.
+Output: the ``kite_instruments`` set in ``data/market.db``, same shape as
+the ``dhan_instruments`` set. Loaded by ``market/providers/kite.py``.
 
 This script places no orders and reads no account data.
 """
@@ -32,7 +32,6 @@ This script places no orders and reads no account data.
 import argparse
 import csv
 import io
-import json
 import logging
 import os
 import sys
@@ -46,7 +45,8 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 from fetch_instrument_master import tracked_symbols  # noqa: E402
-from market.instruments import KITE_INSTRUMENTS_PATH  # noqa: E402
+from market import reference_store, state_store  # noqa: E402
+from market.instruments import KITE_SET  # noqa: E402
 from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX  # noqa: E402
 
 logger = logging.getLogger("fetch_kite_instruments")
@@ -126,7 +126,7 @@ def extract(text: str, wanted: Dict[str, Set[str]]) -> Dict[str, Dict[str, dict]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=KITE_INSTRUMENTS_PATH, help="Output JSON path")
+    parser.add_argument("--db", default=None, help="Database file (default: the shared data/market.db)")
     parser.add_argument("--verbose", action="store_true", help="Log every symbol")
     parser.add_argument(
         "--keep-raw", action="store_true", help="Also save the unedited CSV under data/instruments/"
@@ -181,11 +181,8 @@ def main() -> int:
             for segment, rows in sorted(instruments.items())
         },
     }
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-    logger.info("Wrote %s (%.1f KB, %d instruments)", args.out, os.path.getsize(args.out) / 1024, resolved)
+    reference_store.save_document(KITE_SET, payload, nested=("instruments",), path=args.db)
+    logger.info("Stored %d instruments as %s in %s", resolved, KITE_SET, args.db or state_store.db_path())
     return 2 if missing else 0
 
 
