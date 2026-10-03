@@ -10,6 +10,7 @@ References (DhanHQ API v2):
                         scripts/fetch_instrument_master.py - never downloaded here
   - LTP / OHLC        : POST https://api.dhan.co/v2/marketfeed/{ltp,ohlc}
   - Daily candles     : POST https://api.dhan.co/v2/charts/historical
+  - Intraday candles  : POST https://api.dhan.co/v2/charts/intraday (MCX page only)
   - Live feed         : wss://api-feed.dhan.co?version=2&token=..&clientId=..&authType=2
 
 Credentials: ``DHAN_CLIENT_ID``, ``DHAN_PIN`` and ``DHAN_TOTP_SECRET`` in
@@ -37,6 +38,7 @@ from market.providers import dhan_session
 from market.providers.base import (
     SEGMENT_CASH,
     SEGMENT_INDEX,
+    SEGMENT_MCX_FUTURES,
     DayBar,
     FeedHandle,
     InstrumentRef,
@@ -59,11 +61,14 @@ NSE_EQ = "NSE_EQ"
 #: Dhan addresses index values as their own exchange segment. Index quotes
 #: and the index feed both need the paid Data API plan, same as equities.
 IDX_I = "IDX_I"
+#: MCX commodity contracts. Quotes, candles and the feed all take it (verified 2026-10-03).
+MCX_COMM = "MCX_COMM"
 
 #: Universe segment -> Dhan exchange segment.
 SEGMENT_CODES = {
     SEGMENT_CASH: NSE_EQ,
     SEGMENT_INDEX: IDX_I,
+    SEGMENT_MCX_FUTURES: MCX_COMM,
 }
 
 #: Universe segment -> Dhan ``instrument`` type, which the historical-candle
@@ -74,6 +79,7 @@ SEGMENT_CODES = {
 INSTRUMENT_CODES = {
     SEGMENT_CASH: "EQUITY",
     SEGMENT_INDEX: "INDEX",
+    SEGMENT_MCX_FUTURES: "FUTCOM",
 }
 
 
@@ -792,8 +798,11 @@ class DhanProvider(MarketDataProvider):
         logger.info("Dhan resolved previous close for %d/%d", len(closes), len(refs))
         return closes
 
-    def _post_historical(self, ref: InstrumentRef, window: dict) -> Optional[dict]:
-        """Daily candles for one instrument, or None if the call gave nothing.
+    def _post_historical(
+        self, ref: InstrumentRef, window: dict, endpoint: str = "historical"
+    ) -> Optional[dict]:
+        """Daily candles (``historical``) or minute candles (``intraday``) for one instrument,
+        or None if the call gave nothing.
 
         Unlike the quote endpoints this one takes a single security per
         request, so a universe costs one call per symbol. It is only ever used
@@ -814,7 +823,7 @@ class DhanProvider(MarketDataProvider):
             _history_gate()
             try:
                 resp = requests.post(
-                    f"{REST_BASE}/charts/historical",
+                    f"{REST_BASE}/charts/{endpoint}",
                     headers=self._headers(),
                     json=body,
                     timeout=self._timeout,
@@ -939,6 +948,42 @@ class DhanProvider(MarketDataProvider):
             except ValueError:
                 continue
         return times
+
+    def get_quotes(self, refs: List[InstrumentRef]) -> Dict[str, dict]:
+        """The full ``/marketfeed/quote`` entry per symbol: last price, OHLC, volume, OI, circuit limits.
+
+        Used by the MCX page, which shows more of the quote than the boards' price-only calls.
+        Note ``ohlc.close`` is the *previous* session's close here, and for MCX it stays so
+        after the session ends (seen 2026-10-03, a Saturday).
+        """
+        by_id = {str(r.provider_id): r.symbol for r in refs}
+        quotes: Dict[str, dict] = {}
+        for security_id, entry in (self._post_marketfeed("quote", refs) or {}).items():
+            symbol = by_id.get(str(security_id))
+            if symbol is not None and isinstance(entry, dict):
+                quotes[symbol] = entry
+        return quotes
+
+    def get_candles(
+        self, ref: InstrumentRef, start: datetime, end: datetime, interval: Optional[int] = None
+    ) -> Optional[dict]:
+        """Candles with open interest for one instrument, or None.
+
+        ``interval`` is minutes (1, 5, 15, 25 or 60) for ``/charts/intraday``; None asks
+        ``/charts/historical`` for daily candles. Dhan returns parallel arrays: ``open``,
+        ``high``, ``low``, ``close``, ``volume``, ``timestamp`` (epoch seconds) and
+        ``open_interest``. ``end`` is exclusive.
+        """
+        if interval is None:
+            window = {"fromDate": start.date().isoformat(), "toDate": end.date().isoformat(), "oi": True}
+            return self._post_historical(ref, window)
+        window = {
+            "interval": str(interval),
+            "fromDate": start.strftime("%Y-%m-%d %H:%M:%S"),
+            "toDate": end.strftime("%Y-%m-%d %H:%M:%S"),
+            "oi": True,
+        }
+        return self._post_historical(ref, window, endpoint="intraday")
 
     def market_movers(self, body: dict) -> dict:
         """``POST /data/marketmovers``: Dhan's own ranking of gainers, losers, volume and OI.

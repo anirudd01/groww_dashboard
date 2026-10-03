@@ -12,6 +12,7 @@ References (Kite Connect v3, https://kite.trade/docs/connect/v3/):
                       scripts/fetch_kite_instruments.py - never downloaded here
   - Quotes          : GET https://api.kite.trade/quote{,/ohlc,/ltp}?i=NSE:INFY
   - Daily candles   : GET https://api.kite.trade/instruments/historical/{token}/day
+  - Minute candles  : GET https://api.kite.trade/instruments/historical/{token}/{interval} (MCX page only)
   - Live feed       : wss://ws.kite.trade?api_key=...&access_token=...
 
 Kite identifies an instrument two ways, and each API uses one of them:
@@ -100,6 +101,29 @@ HISTORY_LOOKBACK_DAYS = 20
 def quote_key(tradingsymbol: str, exchange: str = "NSE") -> str:
     """``NSE:INFY`` / ``NSE:NIFTY BANK`` - the REST ``i=`` form."""
     return f"{exchange}:{tradingsymbol}"
+
+
+#: Candle interval in minutes (None = daily) -> Kite's interval name.
+KITE_INTERVALS = {1: "minute", 5: "5minute", 15: "15minute", 60: "60minute", None: "day"}
+
+
+def candles_to_arrays(candles) -> dict:
+    """Kite ``[[iso_ts, o, h, l, c, v, oi], ...]`` -> Dhan's full parallel-array shape
+    (``open``, ``high``, ``low``, ``close``, ``volume``, ``open_interest``, ``timestamp`` in epoch s).
+    Candles with an unreadable stamp are dropped."""
+    names = ("open", "high", "low", "close", "volume", "open_interest")
+    out = {name: [] for name in names + ("timestamp",)}
+    for candle in candles or []:
+        if not isinstance(candle, (list, tuple)) or len(candle) < 5:
+            continue
+        try:
+            stamp = int(datetime.strptime(str(candle[0]), "%Y-%m-%dT%H:%M:%S%z").timestamp())
+        except (TypeError, ValueError):
+            continue
+        out["timestamp"].append(stamp)
+        for i, name in enumerate(names, start=1):
+            out[name].append(candle[i] if i < len(candle) else None)
+    return out
 
 
 def candles_to_series(candles) -> dict:
@@ -576,6 +600,38 @@ class KiteProvider(MarketDataProvider):
                 volume=int(volume) if volume else None,
             )
         return bars
+
+    def get_quotes(self, refs: List[InstrumentRef]) -> Dict[str, dict]:
+        """Full ``/quote`` entries per symbol (the MCX page's fallback when Dhan is down).
+
+        For MCX, ``ref.symbol`` must be Kite's tradingsymbol (``CRUDEOIL26OCTFUT``) and
+        ``ref.exchange`` ``MCX``. After the session Kite reports ``volume`` and ``net_change``
+        as 0 (seen 2026-10-03), while prices, OHLC and OI match Dhan's exactly.
+        """
+        return self._quotes("", refs)
+
+    def get_candles(
+        self, ref: InstrumentRef, start: datetime, end: datetime, interval: Optional[int] = None
+    ) -> Optional[dict]:
+        """Candles with open interest, in the same shape as ``DhanProvider.get_candles``.
+
+        Daily candles are asked for as Kite's continuous series, which is what Dhan's daily
+        candles turn out to be; a single contract's own history only starts at its listing.
+        """
+        params = {"from": start.strftime("%Y-%m-%d %H:%M:%S"), "to": end.strftime("%Y-%m-%d %H:%M:%S"), "oi": 1}
+        if interval is None:
+            params["continuous"] = 1
+        try:
+            status, body = self._get(
+                f"/instruments/historical/{ref.provider_id}/{KITE_INTERVALS[interval]}", params, "historical")
+        except requests.RequestException as e:
+            logger.debug("Kite candles request failed for %s: %s", ref.symbol, e)
+            return None
+        error = error_of(status, body)
+        if error:
+            logger.debug("Kite candles error for %s: %s", ref.symbol, error)
+            return None
+        return candles_to_arrays((body.get("data") or {}).get("candles"))
 
     def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:
         if not self._token:

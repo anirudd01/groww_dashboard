@@ -18,6 +18,8 @@ from typing import Dict, List, Optional, Tuple
 #: Segments a universe can ask for. Brokers map these onto their own names.
 SEGMENT_CASH = "CASH"
 SEGMENT_INDEX = "INDEX"
+#: MCX commodity futures (Dhan: ``MCX_COMM`` / ``FUTCOM``). Used by the MCX page only, never a universe.
+SEGMENT_MCX_FUTURES = "MCX_FUT"
 
 
 @dataclass(frozen=True)

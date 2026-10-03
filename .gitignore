@@ -14,38 +14,25 @@ __pycache__/
 */__pycache__/
 **/__pycache__/
 
-# Kite Connect daily session written by scripts/kite_login.py. Holds a live
-# access token - never commit it.
+# Saved broker tokens live in data/market.db (below). A stray token file from an older checkout
+# must never be committed.
 .kite_session.json
-.kite_session.json.tmp
-# Dhan token minted from TOTP by market/providers/dhan_session.py. Holds a
-# live access token - never commit it.
 .dhan_session.json
-.dhan_session.json.tmp
-.dhan_session.json.lock
-# INDmoney token minted from TOTP by market/providers/indmoney_session.py.
-# Holds a live token.
 .indmoney_session.json
-.indmoney_session.json.tmp
-.indmoney_session.json.lock
-# Half-written generated files (renamed into place when complete)
-data/*.tmp
 
 # Raw broker instrument masters kept by scripts/fetch_instrument_master.py
-# --keep-raw. 35 MB, re-downloadable, never source. The generated
-# data/dhan_instruments.json IS committed - that is what the dashboard reads.
+# --keep-raw. 35 MB, re-downloadable, never source. The generated ids are not a
+# file: they are stored in data/market.db (reference_sets / reference_rows).
 data/instruments/
 
-# 1-minute + daily history for the F&O stocks, built by
-# scripts/backfill_intraday.py. Hundreds of MB and fully re-downloadable.
+# The shared database. F&O 1-minute + daily history (scripts/backfill_intraday.py, hundreds of MB,
+# re-downloadable); the Dhan gainers/losers history (NOT re-downloadable: back it up); the saved
+# broker sessions (live tokens) and clock offset; and the generated reference data (instrument
+# ids, weights, F&O list). Never commit it.
 data/market.db
 data/market.db-wal
 data/market.db-shm
 
-# This PC's clock offset from NTP, written by market/clock_offset.py and used
-# for TOTP codes. Per-machine.
-.clock_offset.json
-.clock_offset.json.tmp
 data/extended_session_probe.csv
 
 # Tests stay local for now; to be committed later (see README, "Tests are not committed yet")
