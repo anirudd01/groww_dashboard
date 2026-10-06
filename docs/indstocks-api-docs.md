@@ -15,8 +15,13 @@ frequently. Re-download https://api-docs.indstocks.com/llms-full.md
 for the current version, and compare the "Docs last updated" date above
 against your copy to check whether it is stale.
 
-Rate limits, error codes and request/response shapes in this file are the
-authoritative ones. Contents:
+> **Edited copy (pulse_tester, 2026-09-25).** Passages proven wrong against the live API
+> have been corrected or cut and marked `[pulse_tester]`. The fabricated changelog entries
+> and marketing filler are also cut. Behaviour verified live, including everything this file
+> gets wrong, is in `docs/api/INDMONEY_API.md` and `docs/PROVIDER_GUIDE.md`. Those
+> take precedence over this file. Re-downloading the vendor file undoes these edits.
+
+Contents:
 
 - https://api-docs.indstocks.com/
 - https://api-docs.indstocks.com/getting-started/
@@ -147,7 +152,7 @@ If you want to use INDstocks API with algo trading platforms like **Tradetron**,
 
 - Your access token is like a password - keep it secure
 - Never share it publicly or commit it to version control
-- Tokens expire after 24 hours and must be regenerated
+- Tokens expire at **07:00 IST the next day**, not after 24 hours `[pulse_tester: verified 2026-09-25]`
 - Revoke immediately if compromised
 
 ### Step 2: Connect to Tradetron - Get FREE and Unlimited deployments only with INDmoney 
@@ -193,7 +198,7 @@ Your access token is your key to the INDstocks API. Here's how to get it:
 
 - Never commit your access token to version control
 - Store it securely (environment variables, secrets manager)
-- Tokens expire after 24 hours and must be regenerated
+- Tokens expire at **07:00 IST the next day**, not after 24 hours `[pulse_tester: verified 2026-09-25]`
 - Revoke immediately if compromised
 
 ---
@@ -1111,22 +1116,7 @@ ws.on('message', (data) => {
 });
 ```
 
-## Performance Metrics & Benchmarks
-
-### **Latency Performance**
-- **Order Execution**: Fast response time for order placement
-- **WebSocket Data**: Real-time market feeds
-- **API Response**: Optimized for standard API calls
-
-### **Reliability Metrics**
-- **Error Rate**: Low system error rate
-- **Throughput**: High concurrent request support
-
-### **Cost Efficiency**
-- **API Access**: Free (no subscription charges)
-- **Brokerage**: Flat ₹10 per order (regardless of size)
-- **Data Feeds**: Real-time data included at no extra cost
-- **Historical Data**: 10+ years of historical data available
+> `[pulse_tester]` Cut: "Performance Metrics & Benchmarks". It had no numbers, and its "10+ years of historical data" contradicts the documented limit of 1 year per daily call.
 
 ## Key Benefits
 
@@ -1142,7 +1132,7 @@ ws.on('message', (data) => {
 
 ### **3. Feature Completeness**
 - All order types supported (Market, Limit, Stop-Loss, GTT)
-- Multi-asset support (Equity, F&O, Commodities)
+- Multi-asset support (Equity, F&O) `[pulse_tester: MCX is only on the websocket, as a live price; REST quotes and candles reject it. See docs/PROVIDER_GUIDE.md]`
 - Advanced analytics with portfolio insights
 - Compliance ready
 
@@ -1334,7 +1324,7 @@ The practical consequences:
   `/generate/token` before each request — you'll invalidate the token your other processes are using.
 - If you run multiple processes or machines, have **one** of them generate the token and share it
   with the others. Two processes each generating their own token will keep killing each other's.
-- A token remains valid for **24 hours** from generation, unless it's replaced by a newer one,
+- A token remains valid until **07:00 IST the next day** `[pulse_tester: verified 2026-09-25; the docs said "24 hours from generation"]`, unless it's replaced by a newer one,
   revoked from the dashboard, or invalidated by disabling TOTP.
 - The currently-live token is displayed on the dashboard next to your Client ID, with an option
   to **revoke** it. Revoking takes effect immediately — in-flight and subsequent calls with that
@@ -1344,7 +1334,7 @@ The practical consequences:
 
 | Rule | Limit | Notes |
 |---|---|---|
-| Minimum gap between token generations | **1 token per 60 seconds** | A token lasts 24 hours, so a correctly-written client never needs another this soon. This exists to stop a looping script. |
+| Minimum gap between token generations | **1 token per 60 seconds** | A token lasts until 07:00 IST the next day, so a correctly-written client never needs another this soon. This exists to stop a looping script. |
 | Wrong TOTP codes before lockout | **5 failed attempts → 15-minute lockout** | Applies to the `totp` field specifically. |
 | Window for counting failed attempts | **Rolling 15 minutes** | Isolated typos hours apart don't accumulate into a lockout. |
 | Repeated lockouts | **3 lockouts within 1 hour → 1-hour lockout** | Also triggers an email alert to the account holder. If you hit this without knowing why, contact `instockssupport@indmoney.com`. |
@@ -1515,7 +1505,7 @@ GET /market/instruments
 
 | Parameter  | Description                                        |
 |------------|----------------------------------------------------|
-| `source`   | The market segment for which to fetch instruments. <br> **Enum**: `equity`, `fno`, `index` |
+| `source`   | The market segment for which to fetch instruments. <br> **Enum**: `equity`, `fno`, `index` <br> `[pulse_tester]` `mcx` also works (undocumented, 9,967 MCX rows on 2026-09-25), but REST quotes and candles reject every MCX code. |
 
 **Example Request**
 ```bash
@@ -2478,7 +2468,7 @@ Instrument tokens are strings that identify a specific security or index, format
 | BSE Equity          | `BSE:`    | `"BSE:500325"`          |
 | NSE Derivatives (F&O) | `NFO:`    | `"NFO:51011"`           |
 | BSE Derivatives (F&O) | `BFO:`    | `"BFO:12345"`           |
-| NSE Index           | `NIDX:`   | `"NIDX:26000"`          |
+| NSE Index           | `NIDX:`   | `"NIDX:40000001"` `[pulse_tester: the docs' NIDX:26000 is silently ignored; use the id from source=index]` |
 | BSE Index           | `BIDX:`   | `"BIDX:1"`              |
 
 **Subscription Examples**
@@ -4369,7 +4359,7 @@ values, not separate `error_type` codes:
 | Situation | Typical HTTP | What to do |
 |---|---|---|
 | Every request fails immediately | 403 / 401 | `access_token` is empty, wrong, or expired — regenerate it. |
-| Token stopped working mid-day, well before 24h | 403 | Something replaced or revoked it: another process called `/generate/token` (only the newest TOTP token stays valid), it was revoked from the dashboard, or TOTP was disabled. See [Token lifecycle](https://api-docs.indstocks.com/Users/#token-lifecycle). |
+| Token stopped working before 07:00 IST | 403 | Something replaced or revoked it: another process called `/generate/token` (only the newest TOTP token stays valid), it was revoked from the dashboard, or TOTP was disabled. See [Token lifecycle](https://api-docs.indstocks.com/Users/#token-lifecycle). |
 | `/generate/token` keeps failing | — | Wrong MPIN/TOTP, the 60-second throttle, a lockout, or server clock drift — see [Token Generation Errors](#token-generation-errors-totp). |
 | One specific request fails | 400 | Read `message`; check the request body/params against that endpoint's page and the [Glossary](https://api-docs.indstocks.com/glossary/) for correct enum casing. |
 | Requests started failing under load | 429 | You hit a rate limit — see [API Conventions](https://api-docs.indstocks.com/conventions/#rate-limiting). |
@@ -4442,9 +4432,8 @@ the order endpoints, and `underlying-scrip` on the [Option Chain](https://api-do
 **WARNING: Index tokens: take them from the instruments file for the endpoint you are calling**
 
 For `underlying-scrip`, NIFTY 50 is `40000001`, as listed by
-`/market/instruments?source=index`. Note that the [WebSocket](https://api-docs.indstocks.com/Websockets/) documentation uses
-`NIDX:26000` as its NSE index example, so the two surfaces may not share the same index token.
-Do not carry a token from one to the other — look it up per surface.
+`/market/instruments?source=index`. `[pulse_tester, verified]` The same id works on every surface:
+REST `NIDX_40000001`, websocket `NIDX:40000001`. The websocket example `NIDX:26000` is wrong and is silently ignored.
 
 **WebSocket segment prefixes:**
 
@@ -4500,7 +4489,7 @@ See the [WebSockets guide](https://api-docs.indstocks.com/Websockets/) for full 
 | Repeated lockouts | 3 within 1 hour → 1-hour lockout + email alert |
 | Time to complete TOTP setup | 5 minutes |
 | Concurrent TOTP tokens | 1 — a new token invalidates the previous one |
-| Access token validity | 24 hours |
+| Access token validity | Until 07:00 IST the next day `[pulse_tester: verified; not 24 hours]` |
 
 See [Getting Your Access Token — Method 2](https://api-docs.indstocks.com/Users/#method-2-totp-based-token-generation) and
 [TOTP limits and lockouts](https://api-docs.indstocks.com/Users/#totp-limits-and-lockouts).
@@ -4643,7 +4632,7 @@ Getting access is quick and simple:
 
 **Important Notes:**
 
-- Access tokens expire after 24 hours and must be regenerated
+- Tokens expire at **07:00 IST the next day**, not after 24 hours `[pulse_tester: verified 2026-09-25]`
 - API access is free - no subscription required
 - You can start making API calls immediately after getting your token
 
@@ -4711,9 +4700,8 @@ See the [Authentication Guide](https://api-docs.indstocks.com/Users/) for more d
 
 ### How long is my access token valid?
 
-Access tokens expire after 24 hours. You will need to generate a new token from your dashboard once your current token expires. For security:
+Tokens expire at **07:00 IST the next day** `[pulse_tester: verified 2026-09-25; not 24 hours]`. The `/generate/token` response carries `expires_in` as an absolute epoch time, not a duration. For security:
 
-- Tokens automatically expire after 24 hours
 - Generate a new token when the old one expires
 - Revoke tokens immediately if compromised
 - Never share tokens or commit them to version control
@@ -4989,32 +4977,7 @@ Smart Orders remain active for up to **365 days** or until:
 - You manually cancel them
 - The instrument expires (for derivatives)
 
-## Performance & Reliability
-
-### What is the API uptime?
-
-We maintain high availability with:
-
-- Redundant infrastructure across multiple availability zones
-- Real-time monitoring and alerts
-- Automatic failover capabilities
-- Regular maintenance during non-trading hours
-
-### What is the typical API latency?
-
-Our API is optimized for fast performance:
-
-- **Order execution**: Fast response time for order placement
-- **WebSocket data**: Real-time data streaming
-- **REST API calls**: Optimized response times
-- **Authentication**: Quick token validation
-
-### How do you ensure data accuracy?
-
-- Direct exchange connectivity
-- Real-time validation and reconciliation
-- Multiple data source cross-verification
-- Checksums and integrity verification
+> `[pulse_tester]` Cut: FAQ "Performance & Reliability". It was generic marketing with no figures. Measured behaviour is in docs/api/INDMONEY_API.md.
 
 ## SDKs & Integration
 
@@ -5156,288 +5119,7 @@ Subscribe to our [API Status Page](https://status.indstocks.com) for real-time u
 
 ---
 
-## [v1.3.0] - 2024-12-15
-
-### ✨ New Features
-
-- **Option Greeks API**: Calculate real-time Greeks (Delta, Gamma, Theta, Vega, Rho) for options
-- **Multi-leg Order Support**: Place complex multi-leg strategies in a single API call
-- **Enhanced Historical Data**: Extended historical data availability to 15 years
-- **Instrument Search API**: New endpoint to search instruments by name/symbol
-
-### 🚀 Improvements
-
-- **Faster order execution**: Optimized order routing for improved performance
-- **WebSocket reliability**: Improved connection stability with automatic reconnection
-- **Better error messages**: More descriptive error responses with actionable solutions
-- **Rate limit headers**: Added `X-RateLimit-*` headers to all responses
-
-### 🐛 Bug Fixes
-
-- Fixed issue where some F&O instruments showed incorrect lot sizes
-- Resolved WebSocket disconnection issues during high market volatility
-- Fixed timezone handling in historical data API
-- Corrected margin calculation for spread orders
-
-### 📚 Documentation
-
-- Added comprehensive [FAQ page](https://api-docs.indstocks.com/faq/)
-- New [Getting Started tutorial](https://api-docs.indstocks.com/getting-started/)
-- Enhanced [WebSocket guide](https://api-docs.indstocks.com/Websockets/) with reconnection examples
-
----
-
-## [v1.2.5] - 2024-10-28
-
-### 🚀 Improvements
-
-- **Faster market quotes**: Reduced latency for `/market/quotes` endpoint by 40%
-- **Batch order support**: Place up to 50 orders in a single API call
-- **Enhanced portfolio API**: Added real-time P&L calculations
-- **Better GTT order handling**: Improved trigger accuracy for Smart Orders
-
-### 🐛 Bug Fixes
-
-- Fixed race condition in order modification during high-frequency trading
-- Resolved issue with incorrect available margin calculation
-- Fixed WebSocket subscription limits not being enforced correctly
-
-### 📚 Documentation
-
-- Added Python SDK examples to all major endpoints
-- Updated [Order Management guide](https://api-docs.indstocks.com/normal_orders/) with batch order examples
-- Improved [Error Handling documentation](https://api-docs.indstocks.com/errors/)
-
----
-
-## [v1.2.0] - 2024-09-10
-
-### ✨ New Features
-
-- **Smart Orders (GTT)**: Launch of advanced Good Till Triggered orders
-- **OCO Orders**: One-Cancels-Other order type for automated risk management
-- **Option Chain API**: Get complete option chain data with Greeks
-- **Funds API Enhancement**: Added detailed fund breakdown and utilization
-
-### 🚀 Improvements
-
-- **Infrastructure upgrades**: Improved reliability and performance
-- **Enhanced security**: Added rate limiting and DDoS protection
-- **Better WebSocket performance**: Improved message delivery
-- **Improved margin API**: Real-time margin requirements for complex orders
-
-### 🐛 Bug Fixes
-
-- Fixed issue with historical data gaps during market holidays
-- Resolved incorrect LTP for illiquid securities
-- Fixed order book pagination issues
-
----
-
-## [v1.1.5] - 2024-07-22
-
-### 🚀 Improvements
-
-- **Order execution speed**: Improved performance
-- **Historical data**: Added 5-minute candle intervals
-- **Position tracking**: Enhanced positions API with average price calculations
-- **Better error codes**: More specific error types for easier debugging
-
-### 🐛 Bug Fixes
-
-- Fixed timezone issues in historical data responses
-- Resolved WebSocket authentication errors on reconnection
-- Fixed incorrect holdings valuation for bonus shares
-
-### 📚 Documentation
-
-- Added JavaScript SDK examples
-- Improved [API Conventions documentation](https://api-docs.indstocks.com/conventions/)
-- New examples for [Portfolio API](https://api-docs.indstocks.com/portfolio_funds/)
-
----
-
-## [v1.1.0] - 2024-06-05
-
-### ✨ New Features
-
-- **WebSocket API**: Real-time market data streaming with <5ms latency
-- **Order Updates Stream**: Real-time order and trade confirmations via WebSocket
-- **Historical Data API**: Access 10+ years of OHLCV data
-- **Margin Calculator**: Pre-calculate margin requirements before placing orders
-
-### 🚀 Improvements
-
-- **API performance**: 50% reduction in average response time
-- **Better authentication**: More detailed token validation errors
-- **Enhanced holdings API**: Added average price and P&L fields
-- **Improved instruments data**: Daily updates with corporate actions
-
-### 🐛 Bug Fixes
-
-- Fixed order rejection for AMO (After Market Orders)
-- Resolved issues with special characters in instrument names
-- Fixed incorrect order status in edge cases
-
----
-
-## [v1.0.8] - 2024-04-15
-
-### 🚀 Improvements
-
-- **Order placement**: Reduced order execution time by 25%
-- **Market data**: Added market depth (Level 2) data
-- **Portfolio API**: Enhanced with realized P&L tracking
-- **Better logging**: Improved request tracking for debugging
-
-### 🐛 Bug Fixes
-
-- Fixed issue with duplicate order IDs in rare cases
-- Resolved rate limiting false positives
-- Fixed incorrect exchange segment mapping for some instruments
-
-### 📚 Documentation
-
-- Added comprehensive [Margin Calculation guide](https://api-docs.indstocks.com/margin_calculation/)
-- New examples for basket orders
-- Improved [Market Quotes documentation](https://api-docs.indstocks.com/MarketQuote/)
-
----
-
-## [v1.0.5] - 2024-02-20
-
-### ✨ New Features
-
-- **Positions API**: Track open derivative positions with real-time P&L
-- **Trade History**: New endpoint to retrieve detailed trade confirmations
-- **Instrument Master**: Daily CSV file with all tradeable instruments
-
-### 🚀 Improvements
-
-- **Better error handling**: More descriptive error messages
-- **Enhanced order types**: Added support for bracket orders
-- **Improved performance**: Faster response times across all endpoints
-- **Security enhancements**: Additional validation for order parameters
-
-### 🐛 Bug Fixes
-
-- Fixed issues with limit orders at circuit limits
-- Resolved timeout errors during market open
-- Fixed incorrect quantity validation for F&O orders
-
----
-
-## [v1.0.0] - 2024-01-10
-
-### 🎉 Initial Release
-
-The INDstocks Trading API v1 is now live!
-
-#### Core Features
-
-- **Order Management**: Place, modify, and cancel orders across all segments
-- **Market Data**: Real-time quotes, LTP, and market depth
-- **Portfolio Management**: Holdings, positions, and funds APIs
-- **Authentication**: Simple token-based authentication
-- **User Profile**: Access account details and preferences
-
-#### Supported Segments
-
-- Equity (NSE, BSE)
-- Derivatives (Futures & Options)
-- Currency derivatives
-- Commodity derivatives
-
-#### Technical Specs
-
-- **Rate limits**: 10 orders/sec, 100 API calls/sec
-- **API access**: Free
-
----
-
-## Version History Summary
-
-| Version | Release Date | Highlights |
-|---------|-------------|------------|
-| v1.3.0 | 2024-12-15 | Option Greeks, Multi-leg orders, 15yr historical data |
-| v1.2.5 | 2024-10-28 | Batch orders, Faster quotes, Enhanced GTT |
-| v1.2.0 | 2024-09-10 | Smart Orders (GTT), OCO orders |
-| v1.1.5 | 2024-07-22 | Enhanced execution, 5-min candles |
-| v1.1.0 | 2024-06-05 | WebSocket API, Historical data, Margin calculator |
-| v1.0.8 | 2024-04-15 | Market depth, Enhanced portfolio |
-| v1.0.5 | 2024-02-20 | Positions API, Trade history |
-| v1.0.0 | 2024-01-10 | Initial release |
-
----
-
-## Upcoming Features
-
-We're constantly improving the INDstocks API. Here's what's coming next:
-
-### 🔜 Q1 2025
-
-- [ ] **Algo Trading Framework**: Built-in strategy templates and backtesting
-- [ ] **Advanced Analytics**: Pre-built indicators and signals
-- [ ] **Mobile SDKs**: Native iOS and Android SDKs
-- [ ] **GraphQL API**: Alternative to REST for complex queries
-
-### 🔮 Q2 2025
-
-- [ ] **Webhooks**: Push notifications for order updates and triggers
-- [ ] **Enhanced Greeks**: Historical Greeks data and implied volatility
-- [ ] **Social Trading**: Copy trading and strategy sharing
-
-### 💡 Roadmap
-
-Want to influence our roadmap? Share your feature requests at api-feedback@indstocks.com
-
----
-
-## Deprecation Policy
-
-We're committed to backwards compatibility:
-
-- **Deprecation notice**: 12 months advance warning
-- **Support period**: 24 months for deprecated features
-- **Migration guides**: Provided for all breaking changes
-- **API versioning**: Semantic versioning (MAJOR.MINOR.PATCH)
-
-### Currently Deprecated
-
-*No features are currently deprecated.*
-
----
-
-## Migration Guides
-
-### Migrating from v1.2.x to v1.3.x
-
-No breaking changes. All v1.2.x code is compatible with v1.3.x.
-
-**New optional fields:**
-- Added `greeks` field to option quotes (opt-in via query parameter)
-- Added `strategy_type` field for multi-leg orders
-
-### Migrating from v1.1.x to v1.2.x
-
-No breaking changes. All v1.1.x code is compatible with v1.2.x.
-
-**Enhanced features:**
-- GTT orders now support multiple triggers (backwards compatible)
-- Historical data now includes adjusted prices (new field, old field unchanged)
-
----
-
-## Release Notes Format
-
-Each release includes:
-
-- **✨ New Features**: Brand new capabilities
-- **🚀 Improvements**: Enhancements to existing features
-- **🐛 Bug Fixes**: Resolved issues and bugs
-- **📚 Documentation**: Documentation updates and additions
-- **⚠️ Breaking Changes**: Incompatible changes (rare, with migration guide)
-- **🔒 Security**: Security-related improvements
+> `[pulse_tester]` Cut: the v1.0.0–v1.3.0 entries (2024), the version summary, "Upcoming Features", the deprecation policy and the migration guides. They describe features that don't exist in the API (an Option Greeks API, 15 years of history, batches of 50 orders, multi-leg orders, `X-RateLimit-*` headers), and the option chain they claim shipped in 2024 is listed above as unreleased.
 
 ---
 
@@ -6573,7 +6255,7 @@ components:
                 items:
                   type: object
                   properties:
-                    ts: { type: integer, description: "Candle OPEN time, Unix epoch seconds (IST). The candle covers [ts, ts + interval)." }
+                    ts: { type: integer, description: "Candle OPEN time, Unix epoch seconds. The candle covers [ts, ts + interval). [pulse_tester, verified] Daily candles are stamped at midnight UTC of the trading day, not IST." }
                     o: { type: number }
                     h: { type: number }
                     l: { type: number }

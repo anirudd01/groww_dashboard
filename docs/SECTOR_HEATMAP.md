@@ -1,8 +1,12 @@
 # Live Sector Heatmap Dashboard
 
-**Entry point:** [`sector_heatmap_dashboard.py`](../sector_heatmap_dashboard.py)
-**Status:** Phases 1-4 complete - live on the **Dhan** websocket, with
-Dhan REST, Groww websocket and Groww REST behind it as fallbacks.
+**Entry point:** [`pulse_dashboard.py`](../pulse_dashboard.py) - a top navbar with
+**Nifty 50 Sectors**, **NSE Sectoral Indices**, **F&O Nifty 50** and **F&O All Stocks**
+([`FNO_MOVERS.md`](FNO_MOVERS.md)), **Treemap: Nifty 50 Sectors** and **Treemap: NSE Indices**. The page functions live in
+[`apps/sector_heatmap_dashboard.py`](../apps/sector_heatmap_dashboard.py).
+**Status:** Phases 1-4 complete - live on the **Dhan** websocket by default,
+with **INDmoney** and Groww behind it as fallbacks. Any one broker can be
+pinned from the sidebar for side-by-side comparison.
 **Next:** see [`ROADMAP.md`](ROADMAP.md).
 
 ---
@@ -37,22 +41,17 @@ displays objectively calculated market data.
 
 ```bash
 pip install -r requirements.txt          # adds `websockets` for the Dhan feed
-streamlit run sector_heatmap_dashboard.py
+streamlit run pulse_dashboard.py
 ```
 
-Or use the Windows launchers, which pin port 8502 so it can run alongside the
-other dashboards:
-
-```
-run_sector_heatmap.bat
-.\run_sector_heatmap.ps1
-```
+To run it alongside the other dashboards, give it its own port with `--server.port 8502`.
 
 Verify the data pipeline and live feed without starting Streamlit:
 
 ```bash
 python scripts/check_heatmap_universe.py --seconds 20
 python scripts/check_heatmap_universe.py --provider dhan --seconds 20   # one broker
+python scripts/check_heatmap_universe.py --provider indmoney --board indices
 ```
 
 It exits `OK` only when the **websocket** delivered ticks, and warns explicitly
@@ -73,13 +72,29 @@ The dashboard is broker-agnostic. Brokers sit behind a small interface in
 
 | Provider | Status | Credentials |
 |---|---|---|
-| **Dhan** (DhanHQ v2) | Implemented, **preferred** — websocket verified live | `DHAN_ACCESS_TOKEN` only |
+| **Dhan** (DhanHQ v2) | Implemented, **preferred** — websocket verified live | `DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET` (token minted from TOTP) |
+| **INDmoney** (INDstocks API) | Implemented, first fallback — websocket verified live on both boards; Nifty Oil & Gas not served. See [`api/INDMONEY_API.md`](api/INDMONEY_API.md) | `IND_MONEY_CLIENT_ID`, `IND_MONEY_MPIN`, `IND_MONEY_TOTP_SECRET` (token minted from TOTP) |
 | **Groww** | Implemented, fallback — REST and websocket both work; the socket has its own quirks, see [`api/GROWW_API_FEED.md`](api/GROWW_API_FEED.md#websocket-behaviour-in-practice-observed) | existing `GROWW_*` vars |
-| Kite (Zerodha) | Planned — named in config, skipped with a log line | — |
+| **Kite** (Zerodha Kite Connect) | Implemented, last in *Auto*. Read-only, no SDK; REST, candles and the binary socket verified live on both boards (50/50, 17/17). Needs the paid Kite Connect plan and a browser login every morning. See [`api/KITE_API.md`](api/KITE_API.md) | `KITE_API_KEY` + `KITE_API_SECRET`, then `python scripts/kite_login.py` daily |
 
-Preference order comes from `PULSE_MARKET_PROVIDERS` (default `dhan,groww`).
-The service walks the list and adopts the **first broker that authenticates and
-resolves instruments**.
+Preference order comes from `PULSE_MARKET_PROVIDERS` (default
+`dhan,indmoney,groww,kite`). The service walks the list and adopts the **first broker
+that authenticates and resolves instruments**. `indstocks` is accepted as an
+alias for `indmoney`, and `zerodha` for `kite`.
+
+### Switching broker from the sidebar
+
+The sidebar (shown on the heatmap and treemap pages, not on the F&O pages) has a **Data provider** switch that offers **Auto** — the configured order
+above, with failover — or any single implemented broker. Choosing one broker
+**pins** the board to it: no failover, so a comparison between two brokers can
+never quietly show a third one's numbers. The status bar names the broker in
+use either way.
+
+Switching stops that board's previous feed before starting the new one. Brokers
+cap concurrent sockets (INDmoney at 3, Dhan at 5), and a feed nobody is watching
+would otherwise hold one open. The services are process-wide, so a switch
+applies to every open browser tab. `PULSE_HEATMAP_PROVIDER` sets the sidebar's
+starting choice (default `auto`).
 
 ### Recovery before failover
 
@@ -128,21 +143,28 @@ another broker's name.
 Failover is announced in the UI. The effective chain today is:
 
 ```
-Dhan websocket  →  Dhan REST polling  →  Groww websocket  →  Groww REST polling
+Dhan websocket → Dhan REST → INDmoney websocket → INDmoney REST → Groww websocket → Groww REST
 ```
 
 Within one broker, REST polling covers the websocket; across brokers, the next
 provider in the list takes over. Every step is labelled in the status bar, so
-the screen always states which of the four is actually feeding it.
+the screen always states which one is actually feeding it.
 
 ```bash
-PULSE_MARKET_PROVIDERS=dhan,groww     # default: Dhan first, Groww as fallback
-PULSE_MARKET_PROVIDERS=groww          # force Groww only
+PULSE_MARKET_PROVIDERS=dhan,indmoney,groww,kite   # default
+PULSE_MARKET_PROVIDERS=kite                  # Kite only (after scripts/kite_login.py)
+PULSE_MARKET_PROVIDERS=indmoney              # INDmoney only
+PULSE_MARKET_PROVIDERS=groww                 # Groww only
 ```
 
-Adding a broker is two files: implement `MarketDataProvider` + `FeedHandle`, add
-one line to `PROVIDER_FACTORIES`. Nothing above the provider layer changes —
-aggregation and UI only ever see canonical NSE symbols and floats.
+Adding a broker is three pieces: implement `MarketDataProvider` +
+`FeedHandle`, add one line to `PROVIDER_FACTORIES`, and — if its ids differ from
+the NSE token — a generator script writing `data/<broker>_instruments.json`.
+Nothing above the provider layer changes: aggregation and UI only ever see
+canonical NSE symbols and floats, and the sidebar lists the new broker by
+itself. Daily-candle previous-close selection is shared in
+[`market/providers/candles.py`](../market/providers/candles.py), so a new
+broker only converts its candle format.
 
 ### Credentials
 
@@ -150,22 +172,34 @@ Groww reuses the project's existing `GrowwAPIClient` singleton in
 [`groww_api/client.py`](../groww_api/client.py) — there is no second auth path
 for it.
 
-**Dhan needs only `DHAN_ACCESS_TOKEN`.** Dhan embeds `dhanClientId` in the
-access token, so the provider decodes it and `DHAN_CLIENT_ID` is an optional
-override. A non-numeric value (such as a leftover `your_dhan_client_id`
-placeholder) is ignored with a warning — otherwise it would mask the real error
-behind a confusing "808 Client ID invalid".
+**Dhan tokens are generated, never configured.** `.env` holds `DHAN_CLIENT_ID`,
+`DHAN_PIN` and `DHAN_TOTP_SECRET`. [`dhan_session.py`](../market/providers/dhan_session.py)
+handles the token from there:
+- It mints a 24-hour access token from TOTP and saves it to the shared database (`data/market.db`, git-ignored).
+- Every process shares that one token. A lock (a lease row in the database) means two boards starting together make one token between them.
+- The token is replaced when it has less than an hour left, or at once if Dhan rejects it in `connect()`.
+- A `DHAN_ACCESS_TOKEN` still set in the environment is ignored, with a warning.
 
-Dhan access tokens last ~24h. TOTP is only needed to *mint* tokens
-programmatically; a token generated from the Dhan web console works on its own,
-so the dashboard never prompts for an authenticator code. The provider logs how
-long the token remains valid and fails with a clear message once it expires.
+The client id in the token is authoritative. A non-numeric `DHAN_CLIENT_ID`
+(such as a leftover `your_dhan_client_id` placeholder) is ignored with a
+warning. Otherwise it would mask the real error behind a confusing "808 Client
+ID invalid". The provider logs how long the token remains valid.
 
 **Dhan requires the paid Data API plan.** Market quotes *and* the live feed both
 need it; without it every market-data call returns `806 Data APIs not
 Subscribed` while trading/profile endpoints keep working. The provider checks
 `/v2/profile` first and reports `dataPlan` explicitly rather than surfacing a
 bare HTTP 401.
+
+**INDmoney tokens are generated too.** `.env` holds `IND_MONEY_CLIENT_ID`,
+`IND_MONEY_MPIN` and `IND_MONEY_TOTP_SECRET`, and
+[`indmoney_session.py`](../market/providers/indmoney_session.py) mints the token
+(valid to 07:00 IST) into the shared database (`data/market.db`, git-ignored), shared the
+same way as Dhan's. The difference: a new INDmoney token **revokes** the old
+one, so it is minted only when none is usable or INDmoney rejects the saved one
+(a 401, or a 403 about the token - never a `UserException`). A
+`IND_MONEY_ACCESS_TOKEN` still in the environment is ignored, with a warning.
+The data is free; the token is sent raw in the `Authorization` header.
 
 No credential is logged or stored by any module added for this dashboard.
 
@@ -198,7 +232,7 @@ No credential is logged or stored by any module added for this dashboard.
 | Models | `market/models.py` | `StockMarketData`, `SectorMarketData`, `FeedStatus` |
 | Feed | `market/live_feed.py` | `LiveMarketDataService` — the background worker |
 | Calc | `market/sector_aggregation.py` | Percentage change, aggregation, ranking, highlights |
-| Weights | `market/weights.py` | Loads the offline weights file (never fetches) |
+| Weights | `market/weights.py` | Loads the stored weights (never fetches) |
 | Session | `market/market_hours.py` | NSE session classification |
 | UI | `ui/sector_tiles.py` | Clickable coloured tile grid (default heatmap) |
 | UI | `ui/sector_heatmap.py` | Plotly treemap (display-only alternative) |
@@ -206,7 +240,7 @@ No credential is logged or stored by any module added for this dashboard.
 | UI | `ui/sector_detail.py` | Constituent table construction + styling |
 | UI | `ui/sector_highlights.py` | Leading / lagging sector tables |
 | UI | `ui/index_board.py` | Index tiles tooltip, summary line and index table |
-| App | `sector_heatmap_dashboard.py` | Streamlit wiring only |
+| App | `pulse_dashboard.py`, `apps/sector_heatmap_dashboard.py` | Navbar wiring; page functions (`page_sectors`, `page_indices`, `page_treemap_sectors`, `page_treemap_indices`) |
 
 The Groww API is never called from rendering code, and no sector maths happens
 inside Streamlit callbacks.
@@ -317,7 +351,7 @@ turns it into a `Universe`. All Nifty 50 members are `exchange=NSE`,
 
 **Exchange tokens are never hardcoded.** Each provider resolves its own
 instrument ids from that broker's instrument master — for Dhan via the
-generated file described below, for Groww via `get_all_instruments()`. Nothing
+stored instrument ids described below, for Groww via `get_all_instruments()`. Nothing
 above the provider layer ever sees a broker-specific id; aggregation and the UI
 work only in canonical NSE symbols.
 
@@ -325,7 +359,7 @@ To update after an NSE reshuffle, edit the dict — nothing else changes. Run
 `python scripts/check_heatmap_universe.py` afterwards; it reports any symbol
 that no longer resolves.
 
-### Instrument ids come from a generated file, not a download
+### Instrument ids are stored, not downloaded
 
 Dhan publishes ids only as `api-scrip-master-detailed.csv`: **35 MB, 206,659
 rows, served uncompressed**, containing every F&O contract on every exchange.
@@ -340,16 +374,16 @@ Of those rows the dashboard uses about sixty, and two fields from each. So the
 download is a **script**, not a startup step:
 
 ```bash
-python scripts/fetch_instrument_master.py              # writes data/dhan_instruments.json
+python scripts/fetch_instrument_master.py              # writes data/market.db (dhan_instruments)
 python scripts/fetch_instrument_master.py --verbose    # log every symbol
 python scripts/fetch_instrument_master.py --keep-raw   # also keep Dhan's CSV
 python scripts/fetch_instrument_master.py --use-cached # reuse today's CSV
 ```
 
 It streams the CSV with `csv.DictReader`, keeps only the symbols in the
-configured universes, and writes a **12 KB** JSON that the dashboard reads at
-startup in under a millisecond. Same contract as the weights file: generated
-offline, committed, never fetched live.
+configured universes, and stores about sixty rows in the shared database
+(`data/market.db`) that the dashboard reads at startup in under a millisecond.
+Same contract as the weights: generated offline, stored, never fetched live.
 
 **When to re-run it:**
 
@@ -383,6 +417,20 @@ reconstitution shows up as a handful of changed lines in a commit.
 
 With `--keep-raw`, Dhan's unedited response is saved under `data/instruments/`
 (git-ignored) so a re-run the same day can skip the download.
+
+**INDmoney has its own file**, because a security id only means something to
+the broker that issued it:
+
+```bash
+python scripts/fetch_indmoney_instruments.py   # writes data/market.db (indmoney_instruments)
+```
+
+Same contract and same shape, with two differences: INDmoney's instrument lists
+need an access token, which the script takes from the shared INDmoney session (Dhan's master is public), and they are small — a
+3 MB equity CSV and a ~130-row index file. Cash-equity ids come out identical to
+Dhan's (both are the NSE token), but index ids are INDmoney's own and its index
+names differ, so the script carries an `INDEX_NAMES` table translating
+`BANKNIFTY` → `BANK NIFTY` and so on. Re-run it on the same triggers as Dhan's.
 
 ### Configurable universe (Phase 3 readiness)
 
@@ -442,7 +490,7 @@ docs describes its ScanX screener, not a data endpoint.
 So weights come from a file, generated offline:
 
 ```bash
-python scripts/fetch_index_weights.py            # writes data/index_weights.json
+python scripts/fetch_index_weights.py            # writes data/market.db (index_weights)
 python scripts/fetch_index_weights.py --verbose  # one line per symbol
 ```
 
@@ -554,7 +602,7 @@ Turn them off with `PULSE_HEATMAP_HIGHLIGHT_TABLES=false`; cap the rows with
 
 ## The sectoral index board
 
-A separate page (sidebar: **NSE Sectoral Indices**) showing real NSE index
+A separate page (navbar: **NSE Sectoral Indices**) showing real NSE index
 values. Nothing on it is aggregated: each tile is one index measured against its
 own previous close.
 
@@ -584,8 +632,10 @@ instrument master at startup and are never hardcoded. Verify with:
 python scripts/check_heatmap_universe.py --board indices --provider dhan
 ```
 
-Below the tiles, a table lists every index with LTP, change, previous close,
-open and the day's range.
+Below the tiles, two tables list every index with LTP, change, previous close,
+open and the day's range: **Gainers** (strongest first) above **Losers**
+(biggest fall first), so neither needs a long scroll. They share one colour
+scale. An index that is flat or has no price yet is in neither table.
 
 ### Where the data comes from
 
@@ -630,17 +680,20 @@ the sector it is actually showing.
 
 ### Providers
 
-The index board is Dhan-only today. The Groww adapter reports index symbols as
-**unresolved** rather than raising, so the service fails over to a broker that
-does serve them instead of the whole board erroring out. If Dhan is unavailable,
-the index board reports no usable provider while the Nifty 50 board keeps
-working on Groww.
+Dhan and INDmoney both serve the index board; Groww does not. INDmoney uses
+its own index ids (`NIDX_40000001` for Nifty 50) and prices 16 of the 17
+indices — **Nifty Oil & Gas is listed but not served**, so it shows as a data
+gap there (details in [`api/INDMONEY_API.md`](api/INDMONEY_API.md)). The Groww
+adapter reports index symbols as **unresolved** rather than raising, so the
+service fails over to a broker that does serve them instead of the whole board
+erroring out.
 
 ### Two boards, two feeds
 
 Each board runs its own `LiveMarketDataService` with its own websocket. Dhan
-allows 5 concurrent connections per client id, so two is comfortable, and the
-feed for a board you have not opened is never started.
+allows 5 concurrent connections per client id and INDmoney 3 per user, so two
+is comfortable, and the feed for a board you have not opened is never started.
+On INDmoney, both boards plus a `check_heatmap_universe.py` run use all three.
 
 Dhan's quote rate limit (1 request/second) applies **per client id, not per
 connection**, so the throttle is process-wide rather than per provider
@@ -742,8 +795,8 @@ The tiles keep everything the treemap provided:
 | Dynamic ordering | Tiles render in the order passed in |
 | Constituent counts | Tooltip on hover |
 
-The Plotly treemap is still available from the sidebar as **Treemap (display
-only)**, with the selectbox fallback for navigation. Grid width is configurable
+The Plotly treemap is two navbar pages, **Treemap: Nifty 50 Sectors** and **Treemap: NSE Indices**
+(display only, no click-through). Use the tile pages to drill down. Grid width is configurable
 via `PULSE_HEATMAP_COLUMNS` (default 4).
 
 Returning uses "← Back to Sector Heatmap". **The live feed keeps running
@@ -1007,15 +1060,20 @@ All optional; every one has a working default. Put them in `.env`.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DHAN_ACCESS_TOKEN` | — | Dhan access token (client id is read from it) |
-| `DHAN_CLIENT_ID` | from token | Optional override; normally leave unset |
-| `PULSE_MARKET_PROVIDERS` | `dhan,groww` | Broker preference order |
+| `DHAN_CLIENT_ID` | — | Dhan client id (10 digits); needed to mint tokens |
+| `DHAN_PIN` | — | 6-digit Dhan PIN (`DHAN_MPIN` also accepted) |
+| `DHAN_TOTP_SECRET` | — | Base32 secret from Setup TOTP (`DHAN_TOPT_SECRET` also accepted) |
+| `IND_MONEY_CLIENT_ID` | — | INDmoney Client ID shown after TOTP setup (sent as `x-api-key`) |
+| `IND_MONEY_MPIN` | — | INDmoney account MPIN |
+| `IND_MONEY_TOTP_SECRET` | — | Base32 Setup Key from Setup TOTP |
+| `PULSE_MARKET_PROVIDERS` | `dhan,indmoney,groww,kite` | Broker preference order for **Auto** |
+| `PULSE_HEATMAP_PROVIDER` | `auto` | The sidebar's starting provider choice: `auto` or one broker name |
 | `PULSE_HEATMAP_UNIVERSE` | `NIFTY50` | Which universe to track |
 | `PULSE_HEATMAP_UI_REFRESH_SECONDS` | `1.0` | UI fragment refresh interval |
 | `PULSE_HEATMAP_SECTOR_ORDER` | `performance` | `performance` or `alphabetical` |
 | `PULSE_HEATMAP_COLUMNS` | `4` | Tiles per row |
 | `PULSE_HEATMAP_AGGREGATION` | `equal_weight` | `equal_weight` or `market_cap` |
-| `PULSE_HEATMAP_WEIGHTS_FILE` | `data/index_weights.json` | Where weights are read from |
+| `PULSE_HEATMAP_WEIGHTS_DB` | _(blank)_ | Database to read the stored weights from; blank is the shared `data/market.db` |
 | `PULSE_HEATMAP_HIGHLIGHT_TABLES` | `true` | Show the leaders/laggards tables |
 | `PULSE_HEATMAP_HIGHLIGHT_LIMIT` | `0` | Max rows per table (0 = all) |
 | `PULSE_HEATMAP_MIN_COLOUR_SCALE_PCT` | `0.75` | Colour-scale floor |
@@ -1030,7 +1088,7 @@ All optional; every one has a working default. Put them in `.env`.
 | `PULSE_HEATMAP_REST_TIMEOUT_SECONDS` | `10` | HTTP timeout for price calls |
 | `PULSE_HEATMAP_PREV_CLOSE_REFRESH_SECONDS` | `900` | Previous-close refresh interval |
 | `PULSE_HEATMAP_HISTORICAL_PREV_CLOSE` | `true` | Outside market hours, take the previous close from daily candles instead of the OHLC field |
-| `PULSE_INSTRUMENTS_FILE` | `data/dhan_instruments.json` | Generated instrument-id file the dashboard reads at startup |
+| `PULSE_STATE_DB` | `data/market.db` | The SQLite database holding the saved sessions (Dhan, INDmoney, Kite), the clock offset and the generated instrument ids, weights and F&O list |
 | `PULSE_LOG_LEVEL` | `INFO` | Log level |
 
 ---
@@ -1055,18 +1113,20 @@ All optional; every one has a working default. Put them in `.env`.
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -t .     # 273 tests, no extra dependencies
+python -m unittest discover -s tests -t .     # 403 tests, no extra dependencies
 pytest tests                                   # also works if pytest is installed
 ```
 
 | File | Tests | Covers |
 |---|---|---|
 | `tests/test_sector_heatmap.py` | 54 | Percentage change (positive, negative, zero, missing, zero previous close, non-numeric), equal-weight aggregation, partial/missing data, sector and constituent ranking, stale-feed detection, market-hours classification, **which session the latest price belongs to** (mid-session, after the close, pre-market, weekend, other timezones), universe configuration, treemap construction (constant tile area, colour driven by change, input ordering, no-data sectors) |
-| `tests/test_providers.py` | 67 | Provider interface and registry (unknown/planned names skipped, not fatal), Dhan JWT client-id extraction and placeholder rejection, Dhan binary packet decoding against handcrafted frames (ticker, **quote**, previous close, OI, disconnect, concatenated and truncated packets), error-payload shapes, instrument resolution from the generated id file (segment isolation, a missing file, and that resolution never touches the network), **daily-candle previous-close selection** (stepping over today's candle, an unpublished candle, weekends, holiday gaps, short series, zero closes, unreadable or mismatched timestamps) and segment/instrument codes |
+| `tests/test_providers.py` | 78 | Provider interface and registry (unknown names skipped, not fatal; `zerodha` resolving to Kite), Dhan JWT client-id extraction and placeholder rejection, Dhan binary packet decoding against handcrafted frames (ticker, **quote**, previous close, OI, disconnect, concatenated and truncated packets), error-payload shapes, instrument resolution from the generated id file (segment isolation, a missing file, and that resolution never touches the network), **daily-candle previous-close selection** (stepping over today's candle, an unpublished candle, weekends, holiday gaps, short series, zero closes, unreadable or mismatched timestamps) and segment/instrument codes |
+| `tests/test_indmoney.py` | 42 | INDmoney provider: `NSE_`/`NIDX_` code building, double-encoded frame decoding and heartbeat noise, quote-mode parsing (`close` as the live price, index volume 0 as unknown), the four error-body shapes, JWT expiry, resolution from the generated file without network, REST mapping (a rejected batch, the retry for a partial first answer, 429 retry, five-per-call candle batching, candle previous-close selection), registry aliases, and the generator's index-name table and positional index-file parsing |
+| `tests/test_kite.py` | 48 | Kite provider: login checksum and URL, `request_token` extraction from a pasted redirect URL, **06:00 IST token expiry** (daytime, pre-dawn and exactly-06:00 logins), the session file (round trip, the secret never written, another key's or an expired session ignored, git-ignored), token exchange and error shapes, `token api_key:access_token` signing, binary frame splitting (heartbeat, truncation), LTP / quote / **index** packet layouts, feed-handle state, ISO daily candles, index quoting by Kite name (`NSE:NIFTY BANK`), repeated `i=` quote params, the checked-in id file, the generator, and a **read-only guard** asserting no order endpoint appears in the Kite code |
 | `tests/test_ui_colours.py` | 29 | Colour ramp ordering (stronger move = darker shade), symmetry around zero, no-data staying neutral, clamping, text contrast, tile keys/labels/CSS, and the styled constituent table |
 | `tests/test_index_board.py` | 35 | Index mapping integrity (unique symbols and labels, every drill-down link resolving to a real sector, benchmarks carrying no sector), the index universe being one group per index so nothing is averaged together, segment-code mapping, tooltips, the summary line and the index table |
-| `tests/test_instruments.py` | 25 | The generated instrument-id file: loader behaviour on a missing, unparseable, empty or partly broken file, blank and `nan` ids, unknown segments, staleness against the reshuffle calendar, that the checked-in file resolves every tracked symbol with a numeric id, and the generator's filtering (the futures row not shadowing the equity, the BSE listing not being used, an index not resolving in the cash segment, unresolved symbols reported rather than invented, and a round trip back through the loader) |
-| `tests/test_weighting_and_breadth.py` | 63 | Weighted means, fallback and coverage reporting when weights are missing, day-range position (including degenerate and zero-filled ranges), breadth counts, leader/laggard selection and ordering, highlight-table rendering, the weights file loader, the previous-close refresh window, and **which source supplies the previous close** (OHLC in session, daily candles outside it, never a silent fallback between them) |
+| `tests/test_instruments.py` | 25 | The stored instrument ids: loader behaviour on a missing, corrupt, empty or partly broken set, blank and `nan` ids, unknown segments, staleness against the reshuffle calendar, that the stored ids resolve every tracked symbol with a numeric id, and the generator's filtering (the futures row not shadowing the equity, the BSE listing not being used, an index not resolving in the cash segment, unresolved symbols reported rather than invented, and a round trip back through the loader) |
+| `tests/test_weighting_and_breadth.py` | 82 | Weighted means, fallback and coverage reporting when weights are missing, day-range position (including degenerate and zero-filled ranges), breadth counts, leader/laggard selection and ordering, highlight-table rendering, the stored-weights loader, the previous-close refresh window, and **which source supplies the previous close** (OHLC in session, daily candles outside it, never a silent fallback between them) |
 
 The tests are deliberately confined to non-UI logic — no Streamlit, no network,
 no broker credentials — so the suite runs in under a second offline.
@@ -1096,7 +1156,7 @@ Seams that already exist for later work:
 | Later capability | Seam |
 |---|---|
 | Another weighting scheme | `AGGREGATION_STRATEGIES` in `market/sector_aggregation.py` |
-| Kite (Zerodha) as a third broker | `PROVIDER_FACTORIES` + `PLANNED_PROVIDERS` in `market/providers/registry.py` |
+| A fifth broker | `PROVIDER_FACTORIES` in `market/providers/registry.py`; `market/providers/kite.py` is the most recent worked example (and the only one with a browser login) |
 | Nifty Next 50 and other universes | `NIFTY_NEXT_50_SECTORS` in `market/sector_mapping.py`, selected by `PULSE_HEATMAP_UNIVERSE` |
 | A different price source per screen | `MarketDataProvider` / `FeedHandle` in `market/providers/base.py` |
 | Historical previous close on another broker | `get_prior_session_close` in `market/providers/base.py` — optional, so a broker without one degrades rather than breaks |
