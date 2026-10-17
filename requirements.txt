@@ -1,8 +1,8 @@
-growwapi>=0.1.0
-streamlit>=1.35.0
-pandas>=2.0.0
-plotly>=5.20.0
-python-dotenv>=1.0.0
-pyotp>=2.9.0
-requests>=2.31.0
-websockets>=12.0
+growwapi==1.5.0
+streamlit==1.66.0
+pandas==2.3.3
+plotly==7.1.0
+python-dotenv==1.2.4
+pyotp==2.10.0
+requests==2.34.2
+websockets==17.2

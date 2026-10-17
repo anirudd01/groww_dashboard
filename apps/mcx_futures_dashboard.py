@@ -4,10 +4,10 @@ One row per commodity (gold, silver, crude, natural gas, base metals, agri): las
 against the previous close, the day's range, volume and open interest. Click a row to chart it as
 5-minute, 15-minute, hourly or daily candles with open interest underneath.
 
-Data from Dhan, falling back to Kite when Dhan fails (market/mcx_futures.py says why that order):
+Data from Dhan, falling back to Kite, then INDmoney (market/mcx_futures.py says why that order):
 one quote call for every live contract, then one candle call for the charted one. The contract
-list is read from data/market.db, which ``python scripts/dhan.py --master`` fills; run it
-about monthly.
+list is read from data/market.db, which ``python scripts/dhan.py --master`` fills, and
+``python scripts/indmoney.py --master`` adds which contracts INDmoney lists; run both about monthly.
 
 Visualisation only - it places no orders and generates no signals.
 
@@ -69,18 +69,22 @@ COLUMNS = {
 # -- data --------------------------------------------------------------------
 
 
-LABELS = {"dhan": "Dhan", "kite": "Kite"}
+LABELS = {"dhan": "Dhan", "kite": "Kite", "indmoney": "INDmoney"}
 NOT_CONFIGURED = {
     "dhan": "Dhan is not configured - set DHAN_CLIENT_ID, DHAN_PIN and DHAN_TOTP_SECRET in .env.",
     "kite": "No Kite session for today - run 'python scripts/kite_login.py'.",
+    "indmoney": "INDmoney is not configured - set IND_MONEY_CLIENT_ID, IND_MONEY_MPIN and "
+                "IND_MONEY_TOTP_SECRET in .env.",
 }
 
 
 @st.cache_resource(ttl="1h", show_spinner=False)
 def provider(name: str):
-    """A connected Dhan or Kite provider. Raises with the reason it could not be (and so is not cached)."""
+    """A connected Dhan, Kite or INDmoney provider. Raises with the reason it could not be (and so is not cached)."""
     if name == "kite":
         from market.providers.kite import KiteProvider as Provider
+    elif name == "indmoney":
+        from market.providers.indmoney import IndMoneyProvider as Provider
     else:
         from market.providers.dhan import DhanProvider as Provider
 
@@ -114,7 +118,7 @@ def live_quotes(day: str):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def candles(security_id: str, interval: str, source: str):
-    """Candles from the broker serving the quotes first, then the other one. (rows, source, failures)."""
+    """Candles from the broker serving the quotes first, then the others. (rows, source, failures)."""
     contract = next(c for c in stored_contracts()[0] if c.security_id == security_id)
     order = (source,) + tuple(name for name in mf.PROVIDERS if name != source)
     return mf.candles_with_fallback(provider, contract, interval, now_ist(), order)
@@ -125,6 +129,11 @@ def failure_text(failures) -> str:
 
 
 # -- views -------------------------------------------------------------------
+
+SOURCE_NOTES = {
+    "kite": " Kite reports volume as 0 after the session, so it is blank then.",
+    "indmoney": " INDmoney gives no last-trade time (live is judged from MCX's hours) and no MCX candles.",
+}
 
 
 def quote_frame(quotes) -> pd.DataFrame:
@@ -216,7 +225,12 @@ def board(pick: str, groups, show_minis: bool) -> None:
     selected = event.selection.rows
     focus = shown[selected[0]] if selected else next(
         (q for q in shown if q.contract.commodity == "GOLD"), shown[0])
-    note = " Kite reports volume as 0 after the session, so it is blank then." if source == "kite" else ""
+    note = SOURCE_NOTES.get(source, "")
+    if source == "indmoney":
+        contracts = stored_contracts()[0]
+        absent = sorted({c.commodity for c in contracts} - {c.commodity for c in contracts if c.indmoney})
+        if absent:
+            note += f" Not listed by INDmoney: {', '.join(absent)}."
     st.caption(f"Click a row to chart it. Source: {LABELS[source]}, fetched {fetched_at:%H:%M:%S} IST.{note}")
     chart_card(focus, source)
 

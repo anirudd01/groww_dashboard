@@ -40,9 +40,10 @@ class GrowwAPIService:
             return {}
 
     def get_holdings(self) -> List[Dict[str, Any]]:
-        """Fetch long term delivery holdings for user."""
+        """Fetch long term delivery holdings for user (the ``holdings`` list of the response)."""
         try:
-            return self.client.session.get_holdings()
+            resp = self.client.session.get_holdings_for_user(timeout=15)
+            return resp.get("holdings", []) if isinstance(resp, dict) else []
         except Exception as e:
             logger.error("Error fetching holdings: %s", e)
             return []
@@ -71,9 +72,15 @@ class GrowwAPIService:
         product: str,
         order_type: str,
         transaction_type: str,
+        timeout: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Place an order via the underlying Groww API session."""
+        """Place an order via the underlying Groww API session.
+
+        The SDK waits forever by default. With ``timeout`` a slow answer raises instead, but the
+        order may still have reached Groww: check the order book before sending it again.
+        """
         return self.client.session.place_order(
+            timeout=timeout,
             trading_symbol=trading_symbol,
             quantity=quantity,
             price=price,
@@ -141,66 +148,67 @@ class GrowwAPIService:
 
     def get_ltp_for_mcx(self, symbols: List[str]) -> Dict[str, float]:
         """
-        Fetch LTP for MCX commodity contracts.
-        Uses get_quote() API for each symbol individually.
+        Fetch LTP for MCX commodity contracts, one ``get_quote`` call each.
+
+        Groww's docs name only CASH and FNO for the batched ``get_ltp``, so MCX stays on the
+        per-contract quote until a batched COMMODITY call has been seen to work (that needs the
+        paid data plan; see docs/api/GROWW_API_LIVE_DATA.md). Stops at the first failure: without
+        the plan every call is refused the same way.
         """
-        if not symbols:
-            return {}
+        result: Dict[str, float] = {}
+        from growwapi import GrowwAPI
 
-        result = {}
+        for symbol in symbols:
+            try:
+                quote = self.client.session.get_quote(
+                    exchange=GrowwAPI.EXCHANGE_MCX,
+                    segment=GrowwAPI.SEGMENT_COMMODITY,
+                    trading_symbol=symbol.strip(),
+                    timeout=10,
+                )
+            except Exception as e:
+                logger.warning("MCX quote failed for %s, so MCX positions are unpriced: %s", symbol, e)
+                break
+            ltp = self._extract_ltp_from_quote(quote)
+            if ltp and ltp > 0:
+                result[symbol] = ltp
 
-        try:
-            from growwapi import GrowwAPI
-
-            logger.debug(f"Fetching LTP for {len(symbols)} MCX commodity symbols...")
-
-            # For MCX, we need to call get_quote with correct parameters
-            for symbol in symbols:
-                try:
-                    # get_quote needs: exchange, segment, trading_symbol
-                    quote = self.client.session.get_quote(
-                        exchange=GrowwAPI.EXCHANGE_MCX,
-                        segment=GrowwAPI.SEGMENT_COMMODITY,
-                        trading_symbol=symbol.strip(),
-                    )
-
-                    if quote:
-                        ltp = self._extract_ltp_from_quote(quote)
-                        if ltp and ltp > 0:
-                            result[symbol] = ltp
-                            logger.debug(f"Fetched LTP for {symbol}: {ltp}")
-
-                except AttributeError as e:
-                    # EXCHANGE_MCX or SEGMENT_COMMODITY might not exist
-                    logger.warning(f"MCX constants not available: {e}")
-                    # Fall back to trying get_ltp with MCX prefix
-                    try:
-                        resp = self.client.session.get_ltp(
-                            segment="COMMODITY",
-                            exchange_trading_symbols=f"MCX_{symbol.strip()}",
-                        )
-                        if isinstance(resp, dict):
-                            for k, v in resp.items():
-                                symbol_key = k.replace("MCX_", "")
-                                result[symbol_key] = float(v) if v else 0.0
-                    except Exception as e2:
-                        logger.debug(f"MCX fallback also failed for {symbol}: {e2}")
-
-                except Exception as e:
-                    logger.debug(f"Failed to get quote for MCX symbol {symbol}: {e}")
-                    continue
-
-            logger.info(f"Fetched LTP for {len(result)}/{len(symbols)} MCX positions")
-
-        except Exception as e:
-            logger.warning(f"MCX LTP fetch error: {e}")
-
+        logger.info("Fetched LTP for %d/%d MCX positions", len(result), len(symbols))
         return result
+
+    def get_greeks(self, exchange: str, underlying: str, trading_symbol: str, expiry: str,
+                   timeout: float = 10) -> Dict[str, Any]:
+        """The ``greeks`` dict (delta, gamma, theta, vega, rho, iv) for one option contract.
+
+        ``GrowwAPI.get_greeks`` is the only SDK call without a timeout argument (its request has
+        no timeout at all), so it runs on a daemon thread and is abandoned after ``timeout``. A
+        daemon, not an executor worker: Python joins executor threads at exit, so a hung request
+        would stall shutdown.
+        """
+        import threading
+
+        outcome = {}
+
+        def call():
+            try:
+                outcome["resp"] = self.client.session.get_greeks(
+                    exchange=exchange, underlying=underlying, trading_symbol=trading_symbol, expiry=expiry)
+            except Exception as e:  # handed back to the caller below
+                outcome["error"] = e
+
+        worker = threading.Thread(target=call, name="groww-greeks", daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            raise TimeoutError(f"get_greeks gave no answer within {timeout:g} s")
+        if "error" in outcome:
+            raise outcome["error"]
+        return (outcome.get("resp") or {}).get("greeks") or {}
 
     def _extract_ltp_from_quote(self, quote) -> Optional[float]:
         """
         Extract LTP value from get_quote() response.
-        Handles different response formats.
+        Groww documents the field as ``last_price``; the others are kept as harmless fallbacks.
         """
         if not quote:
             return None
@@ -209,8 +217,7 @@ class GrowwAPIService:
             return float(quote)
 
         if isinstance(quote, dict):
-            # Check common field names for LTP
-            for field in ["ltp", "lastPrice", "last_price", "price", "LTP"]:
+            for field in ["last_price", "ltp", "lastPrice", "price", "LTP"]:
                 if field in quote:
                     val = quote[field]
                     if val and val > 0:
@@ -398,33 +405,5 @@ class GrowwAPIService:
                     continue
                 if price > 0:
                     result[symbol] = price
-
-        return result
-
-    def get_ltp(self, symbols: List[str]) -> Dict[str, float]:
-        """
-        Generic LTP fetch - attempts to determine symbol type and fetch appropriately.
-        """
-        if not symbols:
-            return {}
-
-        # Check if symbols are FnO or commodity by looking at patterns
-        from utils import COMMODITY_KEYWORDS
-
-        nse_symbols = []
-        mcx_symbols = []
-
-        for symbol in symbols:
-            symbol_upper = symbol.upper()
-            if any(kw in symbol_upper for kw in COMMODITY_KEYWORDS):
-                mcx_symbols.append(symbol)
-            else:
-                nse_symbols.append(symbol)
-
-        result = {}
-        if nse_symbols:
-            result.update(self.get_ltp_for_nse_fno(nse_symbols))
-        if mcx_symbols:
-            result.update(self.get_ltp_for_mcx(mcx_symbols))
 
         return result

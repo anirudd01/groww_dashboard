@@ -5,9 +5,13 @@
 Groww Cloud Strategy
 - Processes COMMODITY options (MCX) only
 - Places limit exit orders at 15% markup from entry price (premium)
-- Full quantity exit for each position
+- Full quantity exit for each long position, in the position's own product (NRML/MIS)
+- Target rounded up to the contract's tick size (from Groww's instrument list)
+- Short positions are skipped and reported
 - Verbose logging of all actions and failures
 """
+
+from decimal import ROUND_CEILING, Decimal
 
 from growwapi import GrowwAPI
 import time
@@ -16,6 +20,28 @@ import time
 # STEP 1: Setup
 # =====================
 groww = GrowwAPI("api_key")
+
+
+def tick_in_rupees(exchange, trading_symbol):
+    """The contract's price step in rupees, from Groww's instrument list.
+
+    The list's ``tick_size`` is in paise for MCX (GOLD 100.0 = Rs 1, NATURALGAS 10.0 = Rs 0.10)
+    and in rupees for NSE (options 0.05). An order price off this grid is rejected.
+    """
+    row = groww.get_instrument_by_exchange_and_trading_symbol(exchange, trading_symbol)
+    tick = Decimal(str(row["tick_size"]))
+    # A blank cell arrives as NaN and would become a NaN price; zero would divide by zero.
+    if not tick.is_finite() or tick <= 0:
+        raise ValueError(f"unusable tick_size {row['tick_size']!r}")
+    return tick / 100 if exchange == "MCX" else tick
+
+
+def round_up_to_tick(price, tick):
+    """``price`` raised onto the tick grid, so the target is never below +15%."""
+    return float((Decimal(str(price)) / tick).to_integral_value(ROUND_CEILING) * tick)
+
+
+EXCHANGE = groww.EXCHANGE_MCX
 
 # =====================
 # STEP 2: Fetch All Positions
@@ -51,25 +77,11 @@ else:
 
 print(f"   Total positions extracted: {len(all_positions)}")
 
-# Filter for COMMODITY positions only
-commodity_keywords = [
-    "GOLD",
-    "SILVER",
-    "COPPER",
-    "ZINC",
-    "LEAD",
-    "ALUMINUM",
-    "NICKEL",
-    "CRUDEOIL",
-    "CRUDE",
+# Filter for MCX positions only: Groww marks them segment COMMODITY, exchange MCX
+commodity_positions = [
+    p for p in all_positions
+    if isinstance(p, dict) and p.get("segment") == "COMMODITY" and p.get("exchange") == "MCX"
 ]
-
-commodity_positions = []
-for p in all_positions:
-    if isinstance(p, dict):
-        symbol = p.get("trading_symbol", "").upper()
-        if any(kw in symbol for kw in commodity_keywords):
-            commodity_positions.append(p)
 
 print(f"✅ Commodity positions found: {len(commodity_positions)}")
 
@@ -88,16 +100,27 @@ for idx, pos in enumerate(commodity_positions):
     symbol = pos.get("trading_symbol", "UNKNOWN")
     entry_price = float(pos.get("net_price", 0.0))
     quantity = int(pos.get("quantity", 0))
+    product = pos.get("product") or groww.PRODUCT_NRML  # exit in the position's own product
 
-    # Skip if no valid data
-    if entry_price <= 0 or quantity <= 0:
+    # Longs only: a SELL at +15% is the profit target of a bought contract. A short (negative
+    # quantity) would need a BUY below its entry instead, which this strategy does not place.
+    if quantity < 0:
+        print(f"⚠️  {symbol}: Skipped (short position, quantity={quantity}; not handled here)")
+        continue
+    if entry_price <= 0 or quantity == 0:
         print(
-            f"⚠️  {symbol}: Skipped (invalid entry_price={entry_price} or quantity={quantity})"
+            f"⚠️  {symbol}: Skipped (closed or no entry price: entry_price={entry_price}, quantity={quantity})"
         )
         continue
 
+    try:
+        tick = tick_in_rupees(EXCHANGE, symbol)
+    except Exception as e:
+        print(f"⚠️  {symbol}: Skipped (tick size not found in Groww's instrument list: {e})")
+        continue
+
     # Calculate 15% markup target price
-    target_price = round(entry_price * 1.15, 1)
+    target_price = round_up_to_tick(entry_price * 1.15, tick)
 
     print(f"\n📊 {symbol}")
     print(f"   Entry Price: ₹{entry_price:.2f}")
@@ -111,9 +134,9 @@ for idx, pos in enumerate(commodity_positions):
             quantity=quantity,
             price=target_price,
             validity=groww.VALIDITY_DAY,
-            exchange=groww.EXCHANGE_MCX,
+            exchange=EXCHANGE,
             segment=groww.SEGMENT_COMMODITY,
-            product=groww.PRODUCT_NRML,
+            product=product,
             order_type=groww.ORDER_TYPE_LIMIT,
             transaction_type=groww.TRANSACTION_TYPE_SELL,
         )

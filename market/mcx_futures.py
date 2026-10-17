@@ -2,26 +2,29 @@
 
 Which provider
 --------------
-Dhan first, Kite as the fallback (``PROVIDERS``). Of the four brokers this repo uses
-(docs/PROVIDER_GUIDE.md), only Kite and Dhan serve MCX: INDmoney's REST rejects every MCX code, and
-Groww is only used for positions here. Both were tested live on 2026-10-03 and returned identical
-prices, OHLC and OI. Dhan leads because its token is minted from TOTP with no one at the machine
-and it keeps the session's volume after the close; Kite needs a browser login every morning and
-reports volume as 0 once the session ends.
+Dhan first, then Kite, then INDmoney (``PROVIDERS``). Dhan and Kite were tested live on 2026-10-03
+and returned identical prices, OHLC and OI. Dhan leads because its token is minted from TOTP with
+no one at the machine and it keeps the session's volume after the close; Kite needs a browser
+login every morning and reports volume as 0 once the session ends. INDmoney (free, TOTP) added MCX
+quotes in October 2026 and matched Kite on 2026-10-17, but it lists 19 of the 28 commodities and
+only the nearer expiries, gives no last-trade time, and serves no MCX candles - so it comes last.
+Groww is only used for positions here.
 
 Contracts
 ---------
 Read from the ``mcx_futures`` set in the shared database, which ``scripts/dhan.py --master``
 fills from both brokers' public instrument lists (164 ``FUTCOM`` rows, 28 commodities, on
-2026-10-03), matched on commodity and expiry. Never downloaded at runtime - same rule as
-``market/instruments.py``. Re-run the script monthly: new expiries are listed as old ones lapse.
+2026-10-03), matched on commodity and expiry. Which of them INDmoney lists is a separate set,
+``indmoney_mcx``, from ``scripts/indmoney.py --master`` (INDmoney rejects a whole quote call over
+one id it does not list). Never downloaded at runtime - same rule as ``market/instruments.py``.
+Re-run both scripts monthly: new expiries are listed as old ones lapse.
 
 Visualisation only - nothing here places orders.
 """
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from market import reference_store, state_store
@@ -31,9 +34,14 @@ from market.providers.base import SEGMENT_MCX_FUTURES, InstrumentRef
 logger = logging.getLogger(__name__)
 
 MCX_SET = "mcx_futures"
+#: The MCX futures INDmoney lists (``security_id -> fields``), from INDMONEY_SCRIPT.
+INDMONEY_SET = "indmoney_mcx"
 #: Broker order: the first one that answers serves the page.
-PROVIDERS = ("dhan", "kite")
+PROVIDERS = ("dhan", "kite", "indmoney")
 SCRIPT = "scripts/dhan.py --master"
+INDMONEY_SCRIPT = "scripts/indmoney.py --master"
+#: The script that stores each broker's MCX ids.
+ID_SCRIPTS = {"dhan": SCRIPT, "kite": SCRIPT, "indmoney": INDMONEY_SCRIPT}
 
 #: Commodity -> group, for filtering and ordering. Anything new on MCX lands in "Other".
 GROUPS = {
@@ -61,6 +69,9 @@ PICKS = (MOST_ACTIVE,) + MONTHS
 
 #: A last trade newer than this means the market is trading now.
 LIVE_WITHIN = timedelta(minutes=5)
+#: MCX's session in IST, for a broker that gives no last-trade time (INDmoney). It closes at 23:30,
+#: or 23:55 while the US is on summer time; the later one is used. Exchange holidays are not known.
+SESSION_OPEN, SESSION_CLOSE = time(9, 0), time(23, 55)
 
 
 @dataclass(frozen=True)
@@ -72,6 +83,8 @@ class Contract:
     #: Kite's instrument_token and tradingsymbol (``CRUDEOIL26OCTFUT``); blank if Kite does not list it.
     kite_token: str = ""
     kite_symbol: str = ""
+    #: INDmoney lists it (same security_id as Dhan's: both use MCX's token).
+    indmoney: bool = False
 
     @property
     def group(self) -> str:
@@ -88,6 +101,8 @@ class Contract:
                 return None
             return InstrumentRef(symbol=self.kite_symbol, provider_id=self.kite_token, exchange="MCX",
                                  segment=SEGMENT_MCX_FUTURES)
+        if provider == "indmoney" and not self.indmoney:
+            return None
         return InstrumentRef(symbol=self.name, provider_id=self.security_id, exchange="MCX",
                              segment=SEGMENT_MCX_FUTURES)
 
@@ -157,6 +172,27 @@ def attach_kite(contracts: Iterable[Contract], kite_rows: Iterable[dict]) -> Lis
     return out
 
 
+def indmoney_listed(rows: Iterable[dict]) -> Dict[str, dict]:
+    """MCX commodity futures out of INDmoney's ``/market/instruments?source=mcx`` CSV rows, by security_id."""
+    found = {}
+    for row in rows:
+        if row.get("EXCH") != "MCX" or row.get("INSTRUMENT_NAME") != "FUTCOM":
+            continue
+        security_id = (row.get("SECURITY_ID") or "").strip()
+        if security_id:
+            found[security_id] = {"commodity": (row.get("SYMBOL_NAME") or "").strip(),
+                                  "symbol": (row.get("TRADING_SYMBOL") or "").strip(),
+                                  "expiry": (row.get("EXPIRY_CODE") or "").strip()}
+    return found
+
+
+def save_indmoney_listed(listed: Dict[str, dict], source: str, path: Optional[str] = None) -> int:
+    document = {"generated_at": datetime.now(timezone.utc).isoformat(), "source": source, "provider": "indmoney",
+                "note": f"Generated by {INDMONEY_SCRIPT}. The MCX futures INDmoney quotes.",
+                "contracts": dict(sorted(listed.items()))}
+    return reference_store.save_document(INDMONEY_SET, document, sections=("contracts",), path=path)
+
+
 def to_document(contracts: Sequence[Contract], sources: Sequence[str]) -> dict:
     """The stored form: ``contracts`` is Dhan ``security_id -> fields``."""
     return {
@@ -189,6 +225,8 @@ def load_contracts(path: Optional[str] = None):
                                       str(fields.get("kite_token") or ""), str(fields.get("kite_symbol") or "")))
         except (KeyError, TypeError, ValueError):
             logger.warning("Ignoring malformed MCX contract %s", security_id)
+    listed = (reference_store.load_document(INDMONEY_SET, database) or {}).get("contracts") or {}
+    contracts = [replace(c, indmoney=True) if c.security_id in listed else c for c in contracts]
     generated = document.get("generated_at")
     try:
         generated = datetime.fromisoformat(generated) if generated else None
@@ -274,7 +312,10 @@ def fetch_quotes(provider, contracts: Sequence[Contract]) -> List[FutureQuote]:
     500; MCX lists ~160 live). Contracts the provider has no id for are left out."""
     refs = {c: c.ref(provider.name) for c in contracts}
     refs = {c: ref for c, ref in refs.items() if ref is not None}
-    raw = provider.get_quotes(list(refs.values())) if refs else {}
+    if contracts and not refs:
+        raise RuntimeError(f"no {provider.name} ids stored for these contracts - run "
+                           f"'python {ID_SCRIPTS.get(provider.name, SCRIPT)}'")
+    raw = provider.get_quotes(list(refs.values()))
     return [parse_quote(c, raw.get(ref.symbol)) for c, ref in refs.items()]
 
 
@@ -319,10 +360,22 @@ def latest_trade(quotes: Iterable[FutureQuote]) -> Optional[datetime]:
     return max((q.last_trade for q in quotes if q.last_trade), default=None)
 
 
+def in_session(now: datetime) -> bool:
+    """Within MCX's weekday hours (IST). Knows no holidays."""
+    now = now.astimezone(IST)
+    return now.weekday() < 5 and SESSION_OPEN <= now.time() <= SESSION_CLOSE
+
+
 def is_live(quotes: Iterable[FutureQuote], now: datetime) -> bool:
-    """Trading now, judged by the data itself, so MCX's own hours and holidays need no calendar."""
+    """Trading now, judged by the data itself, so MCX's own hours and holidays need no calendar.
+
+    A broker with no last-trade time (INDmoney) falls back to the session hours.
+    """
+    quotes = list(quotes)
     latest = latest_trade(quotes)
-    return latest is not None and now - latest <= LIVE_WITHIN
+    if latest is not None:
+        return now - latest <= LIVE_WITHIN
+    return any(q.ltp for q in quotes) and in_session(now)
 
 
 # -- candles -----------------------------------------------------------------

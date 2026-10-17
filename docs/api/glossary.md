@@ -18,3 +18,10 @@ get_holdings_for_user() - returns all stocks meaning holdings + positions in lis
 - get_positions_for_user() - always use this api for MTF or intraday , it returns a list with all the positions,
 - "segment":"CASH" does not mean it was bought with own money, it just means equity and not commodity
 - "product":"MTF" - this is what matters, this basically says this position is a MTF purchase with margin money
+
+Checked against the live API on 2026-10-17 (details in [GROWW_API_PORTFOLIO.md](GROWW_API_PORTFOLIO.md)):
+
+- the per-segment "used" margins (`net_fno_margin_used`, `span_margin_used`, ...) come back **negative**, while `net_margin_used` is positive - take magnitudes before subtracting one from the other
+- `commodity_margin_details` is in **paise**; the same MCX margin appears in rupees inside `fno_margin_details`
+- `clear_cash` is wallet cash before margin; the free F&O/MCX balance is `fno_margin_details.future_balance_available`
+- "get_holdings_for_user() returns holdings + positions" is not yet re-checked: the account held no stocks that day

@@ -1,6 +1,6 @@
-"""Formatting utilities for Indian currency and date formats."""
+"""Formatting utilities for Indian currency, expiry dates and position direction."""
 
-import re
+from datetime import datetime
 
 from utils.constants import MONTH_DISPLAY_MAP
 
@@ -47,116 +47,50 @@ def format_inr_full(value: float) -> str:
     return f"{sign}₹{formatted_int}.{dec_part}"
 
 
-def format_expiry_date(date_str: str) -> str:
-    """
-    Convert NSE date format (e.g., '26SEP24') to readable format (e.g., '2026 Sept 26').
-    """
-    if not date_str or len(date_str) < 5:
-        return date_str
+def format_expiry_short(expiry_date) -> str:
+    """'2026-10-27' -> 'Oct 27'; 'N/A' when the expiry is unknown.
 
+    Takes the ``expiry_date`` the position processor read from Groww's instrument list. Expiries
+    are never parsed from trading symbols: Groww uses three layouts (NIFTY26OCTFUT is year+month,
+    NIFTY26O1918150CE is year+month letter+day, GOLD04DEC26FUT is day+month+year).
+    """
     try:
-        day = date_str[:2]
-        month_str = date_str[2:5].upper()
-        year = date_str[5:]
-
-        if month_str not in MONTH_DISPLAY_MAP:
-            return date_str
-
-        year_full = f"20{year}" if len(year) == 2 else year
-        return f"{year_full} {MONTH_DISPLAY_MAP[month_str]} {day}"
-    except Exception:
-        return date_str
-
-
-def format_expiry_short(symbol: str) -> str:
-    """
-    Extract a short "Month Day" expiry display (e.g. "Sept 26") from a trading
-    symbol like 'EICHERMOT26SEP7900CE'. Returns "N/A" if no expiry pattern is found.
-    """
-    if not symbol:
+        day = datetime.strptime(str(expiry_date), "%Y-%m-%d")
+    except (TypeError, ValueError):
         return "N/A"
-
-    match = re.search(r'(\d{2})([A-Z]{3})', symbol.upper())
-    if not match:
-        return "N/A"
-
-    day, month = match.groups()
-    month_abbr = MONTH_DISPLAY_MAP.get(month, month)
-    return f"{month_abbr} {int(day)}"
+    return f"{MONTH_DISPLAY_MAP[day.strftime('%b').upper()]} {day.day}"
 
 
 # ============= ANALYTICS FUNCTIONS =============
 
-def extract_position_sentiment(symbol: str) -> dict:
+def position_sentiment(pos: dict) -> dict:
+    """Which way a position profits, from its contract kind and the sign of its quantity.
+
+    A bought call or a long future profits if the underlying rises; a sold call profits if it
+    does not. ``kind`` (CALL, PUT, FUTURE) comes from the instrument list via the processor.
+
+    Returns underlying, option_type (CALL / PUT / FUTURE / UNKNOWN), side (LONG / SHORT),
+    sentiment (BULLISH / BEARISH / NEUTRAL) and a one-line prediction.
     """
-    Extract position sentiment from symbol string.
-    Analyzes if position is bullish (Call) or bearish (Put).
+    kind = pos.get("kind") or "UNKNOWN"
+    quantity = pos.get("quantity") or 0
+    underlying = pos.get("underlying") or pos.get("symbol") or "N/A"
+    side = "LONG" if quantity > 0 else "SHORT" if quantity < 0 else "CLOSED"
 
-    Returns dict with:
-    - underlying: The asset name (e.g., 'GOLD', 'NIFTY', 'CRUDEOIL')
-    - option_type: 'CALL' or 'PUT' (last 2 chars)
-    - strike: Strike price extracted from symbol
-    - sentiment: 'BULLISH' (Call) or 'BEARISH' (Put)
-    - prediction: Human-readable prediction
-    """
-    if not symbol or len(symbol) < 2:
-        return {
-            "underlying": "N/A",
-            "option_type": "N/A",
-            "strike": "N/A",
-            "sentiment": "N/A",
-            "prediction": "Unable to parse"
-        }
-
-    # Extract option type from last 2 characters
-    option_type_code = symbol[-2:].upper()
-
-    if option_type_code == "CE":
-        option_type = "CALL"
-        sentiment = "BULLISH"
-    elif option_type_code == "PE":
-        option_type = "PUT"
-        sentiment = "BEARISH"
+    rises = {"CALL": True, "FUTURE": True, "PUT": False}.get(kind)
+    if rises is None or side == "CLOSED":
+        sentiment = "NEUTRAL"
     else:
-        return {
-            "underlying": symbol[:10],
-            "option_type": "UNKNOWN",
-            "strike": "N/A",
-            "sentiment": "NEUTRAL",
-            "prediction": "Unable to determine (not an option)"
-        }
+        sentiment = "BULLISH" if rises == (side == "LONG") else "BEARISH"
 
-    # Extract strike price (last 4 digits before CE/PE)
-    try:
-        strike_match = re.search(r'(\d+)(CE|PE)$', symbol)
-        if strike_match:
-            strike = strike_match.group(1)
-        else:
-            strike = "N/A"
-    except Exception:
-        strike = "N/A"
-
-    # Extract underlying asset (everything before expiry date pattern)
-    # Pattern: Symbol + 2-digit day + 3-letter month + 2-digit year
-    underlying_match = re.match(r'^([A-Z0-9]+?)(?:\d{2}[A-Z]{3}\d{2,4})', symbol)
-    if underlying_match:
-        underlying = underlying_match.group(1)
-    else:
-        underlying = symbol[:-7] if len(symbol) > 7 else symbol[:5]
-
-    # Generate prediction
     if sentiment == "BULLISH":
         prediction = f"If {underlying} goes UP ↑, you make money"
-    else:
+    elif sentiment == "BEARISH":
         prediction = f"If {underlying} goes DOWN ↓, you make money"
-
-    return {
-        "underlying": underlying,
-        "option_type": option_type,
-        "strike": strike,
-        "sentiment": sentiment,
-        "prediction": prediction
-    }
+    else:
+        prediction = "No directional exposure"
+    return {"underlying": underlying, "option_type": kind, "side": side,
+            "sentiment": sentiment, "prediction": prediction}
 
 
 def get_sentiment_color(sentiment: str) -> str:
@@ -171,116 +105,76 @@ def get_sentiment_color(sentiment: str) -> str:
 
 def group_positions_by_underlying_expiry(positions: list) -> list:
     """
-    Group positions by underlying asset, expiry date, AND call/put type.
-    Returns aggregated data with separate rows for calls and puts.
+    Group open positions by underlying, expiry, contract kind (CALL / PUT / FUTURE) and side.
 
     Returns list of dicts with:
-    - underlying: Asset name
-    - option_type: "CALL" or "PUT"
-    - expiry: Expiry date formatted (Day Month only, e.g., "Oct 15")
+    - underlying, option_type, side, asset_type (EQUITY / COMMODITY)
+    - expiry: "Oct 27" display, expiry_key: ISO date (or "UNKNOWN")
     - position_count: Number of contracts in this group
-    - total_pnl: Sum of P&L for all positions in group
-    - total_pnl_pct: Average P&L % for group
-    - total_invested: Sum of entry values
-    - total_value: Sum of current values
+    - total_invested: notional at entry of every open position (known without a price)
+    - total_pnl / total_value: sums over the *priced* positions only
+    - total_pnl_pct: total_pnl over the priced positions' notional
+    - unpriced: how many positions in the group had no live price
     - symbols: List of symbols in group
     - pnl_arrow: 📈 for positive, 📉 for negative
     """
-    # Group by (underlying, expiry, call/put type) - 3 dimensions!
     groups = {}
 
     for pos in positions:
-        if pos.get("entry_value", 0.0) <= 0 and pos.get("total_value", 0.0) <= 0:
-            continue  # Skip inactive positions
+        if not pos.get("quantity"):
+            continue  # closed today: realised P&L only, nothing open to group
 
-        symbol = pos.get("symbol", "")
-        sentiment_info = extract_position_sentiment(symbol)
-        underlying = sentiment_info.get("underlying", "UNKNOWN")
-        option_type = sentiment_info.get("option_type", "UNKNOWN")  # CALL or PUT
+        expiry_key = pos.get("expiry_date") or "UNKNOWN"
+        sentiment = position_sentiment(pos)
+        group_key = (pos.get("type", "UNKNOWN"), sentiment["underlying"], expiry_key,
+                     sentiment["option_type"], sentiment["side"])
 
-        # Extract expiry from symbol: find pattern DD+MMM (e.g., "25SEP", "17OCT")
-        expiry_match = re.search(r'(\d{2})([A-Z]{3})', symbol)
-        if expiry_match:
-            day, month = expiry_match.groups()
-            expiry_key = f"{day}{month}"
-            # Format as "Oct 15" (just day and month, no year)
-            month_abbr = MONTH_DISPLAY_MAP.get(month, month)
-            expiry_display = f"{month_abbr} {int(day)}"
-        else:
-            expiry_key = "UNKNOWN"
-            expiry_display = "N/A"
-
-        # Group key now includes call/put type
-        group_key = (underlying, expiry_key, option_type)
-
-        if group_key not in groups:
-            groups[group_key] = {
-                "underlying": underlying,
-                "option_type": option_type,
-                "expiry": expiry_display,
-                "expiry_key": expiry_key,
-                "total_pnl": 0.0,
-                "total_invested": 0.0,
-                "total_value": 0.0,
-                "symbols": []
-            }
-
-        # Update group
-        groups[group_key]["total_pnl"] += float(pos.get("unrealized_pnl", 0.0))
-        groups[group_key]["total_invested"] += float(pos.get("entry_value", 0.0))
-        groups[group_key]["total_value"] += float(pos.get("total_value", 0.0))
-        groups[group_key]["symbols"].append(symbol)
-
-    # Convert to list and calculate metrics
-    result = []
-    for (underlying, expiry_key, option_type), group in groups.items():
-        # Calculate P&L %
-        if group["total_invested"] > 0:
-            pnl_pct = (group["total_pnl"] / group["total_invested"]) * 100.0
-        else:
-            pnl_pct = 0.0
-
-        # P&L arrow emoji
-        if group["total_pnl"] > 0:
-            pnl_arrow = "📈"
-        elif group["total_pnl"] < 0:
-            pnl_arrow = "📉"
-        else:
-            pnl_arrow = "➡️"
-
-        position_count = len(group["symbols"])
-
-        result.append({
-            "underlying": underlying,
-            "option_type": option_type,
-            "expiry": group["expiry"],
+        group = groups.setdefault(group_key, {
+            "asset_type": pos.get("type", "UNKNOWN"),
+            "underlying": sentiment["underlying"],
+            "option_type": sentiment["option_type"],
+            "side": sentiment["side"],
+            "expiry": format_expiry_short(pos.get("expiry_date")),
             "expiry_key": expiry_key,
-            "position_count": position_count,
-            "total_pnl": group["total_pnl"],
-            "total_pnl_pct": pnl_pct,
-            "total_invested": group["total_invested"],
-            "total_value": group["total_value"],
-            "symbols": group["symbols"],
-            "pnl_arrow": pnl_arrow
+            "total_pnl": 0.0,
+            "total_invested": 0.0,
+            "priced_invested": 0.0,
+            "total_value": 0.0,
+            "unpriced": 0,
+            "symbols": [],
         })
+        group["symbols"].append(pos.get("symbol", ""))
+        group["total_invested"] += float(pos.get("entry_value") or 0.0)
+        if pos.get("unrealized_pnl") is None:
+            group["unpriced"] += 1
+            continue
+        group["total_pnl"] += float(pos["unrealized_pnl"])
+        group["priced_invested"] += float(pos.get("entry_value") or 0.0)
+        group["total_value"] += float(pos.get("total_value") or 0.0)
 
-    # Sort: by underlying, then expiry, then type (calls first)
-    result.sort(key=lambda x: (x["underlying"], x["expiry"], x["option_type"] == "PUT"))
+    result = []
+    for group in groups.values():
+        group["total_pnl_pct"] = (group["total_pnl"] / group["priced_invested"] * 100.0
+                                  if group["priced_invested"] > 0 else 0.0)
+        group["pnl_arrow"] = "📈" if group["total_pnl"] > 0 else "📉" if group["total_pnl"] < 0 else "➡️"
+        group["position_count"] = len(group["symbols"])
+        result.append(group)
 
+    # By underlying, then expiry date, then calls, puts, futures
+    order = {"CALL": 0, "PUT": 1, "FUTURE": 2}
+    result.sort(key=lambda g: (g["underlying"], g["expiry_key"], order.get(g["option_type"], 3), g["side"]))
     return result
 
 
 def get_position_summary(positions: list) -> dict:
     """
-    Analyze all positions and return portfolio sentiment summary.
+    Directional summary of the open positions (closed ones are skipped).
 
     Returns dict with:
-    - total_bullish: Count of bullish (Call) positions
-    - total_bearish: Count of bearish (Put) positions
+    - total_bullish / total_bearish: counts of positions that profit from a rise / a fall
     - net_sentiment: Overall portfolio sentiment
-    - bullish_underlying: Set of underlyings where user is bullish
-    - bearish_underlying: Set of underlyings where user is bearish
-    - conflicting: Underlyings where user has both calls and puts
+    - bullish_underlying / bearish_underlying: underlyings on each side
+    - conflicting: Underlyings with exposure on both sides (hedges, straddles, spreads)
     """
     bullish_count = 0
     bearish_count = 0
@@ -288,23 +182,18 @@ def get_position_summary(positions: list) -> dict:
     bearish_underlying = set()
 
     for pos in positions:
-        sentiment_info = extract_position_sentiment(pos.get("symbol", ""))
-        underlying = sentiment_info.get("underlying", "")
-        sentiment = sentiment_info.get("sentiment", "")
-
-        if sentiment == "BULLISH":
+        if not pos.get("quantity"):
+            continue
+        info = position_sentiment(pos)
+        if info["sentiment"] == "BULLISH":
             bullish_count += 1
-            if underlying:
-                bullish_underlying.add(underlying)
-        elif sentiment == "BEARISH":
+            bullish_underlying.add(info["underlying"])
+        elif info["sentiment"] == "BEARISH":
             bearish_count += 1
-            if underlying:
-                bearish_underlying.add(underlying)
+            bearish_underlying.add(info["underlying"])
 
-    # Find conflicts (same underlying with both calls and puts)
     conflicting = bullish_underlying & bearish_underlying
 
-    # Net sentiment
     if bullish_count > bearish_count:
         net_sentiment = "BULLISH 🟢"
     elif bearish_count > bullish_count:

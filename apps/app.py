@@ -237,6 +237,14 @@ with col_head:
         st.caption("🟡 Running in **Demo Mode** with sample data. Configure `.env` to connect live account.")
     else:
         st.caption(f"🟢 Connected to Live Broker Account | Client UCC: `{profile.get('ucc', 'N/A')}`")
+    unpriced = processed.get("unpriced_symbols") or []
+    if unpriced:
+        st.warning(
+            f"⚠️ No live price for {len(unpriced)} stock(s) ({', '.join(unpriced[:8])}"
+            f"{', ...' if len(unpriced) > 8 else ''}). They are valued at their buy price, so their "
+            "current value and P&L below are **not live**. Groww refuses price calls without its paid "
+            "data plan (seen 2026-10-17: `Access forbidden for this request`)."
+        )
 
 with col_cash:
     render_kpi_card(

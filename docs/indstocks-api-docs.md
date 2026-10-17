@@ -15,7 +15,7 @@ frequently. Re-download https://api-docs.indstocks.com/llms-full.md
 for the current version, and compare the "Docs last updated" date above
 against your copy to check whether it is stale.
 
-> **Edited copy (pulse_tester, 2026-09-25).** Passages proven wrong against the live API
+> **Edited copy (pulse_tester, 2026-09-25; re-based on the vendor file of 2026-10-17).** Passages proven wrong against the live API
 > have been corrected or cut and marked `[pulse_tester]`. The fabricated changelog entries
 > and marketing filler are also cut. Behaviour verified live, including everything this file
 > gets wrong, is in `docs/api/INDMONEY_API.md` and `docs/PROVIDER_GUIDE.md`. Those
@@ -431,13 +431,13 @@ headers = {
 # Order parameters
 order_data = {
     'txn_type': 'BUY',           # BUY or SELL
-    'exchange': 'NSE',           # NSE or BSE
-    'segment': 'EQUITY',         # EQUITY, FNO, etc.
+    'exchange': 'NSE',           # NSE, BSE or MCX
+    'segment': 'EQUITY',         # EQUITY, DERIVATIVE or COMMODITY
     'security_id': '2885',       # Reliance security ID (get from instruments API)
     'qty': 1,                    # Quantity to buy
-    'order_type': 'LIMIT',       # LIMIT, MARKET, STOP_LOSS, etc.
+    'order_type': 'LIMIT',       # LIMIT or MARKET
     'limit_price': 2450.00,      # Limit price
-    'validity': 'DAY',           # DAY or IOC
+    'validity': 'DAY',           # DAY only
     'product': 'CNC',            # CNC (delivery) or INTRADAY (intraday) or MARGIN (derivatives)
     'is_amo': False,             # After Market Order flag
     'algo_id': '99999'           # Required: Use 99999 for regular orders
@@ -551,15 +551,15 @@ curl -X POST "https://api.indstocks.com/order" \
 | Parameter | Description | Example Values |
 |-----------|-------------|----------------|
 | `txn_type` | Transaction type | `BUY`, `SELL` |
-| `exchange` | Stock exchange | `NSE`, `BSE` |
-| `segment` | Market segment | `EQUITY`, `FNO`, `CURRENCY` |
+| `exchange` | Exchange | `NSE`, `BSE`, `MCX` (`MCX` only with `COMMODITY`) |
+| `segment` | Market segment | `EQUITY`, `DERIVATIVE`, `COMMODITY` |
 | `security_id` | Instrument ID | Get from [Instruments API](https://api-docs.indstocks.com/instruments/) |
 | `qty` | Quantity | `1`, `10`, `100` |
-| `order_type` | Order type | `LIMIT`, `MARKET`, `STOP_LOSS` |
+| `order_type` | Order type | `LIMIT`, `MARKET` |
 | `limit_price` | Price limit | `2450.00` (for LIMIT orders) |
-| `product` | Product type | `CNC` (delivery), `INTRADAY` (intraday), `MARGIN` (derivatives) |
-| `validity` | Order validity | `DAY`, `IOC` |
-| `algo_id` | Algo identifier (required) | `99999` (for regular orders) |
+| `product` | Product type | `CNC` (delivery), `INTRADAY` (intraday), `MARGIN` (derivatives and commodity) |
+| `validity` | Order validity | `DAY` |
+| `algo_id` | Algo identifier (optional) | `99999` (NSE and MCX), `9999999999999999` (BSE) |
 
 ---
 
@@ -1132,7 +1132,7 @@ ws.on('message', (data) => {
 
 ### **3. Feature Completeness**
 - All order types supported (Market, Limit, Stop-Loss, GTT)
-- Multi-asset support (Equity, F&O) `[pulse_tester: MCX is only on the websocket, as a live price; REST quotes and candles reject it. See docs/PROVIDER_GUIDE.md]`
+- Multi-asset support (Equity, F&O, Commodities) `[pulse_tester, verified 2026-10-17: MCX quotes work on REST; MCX candles come back empty. See docs/PROVIDER_GUIDE.md]`
 - Advanced analytics with portfolio insights
 - Compliance ready
 
@@ -1505,7 +1505,17 @@ GET /market/instruments
 
 | Parameter  | Description                                        |
 |------------|----------------------------------------------------|
-| `source`   | The market segment for which to fetch instruments. <br> **Enum**: `equity`, `fno`, `index` <br> `[pulse_tester]` `mcx` also works (undocumented, 9,967 MCX rows on 2026-09-25), but REST quotes and candles reject every MCX code. |
+| `source`   | The market segment for which to fetch instruments. <br> **Enum**: `equity`, `fno`, `index`, `mcx` |
+
+| `source`  | Returns                                                      | Columns |
+|-----------|--------------------------------------------------------------|---------|
+| `equity`  | Cash-market instruments                                      | 26      |
+| `fno`     | Equity and index derivatives                                 | 23      |
+| `mcx`     | MCX commodity futures and options                            | 23      |
+
+> `[pulse_tester, verified 2026-10-17]` `source=mcx` returned 10,623 rows, 93 of them `FUTCOM` across 19 commodities (Dhan's master: 168 across 28). Missing: CARDAMOM, COTTON, COTTONOIL, ELECDMBL, KAPAS, LEAD, LEADMINI, MENTHAOIL, STEELREBAR, SUNOIL, and the far expiries of the rest. `SECURITY_ID` is the MCX exchange token, the same id as Dhan's.
+
+| `index`   | Index underlyings                                            | 3       |
 
 **Example Request**
 ```bash
@@ -1539,10 +1549,33 @@ The downloaded file will contain the following columns:
 | `SEM_EXCH_INSTRUMENT_TYPE`| The instrument type as defined by the exchange.      |
 | `SERIES`         | The series code (e.g., `EQ`).                        |
 | `SYMBOL_NAME`    | The base symbol name (e.g., `HDFCBANK`).             |
+| `UNDERLYING_SCRIP_NAME` | The underlying's full name for a derivative (e.g. `ADANI PORT & SEZ LTD`). Empty for cash-market rows. |
+| `FREEZE_QTY`     | The largest quantity the exchange accepts on a single order. Use it to size a sliced order — see [Slicing Large Orders](https://api-docs.indstocks.com/smart_orders/#slicing-large-orders). |
+| `UPPER_LIMIT`    | The day's upper price band. An **absolute price** for `equity` and `fno`; a **percentage** for `mcx`. |
+| `LOWER_LIMIT`    | The day's lower price band. Same units as `UPPER_LIMIT`. |
+| `ISIN`           | ISIN of the instrument. Populated for cash-market rows; empty for derivatives. |
+| `GENERAL_FACTOR` | Converts the quoted price into the contract's rupee value. Meaningful on `mcx` (e.g. `1` for silver, `0.125` for gold guinea); `0` elsewhere. |
+| `DELIVERY_UNIT`  | The unit the contract settles in (`KGS`, `GRMS`). `mcx` only; empty elsewhere. |
+
+**NOTE: `source=equity` carries three extra columns**
+
+`equity` rows add `INTRADAY_LEVERAGE` (the intraday multiplier), `HAIRCUT_PERCENTAGE` (the pledge
+haircut) and `PLEDGE_ELIGIBLE` (`true`/`false`) after the columns above, for 26 in all. `fno` and
+`mcx` share the 23 columns above exactly.
+
+**WARNING: `UPPER_LIMIT` and `LOWER_LIMIT` are not in the same units on MCX**
+
+On `equity` and `fno` they are absolute prices. On `mcx` they are **percentages** applied to the
+contract's `prev_close` — a silver future carrying `4`/`4` means a band of ±4% around the previous
+close, not a price of 4. [Get Full Market Quotes](https://api-docs.indstocks.com/MarketQuote/#get-full-market-quotes) returns the
+band already resolved, in `upper_circuit` and `lower_circuit`; prefer those over computing it
+yourself. Placing a limit
+outside it is rejected with the resolved range:
+`Limit Price is outside circuit limits or execution band range. Allowed range: 212384.00 - 230082.00`.
 
 **NOTE: `source=index` returns a different, three-column file**
 
-The 16-column structure above applies to `source=equity` and `source=fno`. The index file is
+The index file is
 **three columns only** — `EXCH`, `SEGMENT`, `SECURITY_ID` — for example:
 
 ```csv
@@ -1581,7 +1614,7 @@ contracts, not the underlying.
 
 # Market Quotes
 
-This section covers endpoints for retrieving real-time market data for one or more instruments, including full quotes, Last Traded Price (LTP), and market depth.
+This section covers endpoints for retrieving real-time market data for one or more instruments, including full quotes, Last Traded Price (LTP), and market depth. Equity, derivative and MCX commodity instruments are all supported, and may be mixed in a single request.
 
 | Request Type | Path                         | Description                                            |
 |--------------|------------------------------|--------------------------------------------------------|
@@ -1597,7 +1630,17 @@ All quote endpoints accept a `scrip-codes` query parameter to specify the instru
 
 | Parameter     | Description                                                                                                                                |
 |---------------|--------------------------------------------------------------------------------------------------------------------------------------------|
-| `scrip-codes` | A comma-separated list of instrument identifiers. Each identifier is a combination of the exchange segment and the instrument token from the [Instruments](https://api-docs.indstocks.com/instruments/) file. <br> **Format**: `SEGMENT_INSTRUMENTTOKEN` <br> **Example**: `NSE_3045,NFO_51011` |
+| `scrip-codes` | A comma-separated list of instrument identifiers. Each identifier is a combination of the exchange segment and the instrument token from the [Instruments](https://api-docs.indstocks.com/instruments/) file. <br> **Format**: `SEGMENT_INSTRUMENTTOKEN` <br> **Example**: `NSE_3045,NFO_51011,MCX_495214` |
+
+| Prefix | Instruments | `source` in the [instruments master](https://api-docs.indstocks.com/instruments/) |
+|--------|-------------|------------------------------------------------------|
+| `NSE_` | NSE cash-market scrips | `equity` |
+| `BSE_` | BSE cash-market scrips | `equity` |
+| `NFO_` | NSE equity and index derivatives | `fno` |
+| `MCX_` | MCX commodity futures and options | `mcx` |
+
+Segments may be mixed freely in one request. Every identifier must resolve — a single unknown code
+fails the whole request with `400` and `Invalid scrip codes or mode`, rather than returning the rest.
 
 ---
 
@@ -1614,6 +1657,32 @@ GET /market/quotes/full
 ```bash
 curl --location 'https://api.indstocks.com/market/quotes/full?scrip-codes=NSE_3045' \
 --header 'Authorization: YOUR_ACCESS_TOKEN'
+```
+
+**For an MCX commodity contract**
+```bash
+curl --location 'https://api.indstocks.com/market/quotes/full?scrip-codes=MCX_495214' \
+--header 'Authorization: YOUR_ACCESS_TOKEN'
+```
+
+A commodity contract returns the same fields as any other instrument, with `open_interest` and
+`open_interest_change` as on a derivative. `upper_circuit` and `lower_circuit` come back as **resolved
+prices**, not the percentages the [instruments master](https://api-docs.indstocks.com/instruments/) carries for MCX:
+
+> `[pulse_tester, verified 2026-10-17]` True, and prices, OHLC and OI matched Kite's to the paisa on every contract that traded that day. But: (1) one `MCX_` code that is not in `source=mcx` fails the **whole** request with `400 Invalid scrip codes or mode`, so send only listed ids; (2) the reply has **no last-trade time**; (3) a contract that has not traded returns an entry with no price; (4) `/market/historical/*` answers `200` with empty `data` for every MCX code.
+
+```json
+{
+  "status": "success",
+  "data": {
+    "MCX_495214": {
+      "live_price": 225820,
+      "prev_close": 221233,
+      "upper_circuit": 230082,
+      "lower_circuit": 212384
+    }
+  }
+}
 ```
 
 #### Response Payload (Success)
@@ -1653,7 +1722,7 @@ GET /market/quotes/ltp
 
 #### Example Request
 ```bash
-curl --location 'https://api.indstocks.com/market/quotes/ltp?scrip-codes=NSE_3045' \
+curl --location 'https://api.indstocks.com/market/quotes/ltp?scrip-codes=NSE_3045,MCX_495214' \
 --header 'Authorization: YOUR_ACCESS_TOKEN'
 ```
 
@@ -2879,6 +2948,8 @@ underlying, so validate the format on your side before calling.
 # Orders
 
 This section outlines the APIs for placing, modifying, canceling, and retrieving standard trading orders.
+The same endpoints serve every segment — `segment` in the request body selects between `EQUITY`,
+`DERIVATIVE` and `COMMODITY`.
 
 | Request Type | Path                                     | Description                    |
 |--------------|------------------------------------------|--------------------------------|
@@ -2930,16 +3001,16 @@ POST /order
 | Parameter     | Type    | Mandatory | Description                                                                 |
 |---------------|---------|:---------:|-----------------------------------------------------------------------------|
 | `txn_type`    | string  | ✅        | The transaction type. **Enum**: `"BUY"`, `"SELL"`                             |
-| `exchange`    | string  | ✅        | The exchange to place the order on. **Enum**: `"NSE"`, `"BSE"`                |
-| `segment`     | string  | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`                      |
-| `product`     | string  | ✅        | The product type. **Enum**: `"MARGIN"`, `"INTRADAY"`, `"CNC"`                 |
-| `order_type`  | string  | ✅        | The type of order. **Enum**: `"LIMIT"`, `"MARKET"`. Note: `MARKET` orders are automatically converted to `LIMIT` at the live price (see note below). |
-| `validity`    | string  | ✅        | The order validity. **Enum**: `"DAY"`, `"IOC"`                                |
+| `exchange`    | string  | ✅        | The exchange to place the order on. **Enum**: `"NSE"`, `"BSE"`, `"MCX"`       |
+| `segment`     | string  | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`, `"COMMODITY"`       |
+| `product`     | string  | ✅        | The product type. **Enum**: `"MARGIN"`, `"INTRADAY"`, `"CNC"`. Valid per segment: `EQUITY` → `CNC`, `INTRADAY`; `DERIVATIVE` → `MARGIN`, `INTRADAY`; `COMMODITY` → `MARGIN`, `INTRADAY` |
+| `order_type`  | string  | ✅        | The type of order. **Enum**: `"LIMIT"`, `"MARKET"`. Note: `MARKET` orders are converted to `LIMIT` orders before they reach the exchange (see note below). |
+| `validity`    | string  | ✅        | The order validity. **Enum**: `"DAY"`. `IOC` is not accepted.                 |
 | `security_id` | string  | ✅        | The unique identifier for the instrument.                                   |
-| `qty`         | integer | ✅        | The quantity of the instrument to trade.                                    |
-| `algo_id`     | string  | ✅        | Algo identifier for the order. Use `"99999"` for NSE, `"9999999999999999"` for BSE orders. |
-| `limit_price` | number  | ❌        | The price for a `LIMIT` order. Required if `order_type` is `"LIMIT"`. For `MARKET` orders, the live market price is used as the limit price. |
-| `is_amo`      | boolean | ❌        | Set to `true` for After Market Orders (AMO). Defaults to `false`.             |
+| `qty`         | integer | ✅        | The quantity of the instrument to trade. For `DERIVATIVE` and `COMMODITY` this is in units, not lots, and must be a whole multiple of the contract lot size. |
+| `algo_id`     | string  | ❌        | Algo identifier for the order. Optional. Defaults to `"99999"` for NSE and MCX, `"9999999999999999"` for BSE. |
+| `limit_price` | number  | ❌        | The price for a `LIMIT` order. Required if `order_type` is `"LIMIT"`. Leave it out for `MARKET` orders (see note below). A `COMMODITY` `MARKET` order that carries `limit_price` is rejected. |
+| `is_amo`      | boolean | ❌        | Set to `true` for After Market Orders (AMO). Defaults to `false`. Ignored for `COMMODITY` — an order placed while MCX is shut is queued automatically (see [Orders Placed While MCX Is Shut](https://api-docs.indstocks.com/glossary/#orders-placed-while-mcx-is-shut)). |
 | `remarks`     | string  | ❌        | Your own free-text tag for the order — a strategy name, a signal id, anything you want to reconcile against later. Stored with the order and echoed back by [Get Order Details](#get-order-details), [Get Order Book](#get-order-book) and [Get Trade Book](#get-trade-book). See [Order Remarks](#order-remarks). |
 
 **Example Request**
@@ -2979,7 +3050,7 @@ curl --location 'https://api.indstocks.com/order' \
 - **DayValidityAllowed**: Order should be placed with DAY validity
 - **QtyMustBeAboveZero**: Qty must be specified and greater than zero
 - **LimitPriceMustBeAboveZero**: Limit price must be specified and greater than zero
-- **QtyWithinFreezeQty**: Qty should be less than freeze qty
+- **QtyWithinFreezeQty**: Qty should be less than freeze qty. A derivative order above it can be placed as a [sliced smart order](https://api-docs.indstocks.com/smart_orders/#slicing-large-orders)
 - **AmoMustBeTrue**: In case of after market orders, amo flag must be true
 - **PriceWithinRange**: Limit price must be within the allowed range
 - **MaxValueOfOption**: Max value of option allowed is enforced
@@ -2988,7 +3059,27 @@ curl --location 'https://api.indstocks.com/order' \
 
 **NOTE: Market Orders Are Converted to Limit Orders**
 
-API trading does not support pure `MARKET` orders. If you submit `order_type: "MARKET"`, the order is automatically converted to a `LIMIT` order priced at the current live market price before being sent to the exchange.
+API trading does not send pure `MARKET` orders to the exchange. If you submit `order_type: "MARKET"`, the order is converted to a `LIMIT` order before it is sent. The limit price depends on the segment:
+
+| `segment` | Limit price of the converted order |
+|---|---|
+| `EQUITY` | The live market price. |
+| `DERIVATIVE` | The live price plus (BUY) or minus (SELL) a price-protection band. |
+| `COMMODITY` | The live price plus (BUY) or minus (SELL) a protection buffer: 5% when the live price is 50 or more, 10% when it is from 10 to below 50, and 20% below 10. The result is rounded to the tick size and capped at the upper circuit limit (BUY) or the lower circuit limit (SELL). |
+
+A converted BUY can fill at any price up to that limit, and a converted SELL at any price down to it.
+
+---
+
+## Commodity (MCX) Orders
+
+`segment: "COMMODITY"` with `exchange: "MCX"` is accepted on [Place Order](#place-order),
+[Modify Order](#modify-order) and [Cancel Order](#cancel-order), and commodity rows appear in the
+order and trade books. The fields are the same as any other order.
+
+The rules that differ — account and contract checks, trading sessions, the off-market queue, and the
+size, value and price limits — are collected in
+[Commodity (MCX) Trading](https://api-docs.indstocks.com/glossary/#commodity-mcx-trading).
 
 ---
 
@@ -2996,7 +3087,7 @@ API trading does not support pure `MARKET` orders. If you submit `order_type: "M
 
 `remarks` is an optional free-text tag you attach to an order at placement. It is meant for your own bookkeeping — the strategy that generated the order, a signal id, a backtest run, a basket name. INDstocks stores it against the order and gives it back to you on every read, so you can reconcile fills against your own system without keeping a separate order-id map.
 
-Both [`POST /order`](#place-order) and [`POST /smart/order`](https://api-docs.indstocks.com/smart_orders/#place-smart-order) accept it.
+[`POST /order`](#place-order) and [`POST /smart/order`](https://api-docs.indstocks.com/smart_orders/#place-smart-order) both accept it. On a [sliced smart order](https://api-docs.indstocks.com/smart_orders/#slicing-large-orders) the same remark is carried onto every slice.
 
 **Where it comes back**
 
@@ -3040,7 +3131,7 @@ POST /order/modify
 | Parameter     | Type    | Mandatory | Description                                                                 |
 |---------------|---------|:---------:|-----------------------------------------------------------------------------|
 | `order_id`    | string  | ✅        | The unique ID of the order to be modified.                                  |
-| `segment`     | string  | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`                    |
+| `segment`     | string  | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`, `"COMMODITY"`     |
 | `qty`         | integer | ✅        | The new quantity for the order.                                             |
 | `limit_price` | number  | ✅        | The new limit price for the order.                                          |
 
@@ -3082,6 +3173,7 @@ curl --location 'https://api.indstocks.com/order/modify' \
 - **MaxValueOfOption**: Max value of option allowed is enforced (for derivative orders)
 - **QtyMultipleOfLotSize**: Qty should be a multiple of lot size (for derivative orders)
 - **OrderCannotBeModified**: Order is not eligible for modification
+- For `COMMODITY` orders, see [Modifying and Cancelling](https://api-docs.indstocks.com/glossary/#modifying-and-cancelling)
 
 ---
 
@@ -3099,7 +3191,7 @@ POST /order/cancel
 | Parameter  | Type   | Mandatory | Description                                                                 |
 |------------|--------|:---------:|-----------------------------------------------------------------------------|
 | `order_id` | string | ✅        | The unique ID of the order to be cancelled.                                 |
-| `segment`  | string | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`                    |
+| `segment`  | string | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`, `"COMMODITY"`     |
 
 **Example Request**
 ```bash
@@ -3126,6 +3218,7 @@ curl --location 'https://api.indstocks.com/order/cancel' \
 
 - **OrderIdMissing**: Order ID is missing or invalid
 - **OrderCannotBeCancelled**: Order is not eligible for cancellation
+- For `COMMODITY` orders, see [Modifying and Cancelling](https://api-docs.indstocks.com/glossary/#modifying-and-cancelling)
 
 ---
 
@@ -3243,11 +3336,13 @@ curl --location 'https://api.indstocks.com/order-book' \
 - Smart orders (GTT) will have `sl_trigger_price`, `sl_limit_price`, `tgt_trigger_price`, and `tgt_limit_price` fields populated.
 - Regular orders will have these smart order fields as empty strings.
 - Orders with a [trailing stop loss](https://api-docs.indstocks.com/smart_orders/#trailing-stop-loss-tsl) additionally carry `is_tsl: true` and `tsl_step_size`. For these, `sl_trigger_price` is the **live trailed trigger** rather than the price originally submitted. *(TSL is not yet live — no order currently returns these fields.)*
-- Order IDs starting with "GTT-" indicate smart orders, while "DRV-" indicates derivative orders.
+- Order IDs starting with "GTT-" indicate smart orders, while "EQ-", "DRV-" and "COM-" indicate equity, derivative and commodity orders.
 - The `order_type` field may include "OCO" (One Cancels Other) for smart orders.
 - Field names use underscore notation (e.g., `requested_price`, `traded_price`) instead of the older "per_share" suffix.
 - The `extra_info` field contains rejection reasons or exchange messages when an order fails. It is empty for successful or pending orders.
 - `remarks` echoes the tag you sent at placement. It is **absent** from the payload for orders placed without one. See [Order Remarks](#order-remarks).
+- `child_order_id` is the ID of the stop-loss/target leg linked to a parent order (e.g. `GTT-16326824`). It is **absent** when the order has no leg. For a [sliced smart order](https://api-docs.indstocks.com/smart_orders/#slicing-large-orders) the leg is created a moment after placement, so poll until it appears.
+- `parent_order_id` is the ID of the order that a stop-loss/target leg protects (e.g. `DRV-94729043`). It is **absent** on orders that are not legs.
 
 ---
 
@@ -3264,7 +3359,7 @@ GET /order
 | Parameter  | Type   | Mandatory | Description                                              |
 |------------|--------|:---------:|----------------------------------------------------------|
 | `order_id` | string | ✅        | The unique ID of the order to retrieve.                  |
-| `segment`  | string | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"` |
+| `segment`  | string | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`, `"COMMODITY"` |
 
 **Example Request**
 ```bash
@@ -3316,6 +3411,10 @@ curl --location --request GET 'https://api.indstocks.com/order' \
 
 Present only when the order was placed with a remark. See [Order Remarks](#order-remarks).
 
+**NOTE: `child_order_id` and `parent_order_id`**
+
+A parent order with a linked stop-loss/target leg carries `child_order_id`. The leg carries `parent_order_id`. Both are absent otherwise. For a [sliced smart order](https://api-docs.indstocks.com/smart_orders/#slicing-large-orders) the leg is created a moment after placement, so poll until `child_order_id` appears.
+
 ---
 
 ## Get Trades
@@ -3336,7 +3435,7 @@ a JSON request body rather than a path parameter or query string.
 | Parameter  | Type   | Mandatory | Description                                              |
 |------------|--------|:---------:|------------------------------------------------------------|
 | `order_id` | string | ✅        | The unique ID of the order to fetch trades for.            |
-| `segment`  | string | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`   |
+| `segment`  | string | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`, `"COMMODITY"`   |
 
 **Example Request**
 ```bash
@@ -3394,7 +3493,7 @@ GET /trade-book
 
 | Parameter | Type   | Description                                                          |
 |-----------|--------|----------------------------------------------------------------------|
-| `segment` | string | The market segment. **Enum**: `"EQUITY"`, `"DERIVATIVE"` (Required) |
+| `segment` | string | The market segment. **Enum**: `"EQUITY"`, `"DERIVATIVE"`, `"COMMODITY"` (Required) |
 
 **Example Request**
 
@@ -3457,7 +3556,7 @@ curl --location 'https://api.indstocks.com/trade-book?segment=EQUITY' \
 - **Trade Book** (`/trade-book`): Shows only executed trades with their fill prices and quantities
 - Trade book entries represent actual transactions, while order book shows order status
 - A single order can have multiple trade entries if filled in parts
-- Use the `segment` query parameter to filter trades by EQUITY or DERIVATIVE segment
+- Use the `segment` query parameter to filter trades by EQUITY, DERIVATIVE or COMMODITY segment
 
 ---
 
@@ -3479,7 +3578,7 @@ This section outlines the APIs for placing, modifying, and canceling multi-leg "
 
 **NOTE: Supported Segments**
 
-Smart Orders (GTT) and Trigger Orders are supported for both **Equity** and **Derivative** instruments.
+Smart Orders (GTT) and Trigger Orders are supported for **Equity**, **Derivative** and **Commodity (MCX)** instruments.
 
 ---
 
@@ -3498,10 +3597,11 @@ Each order ID carries a prefix that indicates its type:
 |--------|---------|----------|
 | `EQ-`  | Equity order | Parent orders in the EQUITY segment |
 | `DRV-` | Derivative order | Parent orders in the DERIVATIVE segment |
+| `COM-` | Commodity order | Parent orders in the COMMODITY segment |
 | `GTT-` | Good Till Triggered | Child orders (always), and parent orders when the limit price falls outside the circuit range |
 
-- A parent order normally receives an `EQ-` or `DRV-` prefix depending on the segment.
-- If the entered limit price is outside the circuit bounds, the parent order is placed as a GTT order instead and receives a `GTT-` prefix.
+- A parent order normally receives an `EQ-`, `DRV-` or `COM-` prefix depending on the segment.
+- If the entered limit price is outside the circuit bounds, the parent order is placed as a GTT order instead and receives a `GTT-` prefix. This does not apply to `COMMODITY`: an out-of-range commodity limit is rejected (see [Commodity (MCX) Smart Orders](#commodity-mcx-smart-orders)).
 - Child orders always carry a `GTT-` prefix.
 
 ### Placement Response
@@ -3525,6 +3625,10 @@ The API response returns both order IDs in a single payload:
   }
 }
 ```
+
+**NOTE: Looking up the link later**
+
+When a child leg is created after the placement response, as for [sliced smart orders](#slicing-large-orders), the response has no `child_order_details`. Read the link from [Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details) or [Get Order Book](https://api-docs.indstocks.com/normal_orders/#get-order-book): a parent order carries `child_order_id`, and a child leg carries `parent_order_id`.
 
 ### Modification and Cancellation
 
@@ -3562,15 +3666,15 @@ POST /smart/order
 | Parameter             | Type    | Mandatory | Description                                                                 |
 |-----------------------|---------|:---------:|-----------------------------------------------------------------------------|
 | `txn_type`            | string  | ✅        | The transaction type. **Enum**: `"BUY"`, `"SELL"`                           |
-| `exchange`            | string  | ✅        | The exchange to place the order on. **Enum**: `"NSE"`                       |
-| `segment`             | string  | ✅        | The market segment. **Enum**: `"EQUITY"`, `"DERIVATIVE"`                    |
-| `product`             | string  | ✅        | The product type. For Equity: `"CNC"`, `"INTRADAY"`. For Derivative: `"MARGIN"`, `"INTRADAY"` |
-| `order_type`          | string  | ✅        | The type of order. **Enum**: `"LIMIT"`, `"MARKET"`, `"TRIGGER"`. Note: `MARKET` orders are automatically converted to `LIMIT` at the live price (see note below). |
+| `exchange`            | string  | ✅        | The exchange to place the order on. **Enum**: `"NSE"`, `"MCX"` (`MCX` only with `segment: "COMMODITY"`) |
+| `segment`             | string  | ✅        | The market segment. **Enum**: `"EQUITY"`, `"DERIVATIVE"`, `"COMMODITY"`     |
+| `product`             | string  | ✅        | The product type. For Equity: `"CNC"`, `"INTRADAY"`. For Derivative: `"MARGIN"`, `"INTRADAY"`. For Commodity: `"MARGIN"`, `"INTRADAY"` |
+| `order_type`          | string  | ✅        | The type of order. **Enum**: `"LIMIT"`, `"MARKET"`, `"TRIGGER"`. Note: `MARKET` orders are converted to `LIMIT` orders before they reach the exchange (see note below). |
 | `validity`            | string  | ✅        | The order validity. **Enum**: `"DAY"`                                       |
 | `security_id`         | string  | ✅        | The unique identifier for the instrument.                                   |
-| `qty`                 | integer | ✅        | The quantity of the instrument to trade.                                    |
-| `algo_id`             | string  | ✅        | Algo identifier for the smart order. Use `"99999"` for NSE, `"9999999999999999"` for BSE orders. |
-| `limit_price`         | number  | ❌        | The price for the main `LIMIT` order. Required if `order_type` is `"LIMIT"`. For `MARKET` orders the live market price is used. **Not used for `"TRIGGER"` orders — omit it** (it is not currently rejected there; see the warning below). |
+| `qty`                 | integer | ✅        | The quantity of the instrument to trade. For `DERIVATIVE` and `COMMODITY` this is in units, not lots, and must be a whole multiple of the contract lot size. |
+| `algo_id`             | string  | ❌        | Algo identifier for the smart order. Optional. Defaults to `"99999"` for NSE and MCX, `"9999999999999999"` for BSE. |
+| `limit_price`         | number  | ❌        | The price for the main `LIMIT` order. Required if `order_type` is `"LIMIT"`. Leave it out for `MARKET` orders (see note below); a `COMMODITY` `MARKET` order that carries it is rejected. **Not allowed on `"TRIGGER"` orders** — a `TRIGGER` order that carries `limit_price` is rejected (see the warning below). |
 | `trigger_price`       | number  | ❌        | The trigger price for the order. Required if `order_type` is `"TRIGGER"`. Must be a multiple of the instrument's tick size. For BUY: must be strictly greater than CMP. For SELL: must be strictly less than CMP. |
 | `trigger_limit_price` | number  | ❌        | Optional limit price for a trigger-limit order. If provided alongside `trigger_price`, the order executes as trigger-limit; otherwise it executes as trigger-market. If omitted, `trigger_limit_price` is automatically set equal to `trigger_price`. Must be a multiple of the instrument's tick size. |
 | `sl_trigger_price`    | number  | ❌        | The trigger price for the stop-loss leg. Must sit below the entry price on a BUY, above it on a SELL. If set, `sl_limit_price` must also be provided or the order is rejected. |
@@ -3580,6 +3684,7 @@ POST /smart/order
 | `is_tsl`              | boolean | ❌        | **Currently ignored — TSL is not live.** Intended: set to `true` to make the stop-loss leg a **trailing** stop-loss. Requires a stop-loss leg and `tsl_step_size`. Not supported when `order_type` is `"TRIGGER"`. See [Trailing Stop Loss](#trailing-stop-loss-tsl). |
 | `tsl_step_size`       | number  | ❌        | **Currently ignored — TSL is not live.** Intended: the trailing step, **in rupees**. Must be greater than zero and a multiple of the instrument's tick size. Required when `is_tsl` is `true`, and must be omitted (or zero) when `is_tsl` is `false`. |
 | `remarks`             | string  | ❌        | Your own free-text tag for the order — a strategy name, a signal id, anything you want to reconcile against later. Carried onto every leg, including the live order created when a stop-loss or target leg triggers. Max 100 characters, silently truncated beyond that; cannot be changed on modify. See [Order Remarks](https://api-docs.indstocks.com/normal_orders/#order-remarks). |
+| `slice_order`         | boolean | ❌        | `DERIVATIVE` and `COMMODITY` only; rejected on `EQUITY`. Set `true` to let a `qty` that exceeds one exchange order be split into several independent orders. Has no effect when `qty` fits in one order. Default `false`. See [Slicing Large Orders](#slicing-large-orders). |
 
 **Example Request — LIMIT order (Derivative)**
 ```bash
@@ -3674,7 +3779,7 @@ Here the legs are checked against an entry price of `319` — the `trigger_limit
 
 - **QtyMustBeAboveZero**: Qty must be specified and greater than zero
 - **LimitPriceMustBeAboveZero**: Limit price must be specified and greater than zero (applies to `LIMIT` orders)
-- **QtyWithinFreezeQty**: Qty should be less than freeze qty
+- **QtyAboveFreezeRequiresSlicing**: a `DERIVATIVE` or `COMMODITY` `qty` above the freeze quantity is rejected unless `slice_order` is `true` (see [Slicing Large Orders](#slicing-large-orders))
 - **MaxValueOfOption**: Max Value of option allowed is enforced
 - **QtyMultipleOfLotSize**: Qty should be multiple of lot size
 - **MaxSlTriggerPrice / MinSlTriggerPrice**: the stop-loss trigger must sit below the entry price on a BUY, above it on a SELL
@@ -3696,7 +3801,7 @@ Here the legs are checked against an entry price of `319` — the `trigger_limit
 
 **NOTE: Market Orders Are Converted to Limit Orders**
 
-API trading does not support pure `MARKET` orders. If you submit `order_type: "MARKET"`, the order is automatically converted to a `LIMIT` order priced at the current live market price before being sent to the exchange.
+API trading does not send pure `MARKET` orders to the exchange. If you submit `order_type: "MARKET"`, the order is converted to a `LIMIT` order before it is sent: at the live price for `EQUITY`, and at the live price plus (BUY) or minus (SELL) a protection band for `DERIVATIVE` or a protection buffer for `COMMODITY`. The exact rules are under [Market Orders Are Converted to Limit Orders](https://api-docs.indstocks.com/normal_orders/#place-order) on the Orders page.
 
 Similarly, for `TRIGGER` orders, if `trigger_limit_price` is omitted it is automatically set equal to `trigger_price`, so the order executes as a trigger-limit order at the trigger price.
 
@@ -3720,7 +3825,180 @@ On a **BUY** the stop-loss must sit below the entry price and the target above i
 
 A trigger order's entry price comes from `trigger_limit_price` (or `trigger_price`); `limit_price` plays no part in it.
 
-Sending `limit_price` anyway is **not currently rejected** — the request succeeds — but it is unsupported on a `TRIGGER` order and can change how the order is handled internally. Omit the field.
+Sending `limit_price` on a `TRIGGER` order is **rejected** with `400` and
+`Limit Price is not allowed for TRIGGER order type; use Trigger Limit Price instead`. Omit the field, and
+put the entry limit in `trigger_limit_price`.
+
+---
+
+## Commodity (MCX) Smart Orders
+
+[`/smart/order`](#place-smart-order) accepts `segment: "COMMODITY"` with `exchange: "MCX"`. The
+fields and the placement response are the same as for any smart order; slicing works as described
+under [Slicing Large Orders](#slicing-large-orders).
+
+The commodity-specific rules — the price and leg constraints, the `COM-`/`GTT-` id combinations, and
+modify/cancel behaviour — are collected in
+[Commodity (MCX) Trading](https://api-docs.indstocks.com/glossary/#commodity-mcx-trading).
+
+---
+
+## Slicing Large Orders
+
+A single exchange order is capped at the instrument's **freeze quantity** — and on `COMMODITY`, also at
+₹3.5 crore of order value. [Place Smart Order](#place-smart-order) refuses a larger `qty`:
+
+```
+Qty exceeds freeze quantity of 3511; set slice_order=true to enable slicing
+```
+
+Set `slice_order: true` and the same request is split server-side into several independent orders, each
+within every applicable cap, with the stop-loss and target legs attached to every slice.
+
+**WARNING: `DERIVATIVE` and `COMMODITY` only**
+
+On an `EQUITY` request the flag is rejected with
+`Order slicing is available for segments DERIVATIVE and COMMODITY only`. This is checked before the
+price rules.
+
+`slice_order` is an opt-in, not a mode switch. With `qty` inside the caps the flag has no effect: the
+request is placed as an ordinary smart order and answers synchronously with `order_status: "CREATED"`.
+
+**Example Request**
+```bash
+curl --location 'https://api.indstocks.com/smart/order' \
+--header 'Authorization: YOUR_ACCESS_TOKEN' \
+--header 'Content-Type: application/json' \
+--data '{
+  "txn_type": "BUY",
+  "exchange": "NSE",
+  "segment": "DERIVATIVE",
+  "product": "MARGIN",
+  "order_type": "LIMIT",
+  "validity": "DAY",
+  "security_id": "48704",
+  "qty": 7020,
+  "limit_price": 22500,
+  "sl_trigger_price": 22000,
+  "sl_limit_price": 21950,
+  "tgt_trigger_price": 23000,
+  "tgt_limit_price": 22950,
+  "slice_order": true,
+  "algo_id": "99999",
+  "remarks": "momentum-v2/sig-4471"
+}'
+```
+
+Every other field behaves exactly as on Place Smart Order. `limit_price`, the stop-loss and target legs,
+and `remarks` are applied to every slice.
+
+### How the quantity is split
+
+The slice size is the largest number of **whole lots** that fits every applicable cap. Each slice except
+the last is exactly that size; the last takes the remainder.
+
+| Segment | Caps on a single slice |
+|---|---|
+| `DERIVATIVE` | The instrument's freeze quantity. |
+| `COMMODITY` | The freeze quantity **and** ₹3.5 crore of order value (`qty × price × general factor`) — whichever binds first. |
+
+Both inputs are published in the [instruments master](https://api-docs.indstocks.com/instruments/) — `LOT_UNITS` is the lot size,
+`FREEZE_QTY` the freeze quantity — so you can work the slice count out before you send:
+
+```
+slice size = floor(FREEZE_QTY / LOT_UNITS) × LOT_UNITS
+slices     = ceil(qty / slice size)
+```
+
+| Instrument | `LOT_UNITS` | `FREEZE_QTY` | Slice size | `qty` | Slices |
+|---|---:|---:|---:|---:|---|
+| `NIFTY-Oct2026-FUT` | 65 | 3511 | 3510 | 3510 | `3510` |
+| `NIFTY-Oct2026-FUT` | 65 | 3511 | 3510 | 7020 | `3510`, `3510` |
+| `NIFTY-Oct2026-FUT` | 65 | 3511 | 3510 | 3900 | `3510`, `390` |
+
+Exchange freeze quantities are rarely whole multiples of the lot size — across the F&O master, 94% sit
+exactly one unit above a lot boundary — so the slice size rounds **down** to the nearest lot. Because the
+total must itself be a lot multiple, the remainder always is one too.
+
+On `COMMODITY` the value cap usually binds first and the slice is then smaller than the freeze quantity
+alone would allow. For a silver contract with a lot size of 30 quoted at ₹220,000, one slice is 5 lots —
+`floor(3,50,00,000 ÷ (220000 × 30))` — not the 20 lots the freeze quantity would permit.
+
+**WARNING: Maximum 10 slices per request**
+
+If the total `qty` would need more than 10 slices the request is rejected before anything is created:
+`Qty requires 12 slices for this instrument; a maximum of 10 slices is allowed per request`. This
+lines up with the exchange's 10 orders-per-second threshold for API clients. Reduce `qty`, or send it
+as more than one request.
+
+### Response
+
+Each slice is a **fully independent order**. It has its own `order_id`, its own row in the [order book](https://api-docs.indstocks.com/normal_orders/#get-order-book), and its own stop-loss/target leg. It is modified or cancelled on its own through [`/smart/order/modify`](#modify-smart-order) and [`/smart/order/cancel`](#cancel-smart-order), parent and leg separately, exactly like any other smart order.
+
+`order_data` holds one entry per slice, in slice order.
+
+**Response Payload (Success)**
+```json
+{
+  "status": "success",
+  "data": {
+    "order_data": [
+      { "order_id": "DRV-28131451", "order_status": "INITIATED" },
+      { "order_id": "DRV-28131452", "order_status": "INITIATED" }
+    ]
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `order_id` | string | Same format as an unsliced smart order (`DRV-` prefix, or `GTT-` when the limit price is outside the circuit range). Use it to modify, cancel or look up this specific slice. |
+| `order_status` | string | Always `INITIATED` for a sliced request. See the note below. |
+| `child_order_id` | string | The `GTT-` stop-loss/target leg of this slice. Present only when the leg already exists at response time, which is the case when the slice itself is placed as a `GTT-` order. Otherwise see the note on legs below. |
+| `child_order_details` | object | `order_id` and `order_status` of that leg. Present under the same condition as `child_order_id`. |
+
+There is no `bulk_order_id` in a sliced response. Reconcile the request through your own `remarks` tag, which is carried onto every slice.
+
+**WARNING: The response confirms acceptance, not execution**
+
+The slices are created and accepted synchronously, then sent to the exchange by a background processor a moment later. So **every entry comes back `INITIATED`**, the state of a created-but-not-yet-sent order. The response cannot tell you whether a slice went on to fill, or was rejected for margin or by RMS.
+
+Get the real outcome from [Get Order Book](https://api-docs.indstocks.com/normal_orders/#get-order-book), [Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details), or the [Order Updates WebSocket](https://api-docs.indstocks.com/Websockets/#order-updates-feed), which pushes each slice's status as it changes. Do not treat `INITIATED` in this response as a fill.
+
+**NOTE: Stop-loss and target legs are created with the slice, not with the response**
+
+For a `DRV-` slice the stop-loss/target leg is created when the background processor sends that slice, so the response carries no `child_order_id` or `child_order_details` for it. Read the link back from [Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details) or [Get Order Book](https://api-docs.indstocks.com/normal_orders/#get-order-book): the slice carries `child_order_id` once the leg exists, and the leg carries `parent_order_id`. Poll until it appears.
+
+**NOTE: One slice failing does not affect the others**
+
+Slices are placed independently. If one is rejected because margin runs out partway through, RMS blocks it, or a rate limit trips, the rest are still placed. That slice ends up `FAILED` on the order book with its reason, while its siblings proceed normally. The HTTP response is `200` either way, because it only reports that the request was accepted.
+
+**NOTE: Outside market hours**
+
+A sliced request placed while the derivative market is closed is accepted and queued for release at the next open, the same as an unsliced smart order.
+
+### Validations
+
+Every [Place Smart Order](#place-smart-order) validation applies, checked on the total `qty` before
+anything is created, so a failed validation means **nothing was placed** — not a partial set of slices.
+Exceeding the freeze quantity is the expected input here, so that check alone is lifted.
+
+Each of these returns `400` with `error_type: "RequestValidationException"` and the message shown.
+
+| Message | Cause |
+|---|---|
+| `Order slicing is available for segments DERIVATIVE and COMMODITY only` | `slice_order` was `true` on an `EQUITY` request. Checked before the price rules. |
+| `Qty exceeds freeze quantity of 3511; set slice_order=true to enable slicing` | `qty` exceeds the freeze quantity and `slice_order` was not set. |
+| `Qty requires 12 slices for this instrument; a maximum of 10 slices is allowed per request` | The total `qty` needs more than 10 slices. |
+| `Qty should be multiple of 65` | Applies to the **total** `qty`. A total that is not a lot multiple is rejected rather than rounded. |
+| `Order slicing is unavailable for 565899: lot size or freeze qty is not available` | The instrument has no usable lot size or freeze quantity. |
+| `Limit Price is outside circuit limits or execution band range. Allowed range: 212384.00 - 230082.00` | The limit price is outside the contract's permitted range. |
+
+### Rate limits
+
+The request itself counts once against the `/smart/order` request limit. Each slice is a real order, so when the background processor sends it, it counts against the per-second order placement cap exactly as a standalone order would. **A request that produces 10 slices sends 10 orders.**
+
+Those units are spent when the slices are sent, not when the call returns, so the spend lands a moment *after* your request completes. If you are already close to the cap, a slice can be rate-limited and end up `FAILED` on the order book while its siblings go through. Pace your own submissions accordingly; firing several sliced requests back-to-back multiplies the order count, not just the request count.
 
 ---
 
@@ -3813,9 +4091,9 @@ POST https://api.indstocks.com/smart/order/modify
 | Parameter             | Type     | Mandatory | Description                                                |
 |-----------------------|----------|:---------:|------------------------------------------------------------|
 | `order_id`            | string   | ✅        | The unique ID of the order to be modified                  |
-| `segment`             | string   | ✅        | The market segment. **Enum**: `"EQUITY"`, `"DERIVATIVE"`   |
-| `algo_id`             | string   | ✅        | Algo identifier. Use `"99999"` for NSE orders.             |
-| `order_type`          | string   | ❌        | The type of order. **Enum**: `"LIMIT"`, `"MARKET"`, `"TRIGGER"`. Must match the existing order type. |
+| `segment`             | string   | ✅        | The market segment. **Enum**: `"EQUITY"`, `"DERIVATIVE"`, `"COMMODITY"`   |
+| `algo_id`             | string   | ✅        | Algo identifier. `"99999"` for NSE and MCX, `"9999999999999999"` for BSE. |
+| `order_type`          | string   | ❌        | Not read. The order type is worked out from the prices you send — see [Order Type Mismatch](#modify-smart-order) below. |
 | `qty`                 | integer  | ❌        | The quantity of the instrument to trade                    |
 | `limit_price`         | number   | ❌        | The price for the main LIMIT order (applies to `LIMIT` orders only) |
 | `trigger_price`       | number   | ❌        | The trigger price for the order. Required when modifying a `TRIGGER` order. Must be a multiple of tick size. For BUY: must be strictly greater than CMP. For SELL: must be strictly less than CMP. |
@@ -3837,12 +4115,22 @@ curl --location 'https://api.indstocks.com/smart/order/modify' \
   "order_id": "DRV-123",
   "segment": "DERIVATIVE",
   "algo_id": "99999",
-  "order_type": "LIMIT",
   "qty": 20,
-  "limit_price": 0.35,
+  "limit_price": 0.35
+}'
+```
+
+**Example Request — Modify a stop-loss and target leg (OCO)**
+```bash
+curl --location 'https://api.indstocks.com/smart/order/modify' \
+--header 'Authorization: YOUR_ACCESS_TOKEN' \
+--data '{
+  "order_id": "GTT-2914581",
+  "segment": "DERIVATIVE",
+  "algo_id": "99999",
   "sl_trigger_price": 0.15,
-  "tgt_trigger_price": 41,
   "sl_limit_price": 0.1,
+  "tgt_trigger_price": 41,
   "tgt_limit_price": 42
 }'
 ```
@@ -3852,10 +4140,9 @@ curl --location 'https://api.indstocks.com/smart/order/modify' \
 curl --location 'https://api.indstocks.com/smart/order/modify' \
 --header 'Authorization: YOUR_ACCESS_TOKEN' \
 --data '{
-  "order_id": "EQ-456",
+  "order_id": "GTT-456",
   "segment": "EQUITY",
   "algo_id": "99999",
-  "order_type": "TRIGGER",
   "qty": 10,
   "trigger_price": 1530.00,
   "trigger_limit_price": 1532.00
@@ -3864,7 +4151,15 @@ curl --location 'https://api.indstocks.com/smart/order/modify' \
 
 **WARNING: Order Type Mismatch**
 
-The `order_type` in the modify request must match the type of the existing order. Sending `order_type: "TRIGGER"` for a `LIMIT` order (or vice versa) will be rejected.
+On a `GTT-` order or a `DRV-` order, the prices you send decide the order type of the request, and it
+must match the type of the existing order. No price at all is a `MARKET`; `limit_price` alone is a
+`LIMIT`; `sl_trigger_price` alone is a stop-loss; `tgt_trigger_price` alone is a target;
+`sl_trigger_price` with `tgt_trigger_price` is an OCO (stop-loss and target); `trigger_price` alone is
+a `TRIGGER`. The `order_type` field is not read.
+
+A mismatch is rejected with `Order Type requested is not eligible for modification, Eligible OrderType is <type>`.
+For example, to modify an OCO leg pair, send both `sl_trigger_price` and `tgt_trigger_price`, even if
+only one of them changes. On an `EQ-` or `COM-` order only `qty` and `limit_price` are read.
 
 **NOTE: Trailing Stop Loss on Modify**
 
@@ -3886,7 +4181,7 @@ POST /smart/order/cancel
 | Parameter  | Type   | Mandatory | Description                                                     |
 |------------|--------|:---------:|-----------------------------------------------------------------|
 | `order_id` | string | ✅        | The unique ID of the order to be cancelled.                     |
-| `segment`  | string | ✅        | The market segment. **Enum**: `"EQUITY"`, `"DERIVATIVE"`        |
+| `segment`  | string | ✅        | The market segment. **Enum**: `"EQUITY"`, `"DERIVATIVE"`, `"COMMODITY"`        |
 
 **Example Request**
 ```bash
@@ -3894,7 +4189,7 @@ curl --location 'https://api.indstocks.com/smart/order/cancel' \
 --header 'Authorization: YOUR_ACCESS_TOKEN' \
 --data '{
   "segment": "DERIVATIVE",
-  "order_id": "123456789"
+  "order_id": "DRV-123456789"
 }'
 ```
 
@@ -3939,13 +4234,13 @@ GET /margin
 
 | Parameter     | Type    | Mandatory | Description                                                                 |
 |---------------|---------|:---------:|-----------------------------------------------------------------------------|
-| `segment`     | string  | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`                    |
-| `exchange`    | string  | ✅        | The exchange. **Enum**: `"NSE"`, `"BSE"`                                   |
+| `segment`     | string  | ✅        | The market segment. **Enum**: `"DERIVATIVE"`, `"EQUITY"`, `"COMMODITY"`     |
+| `exchange`    | string  | ✅        | The exchange. **Enum**: `"NSE"`, `"BSE"`, `"MCX"` (`MCX` only with `segment: "COMMODITY"`) |
 | `securityID`  | string  | ✅        | The unique identifier for the instrument                                    |
 | `txnType`     | string  | ✅        | The transaction type. **Enum**: `"BUY"`, `"SELL"`                          |
-| `quantity`    | string  | ✅        | The quantity of the instrument to trade                                     |
-| `price`       | string  | ✅        | The price per unit                                                          |
-| `product`     | string  | ✅        | The product type. **Enum**: `"MARGIN"`, `"INTRADAY"`, `"CNC"`              |
+| `quantity`    | string  | ✅        | The quantity of the instrument to trade.                                     |
+| `price`       | string  | ✅        | The price per unit. May be left empty or `"0"`, in which case the live price is used. |
+| `product`     | string  | ✅        | The product type. **Enum**: `"MARGIN"`, `"INTRADAY"`, `"CNC"`                                   |
 
 **Example Request**
 ```bash
@@ -3970,6 +4265,7 @@ curl --location --request GET 'https://api.indstocks.com/margin' \
   "data": {
     "total_margin": 750,
     "span_margin": 0,
+    "ha": false,
     "hedge_benefit": 0,
     "exposure_margin": 0,
     "available_balance": 0,
@@ -3997,6 +4293,7 @@ curl --location --request GET 'https://api.indstocks.com/margin' \
 |----------------------|--------|------------------------------------------------------------|
 | `total_margin`       | number | Total margin required for the order                        |
 | `span_margin`        | number | SPAN margin requirement                                    |
+| `ha`                 | boolean | Whether a hedge benefit applies to the order              |
 | `hedge_benefit`      | number | Margin benefit from hedged positions                       |
 | `exposure_margin`    | number | Exposure margin requirement                                |
 | `available_balance`  | number | Available balance after margin requirement                 |
@@ -4026,6 +4323,59 @@ curl --location --request GET 'https://api.indstocks.com/margin' \
 - `total_margin` represents the total funds required to place the order
 - For derivative orders, SPAN and exposure margins may apply
 - For equity delivery orders, delivery margin may be applicable
+
+---
+
+## Commodity (MCX) Margin
+
+Send `segment: "COMMODITY"` with `exchange: "MCX"` and `product` `"MARGIN"` or `"INTRADAY"`.
+
+**Example Request**
+```bash
+curl --location --request GET 'https://api.indstocks.com/margin' \
+--header 'Authorization: YOUR_ACCESS_TOKEN' \
+--header 'Content-Type: application/json' \
+--data '{
+    "segment": "COMMODITY",
+    "exchange": "MCX",
+    "txnType": "BUY",
+    "quantity": "100",
+    "price": "8632",
+    "product": "MARGIN",
+    "securityID": "565899"
+}'
+```
+
+**Response Payload (Success)**
+```json
+{
+  "status": "success",
+  "data": {
+    "total_margin": 117480.5,
+    "span_margin": 86320,
+    "ha": false,
+    "hedge_benefit": 0,
+    "exposure_margin": 31160.5,
+    "available_balance": 0,
+    "var_margin": 0,
+    "insufficient_balance": 0,
+    "delivery_margin": 0,
+    "brokerage": 0,
+    "charges": null
+  }
+}
+```
+
+**NOTE: Commodity margin rules**
+
+- The response fills `total_margin`, `span_margin`, `exposure_margin` and `delivery_margin`. The
+  other amounts are `0`, and `charges` is `null` — commodity charges are not estimated here.
+- `quantity` must be a positive whole number in units — `quantity must be a positive integer`.
+- `price`, when sent, must be a non-negative number. Leave it empty or send `"0"` to use the live price.
+- `exchange` must be `MCX` and `product` must be `MARGIN` or `INTRADAY` — for example
+  `Product is missing or invalid; allowed values: MARGIN, INTRADAY`.
+- These are `400` errors, returned before any margin is calculated. If the margin service rejects
+  a valid request, the response is `512` with `Unable to fetch margin details`.
 
 ---
 
@@ -4105,7 +4455,7 @@ curl --location 'https://api.indstocks.com/portfolio/holdings' \
 
 ## Get Positions
 
-Retrieves the user's open positions, such as intraday trades and F&O positions.
+Retrieves the user's open positions, such as intraday trades, F&O positions and MCX commodity positions.
 
 **Endpoint**
 ```
@@ -4114,23 +4464,36 @@ GET /portfolio/positions
 
 **Example Request**
 
-**For Derivative Positions (MARGIN/INTRADAY):**
 ```bash
+curl --location 'https://api.indstocks.com/portfolio/positions' \
+--header 'Authorization: YOUR_ACCESS_TOKEN'
+```
+
+**Query Parameters**
+
+Both parameters are optional and serve only to filter the response. Called without them, the endpoint
+returns every open position across all segments and products.
+
+| Parameter | Mandatory | Values | Description |
+|-----------|:---------:|--------|-------------|
+| `segment` | ❌ | `equity`, `derivative`, `commodity` | Returns positions in this segment only. Case-insensitive. |
+| `product` | ❌ | `cnc`, `intraday` (equity); `margin`, `intraday` (derivative and commodity) | Narrows the response to this product within the selected segment. Case-insensitive. Must be sent together with `segment`; sent on its own it returns `400`. |
+
+**Filtered Examples**
+
+```bash
+# Derivative positions held under the MARGIN product
 curl --location 'https://api.indstocks.com/portfolio/positions?segment=derivative&product=margin' \
 --header 'Authorization: YOUR_ACCESS_TOKEN'
-```
 
-**For Equity Positions (CNC/INTRADAY):**
-```bash
+# Equity positions held under the CNC product
 curl --location 'https://api.indstocks.com/portfolio/positions?segment=equity&product=cnc' \
 --header 'Authorization: YOUR_ACCESS_TOKEN'
-```
 
-**Query Parameters:**
-- `segment`: `derivative` or `equity`
-- `product`: 
-  - For derivative: `margin` or `intraday`
-  - For equity: `cnc` or `intraday`
+# Commodity positions held under the MARGIN product
+curl --location 'https://api.indstocks.com/portfolio/positions?segment=commodity&product=margin' \
+--header 'Authorization: YOUR_ACCESS_TOKEN'
+```
 
 **Response Payload (Success) — Derivative**
 ```json
@@ -4209,12 +4572,12 @@ curl --location 'https://api.indstocks.com/portfolio/positions?segment=equity&pr
 | `position_id`      | string        | Unique identifier for this position.                                        |
 | `security_id`      | string        | The unique identifier for the instrument.                                   |
 | `symbol`           | string        | The trading symbol for the instrument.                                       |
-| `segment`          | string        | `EQUITY` or `DERIVATIVE`.                                                    |
+| `segment`          | string        | `EQUITY`, `DERIVATIVE` or `COMMODITY`.                                       |
 | `product`          | string        | `MARGIN`, `INTRADAY`, or `CNC` depending on the `product` query parameter.   |
-| `exchange`         | string        | The exchange (`NSE`/`BSE`). May be empty for some derivative index positions. |
+| `exchange`         | string        | The exchange (`NSE`/`BSE`/`MCX`).                                           |
 | `isin`             | string        | ISIN of the instrument (equity positions only).                             |
-| `drv_instrument`   | string        | Derivative instrument type (e.g. `OPTIDX`, `FUTSTK`). Empty for equity.      |
-| `drv_expiry_date`  | string        | Expiry date/time for derivative contracts.                                  |
+| `drv_instrument`   | string        | Contract instrument type (e.g. `OPTIDX`, `FUTSTK`, or `FUTCOM`/`OPTFUT` for commodity). Empty for equity. |
+| `drv_expiry_date`  | string        | Expiry date/time for derivative and commodity contracts.                    |
 | `drv_option_type`  | string        | `CE` or `PE` for options. Absent for futures/equity.                        |
 | `drv_strike_price` | number        | Strike price for options. Absent for futures/equity.                        |
 | `net_qty`          | number        | Net open quantity (buy − sell).                                             |
@@ -4280,16 +4643,27 @@ the generic string `"Bad Request"` while `debug_info` holds the actual cause.
 | `error_type` | HTTP Status | Meaning | Expected client action |
 |---|---|---|---|
 | `InputException` | 400 | Malformed JSON, missing parameters, or wrong data types. | Read `message` for specifics; fix the request body/params. Not retryable as-is. |
+| `RequestValidationException` | 400 | A field was well-formed but failed a business rule — quantity, price, segment, product or slicing. The specific rule is in `message`. | Read `message`; it names the limit and the value. Not retryable as-is. |
 | `TokenException` | 403 (sometimes 401 — see caveat above) | `access_token` is invalid, expired, or revoked. | Re-authenticate: generate a new token (dashboard or [TOTP](https://api-docs.indstocks.com/Users/#method-2-totp-based-token-generation)) and retry. |
 | `UserException` | 403 | The authenticated user can't perform this action — account status or a segment (e.g. F&O) isn't activated. | Not retryable by the client; the user needs to complete onboarding/activation for that segment. |
-| `NotFoundException` | 404 | The endpoint or resource (e.g. a specific order ID) doesn't exist. | Check the path/ID. Not retryable as-is. |
+| `NotFoundException` | 404 | The endpoint or resource doesn't exist. | Check the path. Not retryable as-is. |
 | `MethodNotAllowedException` | 405 | Wrong HTTP method for this endpoint (e.g. `GET` where `POST` is required). | Fix the method. Not retryable as-is. |
 | `DataException` | 400 | Bad market/historical data parameters — invalid timeframe or instrument token. | Check `scrip-codes`/`interval`/time range against [Historical Data](https://api-docs.indstocks.com/historicalData/). Not retryable as-is. |
 | `NetworkException` | 503 | Temporary issue reaching an upstream service (e.g. an exchange). | Safe to retry after a short delay with backoff. |
 | `GeneralException` | 500 | Unexpected server-side error. | Safe to retry once; report if it persists. |
 | `ServiceUnavailableException` | 503 | API is temporarily down for maintenance or overloaded. | Retry after a short delay with backoff. |
 | `GatewayTimeoutException` | 504 | Timeout communicating with an upstream service. | Safe to retry after a short delay with backoff. |
+| `InternalServerException` | 512 | An order lookup could not be completed. | See the caveat below. Not retryable as-is. |
 | `429 Too Many Requests` | 429 | You exceeded a rate limit — see [API Conventions](https://api-docs.indstocks.com/conventions/#rate-limiting) for the per-category limits. | Back off and retry with a client-side rate limiter; do not hammer the endpoint. |
+
+**WARNING: `GET /order` answers `512`, not `404`, for an order it cannot fetch**
+
+[Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details) returns `512` with
+`error_type: "InternalServerException"` and `Unable to fetch order details` whenever it cannot
+retrieve the order — **including when the `order_id` simply does not exist**. It does not return
+`404` for that case. `512` is outside the standard HTTP range, so a client that switches on known
+status codes, or treats anything `5xx` as retryable, will mishandle it: treat it as a terminal
+lookup failure rather than retrying.
 
 ### Retry guidance
 
@@ -4348,7 +4722,7 @@ values, not separate `error_type` codes:
 | `The price is out of the circuit limit.` | The order price is outside the security's daily upper or lower circuit limit. |
 | `Order price must be a multiple of the tick size.` | The order price is not a valid multiple of the instrument's minimum price movement (tick size). |
 | `Market orders are blocked for this instrument.` | Market orders are disabled for this security, often due to low liquidity. Use a limit order instead. |
-| `The order quantity exceeds the freeze limit.` | The order quantity is larger than the maximum allowed for a single order by the exchange. Break it into smaller chunks. |
+| `The order quantity exceeds the freeze limit.` | The order quantity is larger than the maximum allowed for a single order by the exchange. Break it into smaller chunks, or on a `DERIVATIVE` or `COMMODITY` [smart order](https://api-docs.indstocks.com/smart_orders/#slicing-large-orders) set `slice_order: true`, which does the splitting for you. |
 | `Position could not be found.` | An attempt was made to modify or cancel an order that doesn't exist or has already completed. |
 | `The order is already pending...` | The order is already awaiting exchange confirmation, so it can't be modified right now. |
 
@@ -4381,7 +4755,8 @@ values, not separate `error_type` codes:
 |--------|---------------------|----------------------------------------------------------------------|
 | `EQ-`  | Equity order        | Standard and smart-order parent orders in the `EQUITY` segment.      |
 | `DRV-` | Derivative order     | Standard and smart-order parent orders in the `DERIVATIVE` segment.  |
-| `GTT-` | Good Till Triggered  | Smart order child legs (always), and smart order parents when the limit price falls outside the circuit range. |
+| `COM-` | Commodity order      | Standard and smart-order parent orders in the `COMMODITY` segment.   |
+| `GTT-` | Good Till Triggered  | Smart order child legs (always), `TRIGGER` smart order parents, and `EQUITY`/`DERIVATIVE` smart order parents when the limit price falls outside the circuit range. |
 
 See [Smart Orders (GTT)](https://api-docs.indstocks.com/smart_orders/#order-id-prefixes) for the parent/child relationship
 these prefixes describe.
@@ -4393,25 +4768,313 @@ these prefixes describe.
 | Field         | Values                                              | Used In                                      |
 |---------------|------------------------------------------------------|-----------------------------------------------|
 | `txn_type`    | `BUY`, `SELL`                                        | Orders, Smart Orders, Margin                  |
-| `exchange`    | `NSE`, `BSE`                                          | Orders, Smart Orders, Margin                  |
-| `segment`     | `EQUITY`, `DERIVATIVE` *(uppercase)*                  | Orders, Smart Orders, Margin, Order/Trade lookups |
-| `segment`     | `equity`, `derivative` *(lowercase)*                  | Portfolio Positions query parameter only      |
+| `exchange`    | `NSE`, `BSE`, `MCX`                                   | Orders, Smart Orders, Margin                  |
+| `segment`     | `EQUITY`, `DERIVATIVE`, `COMMODITY`                   | Orders, Smart Orders, Margin, Order/Trade lookups, Portfolio Positions |
 | `segment`     | `INDEX`, `EQUITY` *(uppercase)*                       | [Option Chain](https://api-docs.indstocks.com/utility/#option-chain) query parameter only |
-| `product`     | `CNC`, `INTRADAY`, `MARGIN` *(uppercase)*             | Orders, Smart Orders, Margin                  |
-| `product`     | `cnc`, `intraday`, `margin` *(lowercase)*             | Portfolio Positions query parameter only      |
+| `product`     | `CNC`, `INTRADAY`, `MARGIN`                           | Orders, Smart Orders, Margin, Portfolio Positions |
 | `order_type`  | `LIMIT`, `MARKET` (Orders); `LIMIT`, `MARKET`, `TRIGGER` (Smart Orders) | Orders, Smart Orders          |
-| `validity`    | `DAY`, `IOC` (Orders); `DAY` only (Smart Orders)       | Orders, Smart Orders                          |
-| `algo_id`     | `99999` (NSE), `9999999999999999` (BSE)               | Orders, Smart Orders                          |
+| `validity`    | `DAY`                                                 | Orders, Smart Orders                          |
+| `algo_id`     | `99999` (NSE, MCX), `9999999999999999` (BSE). Optional | Orders, Smart Orders |
 | `source`      | `equity`, `fno`, `index`                              | Instruments CSV download                      |
 
-**WARNING: `segment` means three different things**
+`exchange` and `segment` are not freely combinable: `COMMODITY` is only valid with `MCX`, and `MCX` is
+only valid with `COMMODITY`. `product` is per segment — `EQUITY` takes `CNC`/`INTRADAY`, `DERIVATIVE` and
+`COMMODITY` take `MARGIN`/`INTRADAY`.
 
-Watch the casing and the value set — they are not interchangeable:
+The `segment` and `product` query parameters on
+[Portfolio Positions](https://api-docs.indstocks.com/portfolio_funds/#get-positions) are case-insensitive — `commodity` and
+`COMMODITY` are both accepted, as are `margin` and `MARGIN`.
 
-- **Orders / Smart Orders / Margin / lookups**: uppercase `EQUITY` or `DERIVATIVE`
-- **Portfolio Positions**: lowercase `equity` or `derivative`
+**WARNING: `segment` does not take the same values everywhere**
+
+The accepted value set differs by endpoint — they are not interchangeable:
+
+- **Orders / Smart Orders / Margin / lookups / Portfolio Positions**: `EQUITY`, `DERIVATIVE`
+  or `COMMODITY`
 - **Option Chain**: uppercase `INDEX` or `EQUITY` — here it describes the *underlying's* segment,
   so `DERIVATIVE` is not a valid value even though the chain returns derivative contracts
+
+---
+
+## Commodity (MCX) Trading
+
+Everything specific to MCX commodity trading, in one place: the account and contract checks, the
+trading sessions, the off-market queue, and the size, value and price rules. The endpoints themselves
+are documented under [Order Management](https://api-docs.indstocks.com/normal_orders/) and [Smart Orders](https://api-docs.indstocks.com/smart_orders/); this
+section covers only what differs for `segment: "COMMODITY"` with `exchange: "MCX"`.
+
+Commodity orders use the same endpoints with `segment: "COMMODITY"` and `exchange: "MCX"`. Order ids come
+back with the `COM-` prefix. Smart orders on MCX are described under
+[Commodity (MCX) Smart Orders](#smart-orders).
+
+| Field | Commodity value |
+|---|---|
+| `exchange` | `"MCX"` only |
+| `segment` | `"COMMODITY"` |
+| `product` | `"MARGIN"` (carry-forward) or `"INTRADAY"` |
+| `order_type` | `"LIMIT"` or `"MARKET"`. Do not send `limit_price` with `MARKET`. |
+| `validity` | `"DAY"` only |
+| `security_id` | The MCX contract's scrip code. |
+| `qty` | In units, not lots, and a whole multiple of the contract lot size. For a contract with a lot size of 100, `qty: 100` is one lot. |
+| `algo_id` | Optional. Defaults to `"99999"`. |
+| `is_amo` | Ignored. See [Orders placed while MCX is shut](#orders-placed-while-mcx-is-shut). |
+
+**Example Request**
+```bash
+curl --location 'https://api.indstocks.com/order' \
+--header 'Authorization: YOUR_ACCESS_TOKEN' \
+--header 'Content-Type: application/json' \
+--data '{
+  "txn_type": "BUY",
+  "exchange": "MCX",
+  "segment": "COMMODITY",
+  "product": "MARGIN",
+  "order_type": "LIMIT",
+  "limit_price": 8632,
+  "validity": "DAY",
+  "security_id": "565899",
+  "qty": 100,
+  "algo_id": "99999",
+  "remarks": "crude-breakout/sig-118"
+}'
+```
+
+Here `565899` is a CRUDEOIL futures contract with a lot size of 100 and a tick size of ₹1, so `qty: 100`
+is one lot.
+
+**Response Payload (Success)**
+```json
+{
+    "status": "success",
+    "data": {
+        "order_id": "COM-2013",
+        "order_status": "INITIATED"
+    }
+}
+```
+
+`order_status` is the order's state when the response is built — for example `INITIATED`, `PENDING`, or
+`O-PENDING` for an order queued while MCX is shut. An order that the exchange or RMS rejects during
+placement still returns HTTP `200`, with `order_status: "FAILED"` and the reason:
+
+```json
+{
+    "status": "success",
+    "data": {
+        "order_id": "COM-2016",
+        "order_status": "FAILED",
+        "reason": "Your order value exceeds the maximum limit set by the exchange. Please reduce the order quantity and try again."
+    }
+}
+```
+
+### Account and Contract Checks
+
+These checks run before the order is placed. A failed check returns `400` with
+`error_type: RequestValidationException` and the message shown.
+
+| Check | Message |
+|---|---|
+| `segment` and `exchange` must be a valid pair. `COMMODITY` takes only `MCX`, and `MCX` takes only `COMMODITY`. This check runs first. | `Exchange is missing or invalid; allowed values: MCX` |
+| Your account must have the commodity (MCX) segment activated. | `user is not onboarded on the requested segment and exchange` |
+| The contract must be active and have a live price. | `security 565899 is not tradeable on MCX` or `market data unavailable for security 565899` |
+| Your commodity kill switch must be off. | `order placement is paused because your kill switch is active` |
+
+### MCX Trading Sessions
+
+MCX runs two sessions on a trading day: a morning session 09:00–17:00 IST and an evening session
+17:00–23:55 IST (23:30 IST while US daylight saving is in effect). Either session can be absent on a
+given day.
+
+While a session is open, `INTRADAY` orders are refused once the intraday cutoff has passed — 23:45 IST
+(23:20 IST under US DST), or 16:50 IST on a day that has no evening session. The message is
+`intraday order not allowed after cut-off time`. The same cutoff applies to modifying an `INTRADAY`
+order. After the session closes, `INTRADAY` orders are accepted again and queued for the next session.
+
+### Orders Placed While MCX Is Shut
+
+An order placed while MCX is shut is accepted and saved in INDstocks' own queue with status `O-PENDING`.
+This includes the 15-minute pre-open window before a session starts. INDstocks releases the order to the
+exchange after the next session opens. It is never sent to the exchange as a broker AMO.
+
+- At release the order goes through the normal margin and order-rate checks. It can still end as
+  `FAILED` — for example on a margin shortfall. Check the result with
+  [Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details) or [Get Order Book](https://api-docs.indstocks.com/normal_orders/#get-order-book).
+- A `MARKET` order is priced when you place it: the last traded price at that moment plus or minus the
+  protection buffer (see [Market Orders Are Converted to Limit Orders](https://api-docs.indstocks.com/normal_orders/#place-order)). It is released at
+  that limit price, even if the market opens away from it. We advise placing a `LIMIT` order instead,
+  so you control the price the order is released at.
+
+### Order Size and Value
+
+`/order` places exactly one exchange order for the whole `qty`:
+
+- `qty` must be a whole multiple of the lot size — `Qty should be multiple of 100`.
+- `qty` must not exceed the contract's freeze quantity — `Qty should be less than freeze qty 10000`.
+- The order value must not exceed ₹3.5 crore, the exchange's per-order cap. Value is
+  `qty × price × general factor`, where the general factor converts the quoted price into the contract's
+  rupee value. The price is the limit price, or for a `MARKET` order the converted limit price. Over the
+  cap: `Order value 36000000.00 exceeds maximum allowed commodity order value of 35000000.00`.
+
+The value is checked again at the final price, after `MARKET` conversion; for an option, that check adds
+the strike price to the premium. A request that would then need more than one exchange order is refused
+with `Qty requires slicing; use the smart order endpoint with slice_order=true`. To place a larger
+quantity, send it to [`/smart/order`](#smart-orders) with
+`slice_order: true`.
+
+### Price Rules
+
+- `limit_price` must be a multiple of the tick size — `Limit Price should be multiple of 1.00`.
+- `limit_price` must be inside the contract's circuit limits for the day —
+  `Limit price must be within range 8102.00 - 9338.00`. An out-of-range limit is rejected.
+- If the contract's circuit limits are not available, the order is rejected with
+  `commodity live circuit bounds are unavailable`.
+- On an option, the price must not exceed 1,00,000 — `Max Value of option allowed is 100000`.
+
+### Modifying and Cancelling
+
+- [Modify Order](https://api-docs.indstocks.com/normal_orders/#modify-order) and [Cancel Order](https://api-docs.indstocks.com/normal_orders/#cancel-order) with `segment: "COMMODITY"` accept only
+  `COM-` order ids. Any other id is rejected with `invalid order_id <id>`.
+- Only a `PENDING` or `O-PENDING` order can be modified. The new `qty` and `limit_price` must pass the
+  size, value and price rules above. The response carries the order's status after the change.
+- A `PENDING`, `O-PENDING` or `PARTIALLY FILLED` order can be cancelled. A `PARTIALLY FILLED` order that
+  has a linked stop-loss/target leg is refused, because cancelling it could also remove the protection
+  for the filled part.
+- Cancelling an order that has a linked smart-order leg also cancels that leg. The response reports the
+  leg in `child_order_details`.
+- The cancel response carries the status read after the request. If the exchange has not yet confirmed
+  the cancellation, the response adds `reason: "Cancellation requested; completion is not confirmed"`.
+
+```json
+{
+    "status": "success",
+    "data": {
+        "order_id": "COM-2014",
+        "order_status": "CANCELLED",
+        "child_order_details": {
+            "order_id": "GTT-91822",
+            "order_status": "CANCELLED"
+        }
+    }
+}
+```
+
+### Reading Commodity Orders
+
+Commodity orders appear in [Get Order Book](https://api-docs.indstocks.com/normal_orders/#get-order-book) alongside equity and derivative orders, and
+[Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details), [Get Trades](https://api-docs.indstocks.com/normal_orders/#get-trades) and [Get Trade Book](https://api-docs.indstocks.com/normal_orders/#get-trade-book)
+take `segment: "COMMODITY"`. Open commodity positions come from
+[Get Positions](https://api-docs.indstocks.com/portfolio_funds/#get-positions) with `segment=commodity`, and margin from the
+[Margin Calculator](https://api-docs.indstocks.com/margin_calculation/) with `segment: "COMMODITY"`.
+
+---
+
+### Smart Orders
+
+Send `segment: "COMMODITY"` with `exchange: "MCX"` to [`/smart/order`](https://api-docs.indstocks.com/smart_orders/#place-smart-order). The fields,
+account checks, trading sessions, off-market queue, and the size, value and price rules are the same as for
+[Commodity (MCX) Orders](#commodity-mcx-trading). This section covers what is specific to
+smart orders.
+
+**Example Request — LIMIT order with stop-loss and target (Commodity)**
+```bash
+curl --location 'https://api.indstocks.com/smart/order' \
+--header 'Authorization: YOUR_ACCESS_TOKEN' \
+--header 'Content-Type: application/json' \
+--data '{
+  "txn_type": "BUY",
+  "exchange": "MCX",
+  "segment": "COMMODITY",
+  "product": "MARGIN",
+  "order_type": "LIMIT",
+  "validity": "DAY",
+  "security_id": "565899",
+  "qty": 100,
+  "limit_price": 8632,
+  "sl_trigger_price": 8550,
+  "sl_limit_price": 8545,
+  "tgt_trigger_price": 8750,
+  "tgt_limit_price": 8755,
+  "algo_id": "99999"
+}'
+```
+
+**Response Payload (Success)**
+```json
+{
+  "status": "success",
+  "data": {
+    "order_data": [
+      {
+        "order_id": "COM-2017",
+        "order_status": "CREATED",
+        "child_order_details": {
+          "order_id": "GTT-91822",
+          "order_status": "CREATED"
+        }
+      }
+    ]
+  }
+}
+```
+
+#### Commodity Rules
+
+| Field or leg | Rule |
+|---|---|
+| `validity` | `"DAY"` only. |
+| `limit_price` | Required for `LIMIT`; rejected with `MARKET` and with `TRIGGER`. Must be a multiple of the tick size and inside the contract's circuit limits and execution band. |
+| `trigger_price` | Required for `TRIGGER`. A multiple of the tick size, above the live price for a BUY and below it for a SELL. May sit outside the day's circuit limits — the order waits for it. |
+| `trigger_limit_price` | Optional. A multiple of the tick size. Defaults to `trigger_price`. |
+| `trigger_price` or `trigger_limit_price` on a `LIMIT` or `MARKET` order | Rejected — `Trigger prices are only allowed for TRIGGER order type`. |
+| Stop-loss and target legs | Each leg requires both its trigger and its limit price, on the correct side of the entry price (see [Place Smart Order](https://api-docs.indstocks.com/smart_orders/#place-smart-order)). All four prices must be multiples of the tick size and inside the circuit limits and execution band — `SL Trigger Price is outside circuit limits or execution band range. Allowed range: 8102.00 - 9338.00`. |
+| Order value | `qty × entry price × general factor` must not exceed ₹3.5 crore. The entry price is `limit_price`, the live price for `MARKET`, or `trigger_limit_price` (else `trigger_price`) for `TRIGGER`. |
+
+#### Order IDs in the Response
+
+| `order_type` | What `order_data` contains |
+|---|---|
+| `LIMIT` or `MARKET` without legs | One `COM-` order. |
+| `LIMIT` or `MARKET` with a stop-loss and/or target leg | The `COM-` parent, with the `GTT-` leg in `child_order_details`. The leg becomes active when the parent fills. |
+| `TRIGGER` | A `GTT-` parent. The `COM-` order is created when the trigger fires. |
+
+| `order_status` | Meaning |
+|---|---|
+| `CREATED` | The order or leg has been saved. Read its live state with [Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details) or [Get Order Book](https://api-docs.indstocks.com/normal_orders/#get-order-book). |
+| `FAILED` on the parent | The parent could not be placed. A `reason` is returned and the response carries no leg. |
+| `FAILED` on the leg | `reason: "Trigger creation failed; protection is not active"`. The parent carries no protection. |
+
+#### Slicing Large Commodity Orders
+
+`slice_order: true` works the same way on MCX as elsewhere — see
+[Slicing Large Orders](https://api-docs.indstocks.com/smart_orders/#slicing-large-orders) for the rules, the split and the validations. Two things are
+specific to commodity:
+
+- A slice must fit the contract's freeze quantity **and** ₹3.5 crore of order value. The value cap
+  usually binds first, so the slice is smaller than the freeze quantity alone would allow.
+- `order_data` holds one entry per slice — `INITIATED` for a `COM-` slice, `CREATED` for the `GTT-` slices
+  of a `TRIGGER` order. A `COM-` slice receives its stop-loss/target leg after the response; read it from
+  `child_order_id` on [Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details). The `GTT-` slices of a
+  `TRIGGER` order carry their leg in the response.
+
+#### Modifying and Cancelling Commodity Smart Orders
+
+Use `segment: "COMMODITY"` with a `COM-` or `GTT-` order id. Any other id, or a `GTT-` id that does not
+belong to a commodity order, is rejected with `Order ID is missing or invalid`.
+
+| Order id | Rules |
+|---|---|
+| `GTT-` | Modifiable only before it triggers — `GTT order triggered, cannot be modified`. Send the same kind of prices the order already holds; for a stop-loss-and-target pair, both `sl_trigger_price` and `tgt_trigger_price` (see [Order Type Mismatch](https://api-docs.indstocks.com/smart_orders/#modify-smart-order)). A trigger price sent without its limit price keeps the saved limit price. New prices must pass the same tick, circuit, execution-band and value rules as placement, and the value is checked at the largest price in the request. |
+| `COM-` | Modified as described under [Modify Order](https://api-docs.indstocks.com/normal_orders/#modify-order). |
+
+- `qty` is optional on both and keeps the current quantity when left out.
+- `INTRADAY` orders cannot be modified after the intraday cutoff.
+- Cancelling a `COM-` parent also cancels its linked `GTT-` leg, reported in `child_order_details`. A
+  `PARTIALLY FILLED` order cannot be cancelled through this endpoint.
+- The cancel response carries the status read after the request. If the cancellation is not yet confirmed,
+  it adds `reason: "Cancellation requested; completion is not confirmed"`.
+
+---
 
 ---
 
@@ -4835,7 +5498,7 @@ Common reasons for order rejection:
 |-------|----------|
 | **Insufficient margin** | Add more funds to your account |
 | **Invalid price** | Ensure price is within circuit limits and tick size |
-| **Invalid quantity** | For F&O, quantity must be in multiples of lot size |
+| **Invalid quantity** | For F&O and MCX commodity, quantity is in units and must be a multiple of the lot size |
 | **Market closed** | Orders can only be placed during trading hours |
 | **Instrument blocked** | Some instruments may be blocked by RMS |
 
@@ -5101,6 +5764,10 @@ Subscribe to our [API Status Page](https://status.indstocks.com) for real-time u
 
 ### ✨ New Features
 
+- **MCX quotes**: the market-quote endpoints — [`/market/quotes/full`](https://api-docs.indstocks.com/MarketQuote/#get-full-market-quotes), [`/market/quotes/ltp`](https://api-docs.indstocks.com/MarketQuote/#get-ltp-quote) and [`/market/quotes/mkt`](https://api-docs.indstocks.com/MarketQuote/#get-market-depth) — accept MCX commodity scrip codes, using the `MCX_` prefix with the contract's `SECURITY_ID` (e.g. `MCX_495214`). Segments may be mixed in one request. `upper_circuit` and `lower_circuit` come back as resolved prices, unlike the percentage bands the instruments master carries for MCX. See [Market Quotes](https://api-docs.indstocks.com/MarketQuote/).
+- **Commodity (MCX) trading**: `segment: "COMMODITY"` with `exchange: "MCX"` is now accepted on `/order`, `/order/modify`, `/order/cancel`, `/smart/order`, `/smart/order/modify`, `/smart/order/cancel` and `/margin`, and commodity rows appear in `GET /order`, `GET /order/trades`, `GET /order-book` and `GET /trade-book?segment=COMMODITY`. `GET /portfolio/positions` accepts `segment=commodity`. Products are `MARGIN` and `INTRADAY`, validity is `DAY`, `qty` is in units and must be a whole multiple of the contract lot size, order ids carry a `COM-` prefix, and `algo_id` is always `99999`. One order must fit within the contract's freeze quantity and ₹3.5 crore of value; `/smart/order` with `slice_order: true` splits a larger order into at most 10 orders. `MARKET` orders are sent as `LIMIT` orders with a 5–20% protection buffer. An order placed while MCX is shut is queued as `O-PENDING` and released after the next session opens, never as a broker AMO. See [Commodity (MCX) Orders](https://api-docs.indstocks.com/glossary/#commodity-mcx-trading) and [Commodity (MCX) Smart Orders](https://api-docs.indstocks.com/glossary/#commodity-mcx-trading).
+- **Order Slicing on Smart Orders**: `POST /smart/order` accepts `slice_order: true` for a `DERIVATIVE` or `COMMODITY` `qty` larger than one exchange order allows — above the instrument's freeze quantity, or for `COMMODITY` above the ₹3.5 crore per-order value cap. The request is split server-side into whole-lot slices that each fit both limits, every slice an independent order with its own stop-loss/target leg. Slices are created and accepted synchronously, then sent to the exchange by a background processor: `order_data` returns one entry per slice and every `order_status` is `INITIATED`, confirming acceptance rather than execution. Read the real per-slice outcome from [Get Order Book](https://api-docs.indstocks.com/normal_orders/#get-order-book) or the [Order Updates WebSocket](https://api-docs.indstocks.com/Websockets/#order-updates-feed). Capped at 10 slices per request. On `EQUITY` the flag is rejected. See [Slicing Large Orders](https://api-docs.indstocks.com/smart_orders/#slicing-large-orders).
+- **Order links on reads**: [Get Order Details](https://api-docs.indstocks.com/normal_orders/#get-order-details) and [Get Order Book](https://api-docs.indstocks.com/normal_orders/#get-order-book) now return `child_order_id` on a parent that has a stop-loss/target leg, and `parent_order_id` on the leg. Both are absent otherwise. This is how the leg of a sliced smart order is found, since it is created a moment after the placement response.
 - **Order Remarks**: `/order` and `/smart/order` accept an optional `remarks` string — your own tag for an order (strategy name, signal id, anything you reconcile against). It comes back on `GET /order`, `GET /order-book` and `GET /trade-book`, so fills line up with your own system without a separate order-id map. Max 100 characters (longer is truncated, not rejected), fixed once placed, carried onto every leg of a smart order, and never sent to the exchange. A small reserved set is refused. See [Order Remarks](https://api-docs.indstocks.com/normal_orders/#order-remarks).
 - **Option Chain with Greeks**: `GET /market/option-chain` returns the full strike ladder for an index or stock underlying in one call, with per-leg last price, OI and previous OI, volume, top-of-book bid/ask, implied volatility and Greeks (`delta`, `gamma`, `theta`, `vega`). Takes `exchange`, `segment` (`INDEX`/`EQUITY`), `underlying-scrip`, `expiry` (`YYYY-MM-DD`) and an optional `strike_count` (per side of ATM, default `10`). See [Option Chain](https://api-docs.indstocks.com/utility/#option-chain).
 - **Contracts & Expiries**: five endpoints for discovering derivative contracts without parsing the instruments master CSV. `GET /market/instruments/search` and `GET /market/instruments/expiries` cover currently trading contracts and their upcoming expiries; `GET /market/instruments/expired/search`, `GET /market/instruments/expired/expiries` and `GET /market/instruments/expired/contracts` do the same for expiries that have already passed, which is what makes historical options work. Filter by `instrument_type`, `expiry`, `option_type` and a `strike_from`/`strike_to` band. Only `segment=DERIVATIVE` is supported for now. Expired contracts are keyed by `trading_symbol` rather than `security_id`, because exchanges recycle instrument tokens after expiry. See [Contracts & Expiries](https://api-docs.indstocks.com/contracts/).
@@ -5667,7 +6334,7 @@ paths:
                   type: string
                 segment:
                   type: string
-                  enum: [EQUITY, DERIVATIVE]
+                  enum: [EQUITY, DERIVATIVE, COMMODITY]
       responses:
         '200':
           description: Order details retrieved
@@ -5710,7 +6377,7 @@ paths:
                   type: string
                 segment:
                   type: string
-                  enum: [EQUITY, DERIVATIVE]
+                  enum: [EQUITY, DERIVATIVE, COMMODITY]
       responses:
         '200':
           description: Order cancelled
@@ -5751,7 +6418,7 @@ paths:
                   type: string
                 segment:
                   type: string
-                  enum: [EQUITY, DERIVATIVE]
+                  enum: [EQUITY, DERIVATIVE, COMMODITY]
       responses:
         '200':
           description: Trades retrieved
@@ -5772,7 +6439,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [EQUITY, DERIVATIVE]
+            enum: [EQUITY, DERIVATIVE, COMMODITY]
       responses:
         '200':
           description: Trade book retrieved
@@ -5785,7 +6452,14 @@ paths:
     post:
       tags: [Smart Orders]
       summary: Place smart order (GTT)
-      description: Places a multi-leg GTT order. Creates a parent order plus a linked child `GTT-` order for the stop-loss/target legs.
+      description: >-
+        Places a multi-leg GTT order. Creates a parent order plus a linked child `GTT-` order for the
+        stop-loss/target legs. With slice_order true, a DERIVATIVE or COMMODITY qty that exceeds one
+        exchange order is split into several independent orders (largest whole-lot multiple fitting
+        the freeze quantity, and for COMMODITY the Rs 3.5 crore value cap; at most 10 slices); those
+        are created synchronously and sent by a background
+        processor, so each entry in order_data is INITIATED and the response confirms acceptance,
+        not execution. No bulk_order_id is returned for a sliced request.
       requestBody:
         required: true
         content:
@@ -5836,7 +6510,7 @@ paths:
                   type: string
                 segment:
                   type: string
-                  enum: [EQUITY, DERIVATIVE]
+                  enum: [EQUITY, DERIVATIVE, COMMODITY]
       responses:
         '200':
           description: Smart order cancelled
@@ -5872,7 +6546,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [equity, derivative]
+            enum: [equity, derivative, commodity]
         - in: query
           name: product
           required: true
@@ -5995,8 +6669,11 @@ components:
       required: true
       schema:
         type: string
-      description: Comma-separated `SEGMENT_TOKEN` instrument identifiers, e.g. `NSE_3045,NFO_51011`
-      example: NSE_3045
+      description: >-
+        Comma-separated SEGMENT_TOKEN instrument identifiers. Prefixes: NSE_ and BSE_ for cash,
+        NFO_ for NSE derivatives, MCX_ for MCX commodity contracts. Segments may be mixed. Every
+        identifier must resolve - one unknown code fails the whole request with 400.
+      example: NSE_3045,NFO_51011,MCX_495214
 
     Underlying:
       in: query
@@ -6264,24 +6941,35 @@ components:
 
     OrderRequest:
       type: object
-      required: [txn_type, exchange, segment, product, order_type, validity, security_id, qty, algo_id]
+      required: [txn_type, exchange, segment, product, order_type, validity, security_id, qty]
       properties:
         txn_type: { type: string, enum: [BUY, SELL] }
-        exchange: { type: string, enum: [NSE, BSE] }
-        segment: { type: string, enum: [EQUITY, DERIVATIVE] }
+        exchange: { type: string, enum: [NSE, BSE, MCX] }
+        segment: { type: string, enum: [EQUITY, DERIVATIVE, COMMODITY] }
         product: { type: string, enum: [CNC, INTRADAY, MARGIN] }
         order_type:
           type: string
           enum: [LIMIT, MARKET]
-          description: "MARKET is auto-converted to LIMIT at the live price before reaching the exchange."
-        validity: { type: string, enum: [DAY, IOC] }
+          description: >-
+            MARKET is converted to LIMIT before reaching the exchange: at the live price for
+            EQUITY, and at the live price plus (BUY) or minus (SELL) a protection band for
+            DERIVATIVE or a protection buffer for COMMODITY.
+        validity: { type: string, enum: [DAY] }
         security_id: { type: string }
         qty: { type: integer, minimum: 1 }
         algo_id:
           type: string
-          description: '"99999" for NSE, "9999999999999999" for BSE'
-        limit_price: { type: number, description: "Required if order_type is LIMIT" }
-        is_amo: { type: boolean, default: false }
+          description: >-
+            Optional. Defaults to "99999" for NSE and MCX, "9999999999999999" for BSE.
+        limit_price:
+          type: number
+          description: >-
+            Required if order_type is LIMIT. Leave it out for MARKET; a COMMODITY MARKET order
+            that carries it is rejected.
+        is_amo:
+          type: boolean
+          default: false
+          description: Ignored for COMMODITY - an order placed while MCX is shut is queued automatically.
         remarks:
           type: string
           maxLength: 100
@@ -6298,7 +6986,7 @@ components:
       required: [order_id, segment, qty, limit_price]
       properties:
         order_id: { type: string }
-        segment: { type: string, enum: [EQUITY, DERIVATIVE] }
+        segment: { type: string, enum: [EQUITY, DERIVATIVE, COMMODITY] }
         qty: { type: integer, minimum: 1 }
         limit_price: { type: number }
 
@@ -6313,6 +7001,20 @@ components:
             order_status:
               type: string
               enum: [QUEUED, O-PENDING, SL-PENDING, PROCESSING, ABORTED, INITIATED, SUCCESS, CANCELLED, MODIFIED, PENDING, EXPIRED, FAILED, "PARTIALLY FILLED", "PARTIALLY FILLED - CANCELLED", "PARTIALLY FILLED - EXPIRED"]
+            reason:
+              type: string
+              description: >-
+                Present when order_status is FAILED, or when a cancellation is not yet
+                confirmed ("Cancellation requested; completion is not confirmed").
+            child_order_details:
+              type: object
+              description: >-
+                On a cancel response, the linked stop-loss/target leg that was cancelled with
+                the order.
+              properties:
+                order_id: { type: string, example: "GTT-91822" }
+                order_status: { type: string }
+                reason: { type: string }
 
     OrderDetails:
       type: object
@@ -6363,6 +7065,18 @@ components:
                 The tag supplied when the order was placed. Absent when the order carried
                 no remark.
               example: momentum-v2/sig-4471
+            child_order_id:
+              type: string
+              description: >-
+                Order ID of the stop-loss/target leg linked to this order. Present only on a
+                parent that has one. For a sliced smart order the leg is created a moment after
+                placement, so poll until it appears.
+              example: GTT-16326824
+            parent_order_id:
+              type: string
+              description: >-
+                Order ID of the order this leg protects. Present only on a stop-loss/target leg.
+              example: DRV-94729043
 
     OrderBookResponse:
       type: object
@@ -6415,23 +7129,26 @@ components:
 
     SmartOrderRequest:
       type: object
-      required: [txn_type, exchange, segment, product, order_type, validity, security_id, qty, algo_id]
+      required: [txn_type, exchange, segment, product, order_type, validity, security_id, qty]
       properties:
         txn_type: { type: string, enum: [BUY, SELL] }
-        exchange: { type: string, enum: [NSE] }
-        segment: { type: string, enum: [EQUITY, DERIVATIVE] }
+        exchange: { type: string, enum: [NSE, MCX] }
+        segment: { type: string, enum: [EQUITY, DERIVATIVE, COMMODITY] }
         product: { type: string, enum: [CNC, INTRADAY, MARGIN] }
         order_type: { type: string, enum: [LIMIT, MARKET, TRIGGER] }
         validity: { type: string, enum: [DAY] }
         security_id: { type: string }
         qty: { type: integer, minimum: 1 }
-        algo_id: { type: string }
+        algo_id:
+          type: string
+          description: >-
+            Optional. Same defaults as on /order.
         limit_price:
           type: number
           description: >-
-            Required if order_type is LIMIT. Not used for TRIGGER orders - omit it. It is not
-            currently rejected on a TRIGGER request, but it is unsupported there and can change
-            how the order is handled.
+            Required if order_type is LIMIT. Rejected on a TRIGGER order - use
+            trigger_limit_price. Leave it out for MARKET; a COMMODITY MARKET order that
+            carries it is rejected.
         trigger_price: { type: number, description: "Required if order_type is TRIGGER" }
         trigger_limit_price: { type: number }
         sl_trigger_price:
@@ -6471,18 +7188,29 @@ components:
             INDstocks' internal channel tags (currently TV-TERMINAL, matched case-insensitively)
             are rejected. Never sent to the exchange.
           example: momentum-v2/sig-4471
+        slice_order:
+          type: boolean
+          default: false
+          description: >-
+            DERIVATIVE and COMMODITY only; rejected on EQUITY. Set true to let a qty that exceeds
+            one exchange order be split into whole-lot slices - above the instrument freeze
+            quantity, or for COMMODITY above the Rs 3.5 crore per-order value cap. Each slice is an
+            independent order with its own stop-loss/target leg. At most 10 slices per request. No
+            effect when qty fits in one order.
 
     SmartOrderModifyRequest:
       type: object
       required: [order_id, segment, algo_id]
       properties:
         order_id: { type: string }
-        segment: { type: string, enum: [EQUITY, DERIVATIVE] }
+        segment: { type: string, enum: [EQUITY, DERIVATIVE, COMMODITY] }
         algo_id: { type: string }
         order_type:
           type: string
           enum: [LIMIT, MARKET, TRIGGER]
-          description: Must match the existing order's type
+          description: >-
+            Not read. The order type is derived from the prices sent and must match the
+            existing order's type.
         qty: { type: integer }
         limit_price: { type: number }
         trigger_price: { type: number }
@@ -6501,13 +7229,26 @@ components:
           properties:
             order_data:
               type: array
+              description: One entry per order created. A sliced request returns one entry per slice, in slice order.
               items:
                 type: object
                 properties:
                   order_id: { type: string }
-                  order_status: { type: string }
+                  order_status:
+                    type: string
+                    description: >-
+                      CREATED for a synchronous smart order. INITIATED for every entry of a sliced
+                      request, because the slices are created but not yet sent.
+                  child_order_id:
+                    type: string
+                    description: >-
+                      Order ID of the stop-loss/target leg. Sliced requests only, and only when the
+                      leg already exists at response time. Otherwise read it from GET /order or
+                      GET /order-book once the leg is created.
+                    example: GTT-2914581
                   child_order_details:
                     type: object
+                    description: Absent when the leg is created after the response (sliced DRV- slices).
                     properties:
                       order_id: { type: string }
                       order_status: { type: string }
@@ -6572,12 +7313,12 @@ components:
       type: object
       required: [segment, exchange, securityID, txnType, quantity, price, product]
       properties:
-        segment: { type: string, enum: [EQUITY, DERIVATIVE] }
-        exchange: { type: string, enum: [NSE, BSE] }
+        segment: { type: string, enum: [EQUITY, DERIVATIVE, COMMODITY] }
+        exchange: { type: string, enum: [NSE, BSE, MCX] }
         securityID: { type: string }
         txnType: { type: string, enum: [BUY, SELL] }
-        quantity: { type: string }
-        price: { type: string }
+        quantity: { type: string, description: "For COMMODITY, a positive whole number in units" }
+        price: { type: string, description: "For COMMODITY, may be empty or \"0\" to use the live price" }
         product: { type: string, enum: [MARGIN, INTRADAY, CNC] }
 
     MarginResponse:
@@ -6589,6 +7330,7 @@ components:
           properties:
             total_margin: { type: number }
             span_margin: { type: number }
+            ha: { type: boolean, description: "Whether a hedge benefit applies" }
             hedge_benefit: { type: number }
             exposure_margin: { type: number }
             available_balance: { type: number }
@@ -6598,6 +7340,8 @@ components:
             brokerage: { type: number }
             charges:
               type: object
+              nullable: true
+              description: null for COMMODITY - commodity charges are not estimated.
               properties:
                 stt: { type: number }
                 exchange_charges: { type: number }

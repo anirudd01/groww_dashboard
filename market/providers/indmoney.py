@@ -8,6 +8,7 @@ References (INDstocks API v1, docs/indstocks-api-docs.md):
                      scripts/indmoney.py --master - never downloaded here
   - Quotes         : GET https://api.indstocks.com/market/quotes/{ltp,full}
   - Daily candles  : GET https://api.indstocks.com/market/historical/1day
+  - MCX (MCX page) : quotes with the ``MCX_`` prefix (2026-10); candles asked for but come back empty
   - Live feed      : wss://ws-prices.indstocks.com/api/v1/ws/prices
 
 Credentials: ``IND_MONEY_CLIENT_ID``, ``IND_MONEY_MPIN`` and
@@ -29,6 +30,12 @@ docs are silent or wrong (details in docs/api/INDMONEY_API.md):
 * A single unknown scrip code fails the whole REST batch with HTTP 400, and
   the first batched call can come back with only some of the codes - so
   reference-data calls retry once for whatever was missing.
+
+MCX, retested 2026-10-17: the full quote matched Kite's last price, OHLC and OI on every contract
+that traded, and volume survives the close. It carries no last-trade time, ``/market/historical``
+answers ``200`` with empty ``data`` for MCX codes, and only the ids listed by
+``/market/instruments?source=mcx`` are accepted (one other id fails the whole batch). The MCX page
+therefore sends only the contracts ``scripts/indmoney.py --master`` stored as listed.
 """
 
 import asyncio
@@ -54,6 +61,7 @@ from market.providers import indmoney_session
 from market.providers.base import (
     SEGMENT_CASH,
     SEGMENT_INDEX,
+    SEGMENT_MCX_FUTURES,
     DayBar,
     FeedHandle,
     InstrumentRef,
@@ -73,6 +81,7 @@ TOKEN_PAGE = indmoney_session.TOKEN_PAGE
 SEGMENT_PREFIXES = {
     SEGMENT_CASH: ("NSE", "NSE"),
     SEGMENT_INDEX: ("NIDX", "NIDX"),
+    SEGMENT_MCX_FUTURES: ("MCX", "MCX"),
 }
 
 
@@ -94,6 +103,11 @@ def feed_code(ref: InstrumentRef) -> str:
 REST_BATCH = 1000
 HISTORY_BATCH = 5
 SUBSCRIBE_BATCH = 500
+
+#: Candle interval in minutes (None = daily) -> (INDmoney interval, most days one call returns).
+#: A wider window is not an error: INDmoney silently returns the maximum, so ask for no more.
+CANDLE_INTERVALS = {1: ("1minute", 7), 5: ("5minute", 7), 15: ("15minute", 7), 60: ("60minute", 15),
+                    None: ("1day", 365)}
 
 #: INDmoney allows 5 requests/second in both the Quote and the Data (historical)
 #: buckets. 4/s leaves headroom. Module level because the limit is per user and
@@ -180,6 +194,20 @@ def decode_frame(message) -> Optional[dict]:
         except ValueError:
             return None
     return message if isinstance(message, dict) else None
+
+
+def candles_to_arrays(candles) -> dict:
+    """INDmoney ``[{ts, o, h, l, c, v}, ...]`` -> Dhan's full parallel-array shape, as
+    ``KiteProvider.get_candles`` returns. INDmoney candles carry no open interest."""
+    out = {name: [] for name in ("timestamp", "open", "high", "low", "close", "volume", "open_interest")}
+    for candle in candles or []:
+        if not isinstance(candle, dict) or candle.get("ts") is None:
+            continue
+        for name, key in (("timestamp", "ts"), ("open", "o"), ("high", "h"), ("low", "l"), ("close", "c"),
+                          ("volume", "v")):
+            out[name].append(candle.get(key))
+        out["open_interest"].append(None)
+    return out
 
 
 def candles_to_series(candles) -> dict:
@@ -629,6 +657,49 @@ class IndMoneyProvider(MarketDataProvider):
                 volume=int(volume) if volume else None,
             )
         return bars
+
+    def get_quotes(self, refs: List[InstrumentRef]) -> Dict[str, dict]:
+        """Full quotes per symbol, in the shape Dhan's and Kite's ``get_quotes`` return
+        (``last_price``, ``ohlc`` with ``close`` = previous close, ``volume``, ``oi``).
+
+        Used by the MCX page. INDmoney gives no last-trade time, so ``last_trade_time`` is None.
+        """
+        quotes: Dict[str, dict] = {}
+        for symbol, entry in self._quotes_complete("full", refs).items():
+            quotes[symbol] = {
+                "last_price": entry.get("live_price"),
+                "ohlc": {"open": entry.get("day_open"), "high": entry.get("day_high"),
+                         "low": entry.get("day_low"), "close": entry.get("prev_close")},
+                "volume": entry.get("volume"),
+                "oi": entry.get("open_interest"),
+                "last_trade_time": None,
+            }
+        return quotes
+
+    def get_candles(
+        self, ref: InstrumentRef, start: datetime, end: datetime, interval: Optional[int] = None
+    ) -> Optional[dict]:
+        """Candles in the shape of ``DhanProvider.get_candles``, open interest left empty, or None.
+
+        The window is cut to INDmoney's per-call maximum for the interval (``CANDLE_INTERVALS``).
+        For MCX the answer is empty as of 2026-10-17; asked anyway so the chart works once it isn't.
+        """
+        name, max_days = CANDLE_INTERVALS[interval]
+        start = max(start, end - timedelta(days=max_days))
+        window = {"scrip-codes": rest_code(ref), "start_time": int(start.replace(tzinfo=IST).timestamp() * 1000),
+                  "end_time": int(end.replace(tzinfo=IST).timestamp() * 1000)}
+        try:
+            status, body = self._get(f"/market/historical/{name}", window, "data")
+        except requests.RequestException as e:
+            logger.debug("INDmoney candles request failed for %s: %s", ref.symbol, e)
+            return None
+        error = error_of(status, body)
+        if error:
+            logger.debug("INDmoney candles error for %s: %s", ref.symbol, error)
+            return None
+        block = (body.get("data") or {}).get(rest_code(ref)) or {}
+        arrays = candles_to_arrays(block.get("candles"))
+        return arrays if arrays["timestamp"] else None
 
     def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:
         self._refresh_token()

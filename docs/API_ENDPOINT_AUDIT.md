@@ -9,7 +9,7 @@ places orders.
 | **Dhan** | Swagger/OpenAPI at `https://api.dhan.co/v2/v3/api-docs` (47 paths). Saved as [`api/dhan-openapi-2026-10-01.json`](api/dhan-openapi-2026-10-01.json) | **3 endpoints missing from our export**, one of them important (below) |
 | **INDmoney** | No OpenAPI. `https://api-docs.indstocks.com` publishes an "Export for LLMs" file (`/llms-full.txt`) | Same 28 endpoints as our copy. The only differences are our own `[pulse_tester]` corrections. **Do not overwrite** [`indstocks-api-docs.md`](indstocks-api-docs.md) with a fresh download |
 | **Kite** | No OpenAPI. Docs at `kite.trade/docs/connect/v3/` (13 pages) | Every endpoint we do not document is trading or account related (orders, GTT, alerts, margins, mutual funds, holdings auctions). We have everything for market data |
-| **Groww** | Not checked (subscription ended) | - |
+| **Groww** | No OpenAPI. The `growwapi` 1.5.0 SDK source (33 endpoints) and the Python SDK docs pages, 2026-10-17 | Every endpoint is now documented in [`api/GROWW_API_*.md`](api/GROWW_API_ORDERS.md). Unused here: order/position update streams, GTT/OCO smart orders, the margin calculator, option chain. No report, tradebook-history or ledger endpoint exists |
 
 ## Dhan: three endpoints our export lacks
 

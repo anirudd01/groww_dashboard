@@ -1,11 +1,12 @@
 """Everything this project fetches from INDmoney (INDstocks), in one command.
 
-    python scripts/indmoney.py --master       # NSE index constituents, then INDmoney's instrument ids
+    python scripts/indmoney.py --master       # NSE index constituents, INDmoney's instrument ids, its MCX list
 
 Jobs, in the order they run:
 
   --master   NSE index constituents   -> index_constituents    (jobs/index_constituents.py)
              INDmoney instrument ids  -> indmoney_instruments  (jobs/indmoney_instruments.py)
+             INDmoney MCX futures     -> indmoney_mcx          (jobs/indmoney_mcx.py, read by the MCX page)
 
 INDmoney has no data job: nothing is stored from it day to day (the dashboards read it live).
 So unlike ``kite.py`` and ``dhan.py`` there is nothing to run without ``--master``; ``--master-only``
@@ -41,12 +42,13 @@ def main(argv=None) -> int:
     common.setup(args.verbose)
     if not args.master:
         common.logger.info("INDmoney has no data job - nothing to do. Run with --master to refresh "
-                           "the index constituents and INDmoney's instrument ids.")
+                           "the index constituents, INDmoney's instrument ids and its MCX list.")
         return 0
-    from jobs import index_constituents, indmoney_instruments
+    from jobs import index_constituents, indmoney_instruments, indmoney_mcx
 
     return common.run_jobs([("NSE index constituents", lambda: index_constituents.run(args.db)),
-                            ("INDmoney instrument ids", lambda: indmoney_instruments.run(args))])
+                            ("INDmoney instrument ids", lambda: indmoney_instruments.run(args)),
+                            ("INDmoney MCX futures", lambda: indmoney_mcx.run(args))])
 
 
 if __name__ == "__main__":

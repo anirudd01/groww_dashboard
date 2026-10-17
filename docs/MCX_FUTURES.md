@@ -2,7 +2,8 @@
 
 A navbar page ("MCX Futures", in the **MCX** row) showing MCX commodity futures: one row per
 commodity with last price, change against the previous close, the day's range, volume and open
-interest, plus candle charts. Dhan serves it and Kite takes over automatically when Dhan fails.
+interest, plus candle charts. Dhan serves it; Kite takes over automatically when Dhan fails, and
+INDmoney (free) when both do.
 
 Visualisation only: it places no orders and generates no signals.
 
@@ -10,12 +11,14 @@ Visualisation only: it places no orders and generates no signals.
 streamlit run pulse_dashboard.py                                  # the "MCX Futures" page
 streamlit run apps/mcx_futures_dashboard.py --server.port 8512    # on its own
 python scripts/dhan.py --master                               # the contract list; run monthly
+python scripts/indmoney.py --master                           # which of them INDmoney lists; run monthly
 ```
 
 Code: [`apps/mcx_futures_dashboard.py`](../apps/mcx_futures_dashboard.py) (page),
 [`market/mcx_futures.py`](../market/mcx_futures.py) (contracts, choice, fallback, parsing),
-`get_quotes` / `get_candles` in [`market/providers/dhan.py`](../market/providers/dhan.py) and
-[`market/providers/kite.py`](../market/providers/kite.py), tests in `tests/test_mcx_futures.py`.
+`get_quotes` / `get_candles` in [`market/providers/dhan.py`](../market/providers/dhan.py),
+[`market/providers/kite.py`](../market/providers/kite.py) and
+[`market/providers/indmoney.py`](../market/providers/indmoney.py), tests in `tests/test_mcx_futures.py`.
 
 ## Which provider, and why
 
@@ -23,23 +26,30 @@ Code: [`apps/mcx_futures_dashboard.py`](../apps/mcx_futures_dashboard.py) (page)
 | --- | --- | --- |
 | **Dhan** | ✅ quotes, minute and daily candles, all with OI | **Primary.** Its token is minted from TOTP, so it works with no one at the machine, and it keeps the session's volume after the close |
 | **Kite** | ✅ same prices, OHLC and OI as Dhan, to the paisa | **Fallback.** Needs `python scripts/kite_login.py` each morning (the token dies at 06:00 IST). After the close it reports volume as 0 |
-| INDmoney | ❌ REST rejects every MCX code | Not used |
+| INDmoney | ⚠️ quotes only (since Oct 2026): same prices, OHLC and OI as Kite, free, TOTP login. 19 of 28 commodities, nearer expiries only; no candles, no last-trade time | **Last resort.** Serves the table when Dhan and Kite both fail; the chart then has no candles ([retest 2026-10-17](PROVIDER_GUIDE.md#mcx-on-indmoney-retested-2026-10-17)) |
 | Groww | Positions only in this repo | Not used |
 
-All of this was measured live on 2026-10-03; the side-by-side table is in
+Dhan and Kite were measured live on 2026-10-03, INDmoney on 2026-10-17; the side-by-side tables are in
 [PROVIDER_GUIDE.md](PROVIDER_GUIDE.md#mcx-on-dhan-and-kite-tested-2026-10-03).
 
 ### How the fallback works
 
-`quotes_with_fallback` tries Dhan, then Kite, and uses the first one that prices anything.
-A broker that connects but returns no prices counts as failed, because Dhan's quote helper logs an
-API error and returns an empty result rather than raising. Candles try the broker that served the
-quotes first, then the other.
+`quotes_with_fallback` tries Dhan, then Kite, then INDmoney, and uses the first one that prices
+anything. A broker that connects but returns no prices counts as failed, because Dhan's quote helper
+logs an API error and returns an empty result rather than raising. A broker with no stored ids fails
+with the script to run. Candles try the broker that served the quotes first, then the others.
 
 - When Kite is serving, a yellow notice says so and gives Dhan's reason (for example
   "Showing Kite because Dhan: Dhan authentication failed").
-- If both fail, the page shows each broker's reason. With no Kite login today that reason is
+- If all three fail, the page shows each broker's reason. With no Kite login today that reason is
   "No Kite session for today - run 'python scripts/kite_login.py'".
+- When INDmoney is serving:
+  - Only the contracts INDmoney lists are asked for: one id it does not list fails its whole call with
+    HTTP 400. The caption names the commodities left out (agri, LEAD, STEELREBAR, ELECDMBL, SUNOIL).
+  - It gives no last-trade time, so the "Last trade" column is blank and "Live" (and auto-refresh) is
+    judged from MCX's weekday hours, 09:00 to 23:55 IST. Exchange holidays are not known, so on a
+    weekday holiday the page counts as live and refreshes every 30 s.
+  - The chart asks INDmoney for candles first; it returns none for MCX, so Dhan and then Kite are tried.
 - Each refresh (every 30 s while trading, or "Refresh now") tries Dhan first again, so the page
   returns to Dhan as soon as Dhan recovers.
 
@@ -83,6 +93,9 @@ candle call when the chart's contract or interval changes (candles are cached fo
     until the next run.
 - **What was stored on 2026-10-03:** 164 contracts across 28 commodities, all with Kite ids. The last expiry
   is March 2028.
+- **INDmoney:** `scripts/indmoney.py --master` stores which of these INDmoney lists (`indmoney_mcx`), from its
+  `/market/instruments?source=mcx`. INDmoney's `SECURITY_ID` is MCX's token, the same id as Dhan's, so the two
+  sets join on it. 93 contracts across 19 commodities on 2026-10-17.
 
 The page never downloads either list. Re-run the script about monthly, since new expiries are listed as old
 ones lapse. The page shows a warning once the stored list runs out within 45 days, and says which script to
@@ -90,8 +103,11 @@ run if nothing is stored.
 
 ## Quirks worth knowing
 
-- **`ohlc.close` is the previous session's close**, on both brokers, and it stays that way after the
+- **`ohlc.close` is the previous session's close**, on all three brokers, and it stays that way after the
   session and at the weekend. Change is measured against it.
+  - Except on Kite, not always: on Saturday 17 Oct Kite gave NATURALGAS OCT Friday's own close (298.6) as
+    `ohlc.close`, so its change read ~0%, while for GOLD DEC it still gave Thursday's. INDmoney gave Thursday's
+    for both (306, matching Kite's daily candle), the -2.45% Friday really moved.
 - **Daily candles are a continuous series.**
   - Dhan returns a year of daily candles even for a contract listed months ago. Open interest drops at each
     monthly roll.

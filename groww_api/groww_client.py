@@ -327,6 +327,9 @@ class GrowwClient:
         }))
 
         ltp_map = self.get_ltp(all_symbols)
+        # Without Groww's paid data plan every price call is refused. Those stocks are then valued
+        # at their buy price (zero P&L), and the page must say so rather than show it as live.
+        unpriced_symbols = sorted(s for s in all_symbols if s not in ltp_map)
 
         ANNUAL_INTEREST_RATE = 0.165  # Groww MTF interest ~16.5% p.a.
         DAILY_INTEREST_RATE = ANNUAL_INTEREST_RATE / 365.0
@@ -439,18 +442,21 @@ class GrowwClient:
         # covers both equity + F&O margin, so we subtract the F&O portion to
         # isolate the cash you (not Groww) put in for MTF positions.
         # -------------------------------------------------------------
-        net_margin_used = float(margins_raw.get("net_margin_used", 0.0))
+        # Groww reports the per-segment "used" figures as NEGATIVE numbers while net_margin_used is
+        # positive (2026-10-17: net_margin_used 1,364,900 and net_fno_margin_used -1,364,900), so
+        # every "used" amount is taken as a magnitude before it is combined with another.
+        net_margin_used = abs(float(margins_raw.get("net_margin_used", 0.0)))
         clear_cash = float(margins_raw.get("clear_cash", 0.0))
         collateral_available = float(margins_raw.get("collateral_available", 0.0))
-        collateral_used = float(margins_raw.get("collateral_used", 0.0))
+        collateral_used = abs(float(margins_raw.get("collateral_used", 0.0)))
 
         fno_margin_details = margins_raw.get("fno_margin_details", {}) or {}
-        net_fno_margin_used = float(fno_margin_details.get("net_fno_margin_used", 0.0))
+        net_fno_margin_used = abs(float(fno_margin_details.get("net_fno_margin_used", 0.0)))
 
         equity_margin_details = margins_raw.get("equity_margin_details", {}) or {}
-        raw_equity_margin_used = float(equity_margin_details.get("net_equity_margin_used", 0.0))
+        raw_equity_margin_used = abs(float(equity_margin_details.get("net_equity_margin_used", 0.0)))
 
-        your_mtf_cash_used = abs(raw_equity_margin_used) if raw_equity_margin_used else max(0.0, net_margin_used - net_fno_margin_used)
+        your_mtf_cash_used = raw_equity_margin_used if raw_equity_margin_used else max(0.0, net_margin_used - net_fno_margin_used)
         # Can never exceed the actual MTF cost basis - clamp to keep the numbers sane
         your_mtf_cash_used = min(your_mtf_cash_used, mtf_cost_basis_total) if mtf_cost_basis_total > 0 else 0.0
 
@@ -544,6 +550,7 @@ class GrowwClient:
 
         return {
             "summary": summary,
+            "unpriced_symbols": unpriced_symbols,
             "delivery_holdings": delivery_holdings_items,
             "mtf_positions": mtf_items,
             "raw_holdings": holdings_raw,

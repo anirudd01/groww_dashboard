@@ -12,35 +12,6 @@ EXCHANGE_MCX = "MCX"
 ASSET_TYPE_EQUITY = "EQUITY"
 ASSET_TYPE_COMMODITY = "COMMODITY"
 
-# Index Keywords (NSE - for equity classification)
-INDEX_KEYWORDS = [
-    "NIFTY",
-    "BANK",
-    "SENSEX",
-    "FINNIFTY",
-    "MIDCAP",
-    "NSEINDEX"
-]
-
-# Commodity Keywords (MCX)
-COMMODITY_KEYWORDS = [
-    "GOLD",
-    "SILVER",
-    "CRUDE",
-    "COPPER",
-    "NICKEL",
-    "ZINC",
-    "LEAD",
-    "ALUMINUM",
-    "NATURALGAS",
-    "COBALT",
-    "COAL",
-    "GOLDM",
-    "SILVERM",
-    "CRUDEOIL",
-    "MCX_"
-]
-
 # Position Segments
 POSITION_SEGMENTS = {
     SEGMENT_FNO: "NSE Equity/Index Derivatives",

@@ -1,3 +1,11 @@
+"""F&O and MCX positions from a Groww account: P&L, direction, Greeks and one-click exits.
+
+Positions come from Groww's positions API, contract facts (expiry, lot, tick) from its instrument
+list, prices from its quote calls and Greeks from ``get_greeks``. Prices and Greeks need Groww's
+paid data plan; without it the page lists the positions with no price or P&L and says why
+(groww_api/position_processor.py). Exits are marketable limit orders built by groww_api/orders.py.
+"""
+
 import os as _os
 import sys as _sys
 
@@ -5,7 +13,8 @@ import sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 
 import os
-import re
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -27,51 +36,45 @@ except ImportError:
             pass
 
 from groww_api import GrowwAPIClient, GrowwAPIService, PositionProcessor
+from groww_api.orders import build_exit_order
+from market.market_hours import IST, is_market_open
+from market.mcx_futures import in_session as mcx_in_session
 from utils import (
     format_inr,
     format_inr_full,
-    format_expiry_date,
     format_expiry_short,
-    extract_position_sentiment,
-    get_sentiment_color,
+    position_sentiment,
     get_position_summary,
     group_positions_by_underlying_expiry,
-    EXCHANGE_NSE,
-    EXCHANGE_MCX,
-    SEGMENT_FNO,
-    SEGMENT_COMMODITY,
 )
 
-# Quick exit helper function
-def place_quick_exit_order(symbol, quantity, ltp, exchange, segment):
-    """Place a quick exit order at LTP - 0.5%"""
-    try:
-        exit_price = ltp * 0.995  # 0.5% less than LTP
-        api_client = GrowwAPIClient.get_instance()
-        api_service = GrowwAPIService(api_client)
 
-        order_response = api_service.place_order(
-            trading_symbol=symbol,
-            quantity=quantity,
-            price=exit_price,
-            validity="DAY",
-            exchange=exchange,
-            segment=segment,
-            product="NRML",
-            order_type="LIMIT",
-            transaction_type="SELL",
-        )
+def place_quick_exit_order(pos):
+    """Flatten one position with a marketable limit order. (success, order id or reason, price, status)."""
+    try:
+        order = build_exit_order(pos)
+    except ValueError as e:
+        return False, str(e), None, None
+    try:
+        api_service = GrowwAPIService(GrowwAPIClient.get_instance())
+        try:
+            order_response = api_service.place_order(**order, timeout=15)
+        except Exception as e:
+            if "timed out" in str(e).lower() or "timeout" in type(e).__name__.lower():
+                return False, (f"no answer from Groww within 15 s ({e}). The order may still have been placed: "
+                               "check the Groww order book before trying again."), None, None
+            raise
         groww_order_id = order_response.get('groww_order_id', 'Unknown')
 
         # Best-effort status check - order was already placed even if this fails
         order_status = "UNKNOWN"
         try:
-            status_response = api_service.get_order_status(segment=segment, groww_order_id=groww_order_id)
+            status_response = api_service.get_order_status(segment=order["segment"], groww_order_id=groww_order_id)
             order_status = status_response.get('order_status') or status_response.get('status') or "UNKNOWN"
         except Exception:
             pass
 
-        return True, groww_order_id, exit_price, order_status
+        return True, groww_order_id, order["price"], order_status
     except Exception as e:
         return False, str(e), None, None
 
@@ -207,20 +210,11 @@ def render_kpi_card(title: str, value: str, sub: str, theme: str = "blue"):
 st.sidebar.title("📈 Pulse Tester: FnO Tracker")
 st.sidebar.caption("Monitor and manage all open **Futures & Options** positions.")
 
-mode_choice = st.sidebar.radio(
-    "Data Source Mode:",
-    ["Live FnO Trading API", "Demo / Mock Data (Test UI)"],
-    index=0 if (os.getenv("GROWW_API_KEY") or os.getenv("GROWW_ACCESS_TOKEN")) else 1
-)
-
-is_mock = (mode_choice == "Demo / Mock Data (Test UI)")
-
 with st.sidebar.expander("🔑 Broker Credentials & Connection", expanded=True):
     auth_mode = os.getenv("GROWW_AUTH_MODE", "TOTP")
     api_key = os.getenv("GROWW_API_KEY", "")
     totp_secret = os.getenv("GROWW_TOTP_SECRET", "")
     api_secret = os.getenv("GROWW_API_SECRET", "")
-    access_token = os.getenv("GROWW_ACCESS_TOKEN", "")
 
     st.write(f"**Auth Mode:** `{auth_mode}`")
     st.write(f"**TOTP Token / API Key:** {'✅ Configured' if api_key else '❌ Missing in .env'}")
@@ -239,48 +233,44 @@ st.sidebar.markdown(
     **📌 Understanding FnO Positions:**
     - **Futures:** Leveraged directional bets on index or stock price movements.
     - **Options:** Limited-risk exposure with defined premium paid/received.
+    - **Shorts** show a negative quantity; their P&L rises as the price falls.
     - **Greeks:** Delta (directional), Gamma (acceleration), Theta (time decay), Vega (volatility).
     """
 )
 
 # --------------- DATA FETCHING ---------------
 @st.cache_data(ttl=60, show_spinner=False)
-def fetch_fno_data(mock: bool):
+def fetch_fno_data():
     """
     Fetch FnO positions using singleton client.
     Auth happens ONCE per session (singleton pattern), not per cache refresh.
     """
     try:
-        # Get singleton client (authenticates only on first call)
         api_client = GrowwAPIClient.get_instance()
         if not api_client.is_connected:
             return None, api_client.auth_error or "Failed to authenticate"
 
-        # Create service layer
         api_service = GrowwAPIService(api_client)
-
-        # Fetch user data
-        profile = api_service.get_user_profile()
-        margins = api_service.get_margins()
-
-        # Process FnO positions
         processor = PositionProcessor(api_service)
         fno_positions = processor.get_fno_positions()
+        greeks, greeks_error = processor.get_option_greeks(fno_positions)
 
         return {
-            "profile": profile,
-            "margins": margins,
+            "profile": api_service.get_user_profile(),
+            "margins": api_service.get_margins(),
             "fno_positions": fno_positions,
+            "greeks": greeks,
+            "greeks_error": greeks_error,
         }, None
     except Exception as e:
         return None, str(e)
 
 with st.spinner("Fetching FnO positions..."):
-    result, error_msg = fetch_fno_data(is_mock)
+    result, error_msg = fetch_fno_data()
 
 if error_msg:
     st.error(f"⚠️ **Error**: {error_msg}")
-    st.info("Check your `.env` file credentials or switch to **'Demo / Mock Data'** mode in the sidebar.")
+    st.info("Check the `GROWW_*` credentials in your `.env` file.")
     st.stop()
 
 profile = result["profile"]
@@ -288,42 +278,47 @@ margins = result["margins"]
 fno_positions = result["fno_positions"]
 
 # --------------- CALCULATE SUMMARY METRICS ---------------
-total_invested = 0.0
-total_fno_value = 0.0
-total_fno_pnl = 0.0
-total_fno_margin = 0.0
-position_count = 0
+def calculate_segment_metrics(positions):
+    """Totals for a group of positions. Value and P&L cover only the positions that have a price."""
+    open_positions = [p for p in positions if p["quantity"]]
+    priced = [p for p in open_positions if p["priced"]]
+    priced_invested = sum(p["entry_value"] for p in priced)
+    total_pnl = sum(p["unrealized_pnl"] for p in priced)
+    return {
+        "total_invested": sum(p["entry_value"] for p in open_positions),
+        "total_value": sum(p["total_value"] for p in priced),
+        "total_pnl": total_pnl,
+        "pnl_pct": (total_pnl / priced_invested * 100.0) if priced_invested > 0 else 0.0,
+        "realised": sum(p["realised_pnl"] for p in positions),
+        "count": len(open_positions),
+        "priced": len(priced),
+    }
 
-for pos in fno_positions:
-    entry_val = float(pos.get("entry_value", 0.0))
-    total_val = float(pos.get("total_value", 0.0))
-    pnl = float(pos.get("unrealized_pnl", 0.0))
 
-    total_invested += entry_val
-    total_fno_value += total_val
-    total_fno_pnl += pnl
-    if entry_val > 0 or total_val > 0:
-        position_count += 1
+def market_status(asset_type):
+    """("OPEN"/"CLOSED", hours) from the clock. Exchange holidays are not known."""
+    now = datetime.now(IST)
+    if asset_type == "COMMODITY":
+        return ("OPEN" if mcx_in_session(now) else "CLOSED"), "MCX 09:00-23:55 IST, Mon-Fri"
+    return ("OPEN" if is_market_open(now) else "CLOSED"), "NSE F&O 09:15-15:30 IST, Mon-Fri"
 
-# Calculate overall P&L percentage
-if total_invested > 0:
-    total_pnl_pct = (total_fno_pnl / total_invested) * 100.0
-else:
-    total_pnl_pct = 0.0
 
-fno_margin_used = float(margins.get("fno_margin_details", {}).get("net_fno_margin_used", 0.0))
+all_metrics = calculate_segment_metrics(fno_positions)
+open_positions = [p for p in fno_positions if p["quantity"]]
+unpriced = [p for p in open_positions if not p["priced"]]
+
+fno_details = margins.get("fno_margin_details", {}) or {}
+# Groww reports margin "used" as a negative number; its F&O figures already include MCX.
+fno_margin_used = abs(float(fno_details.get("net_fno_margin_used", 0.0) or 0.0))
+fno_balance_available = float(fno_details.get("future_balance_available", 0.0) or 0.0)
 clear_cash = float(margins.get("clear_cash", 0.0))
-collateral_available = float(margins.get("collateral_available", 0.0))
 
 # --------------- TOP BAR: HEADER ---------------
 col_head, col_cash = st.columns([3, 1])
 
 with col_head:
     st.title("📈 FnO Positions & Greeks Tracker")
-    if is_mock:
-        st.caption("🟡 Running in **Demo Mode** with sample data. Configure `.env` to connect live account.")
-    else:
-        st.caption(f"🟢 Connected to Live Broker Account | Client UCC: `{profile.get('ucc', 'N/A')}`")
+    st.caption(f"🟢 Connected to Live Broker Account | Client UCC: `{profile.get('ucc', 'N/A')}`")
 
 with col_cash:
     render_kpi_card(
@@ -333,30 +328,177 @@ with col_cash:
         theme="green"
     )
 
+if unpriced:
+    st.warning(
+        f"⚠️ **No live price for {len(unpriced)} of {len(open_positions)} open position(s)** "
+        f"({', '.join(p['symbol'] for p in unpriced[:6])}{', ...' if len(unpriced) > 6 else ''}). "
+        "Their price and P&L are left blank and they are left out of the P&L totals and the quick-exit "
+        "buttons. Groww refuses price calls without its paid data plan."
+    )
+
 st.markdown("---")
 
 # --------------- FILTER POSITIONS BY ASSET TYPE ---------------
-equity_positions = [p for p in fno_positions if p.get("type", "").upper() == "EQUITY"]
-commodity_positions = [p for p in fno_positions if p.get("type", "").upper() == "COMMODITY"]
-
-# Calculate metrics for each segment
-def calculate_segment_metrics(positions):
-    """Calculate summary metrics for a segment of positions."""
-    total_invested = sum(float(p.get("entry_value", 0.0)) for p in positions)
-    total_value = sum(float(p.get("total_value", 0.0)) for p in positions)
-    total_pnl = sum(float(p.get("unrealized_pnl", 0.0)) for p in positions)
-    pnl_pct = (total_pnl / total_invested * 100.0) if total_invested > 0 else 0.0
-    count = len([p for p in positions if float(p.get("entry_value", 0.0)) > 0 or float(p.get("total_value", 0.0)) > 0])
-    return {
-        "total_invested": total_invested,
-        "total_value": total_value,
-        "total_pnl": total_pnl,
-        "pnl_pct": pnl_pct,
-        "count": count
-    }
+equity_positions = [p for p in fno_positions if p.get("type") == "EQUITY"]
+commodity_positions = [p for p in fno_positions if p.get("type") == "COMMODITY"]
 
 equity_metrics = calculate_segment_metrics(equity_positions)
 commodity_metrics = calculate_segment_metrics(commodity_positions)
+
+
+def render_segment_kpis(metrics, asset_type):
+    status, hours = market_status(asset_type)
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        render_kpi_card(
+            title="Notional at Entry",
+            value=format_inr(metrics["total_invested"]),
+            sub=f"Open: {metrics['count']}",
+            theme="blue"
+        )
+    with k2:
+        render_kpi_card(
+            title="Unrealized P&L",
+            value=format_inr(metrics["total_pnl"]),
+            sub=f"{metrics['pnl_pct']:+.2f}% | priced {metrics['priced']} of {metrics['count']}",
+            theme="green" if metrics["total_pnl"] >= 0 else "red"
+        )
+    with k3:
+        render_kpi_card(
+            title="Realised P&L",
+            value=format_inr(metrics["realised"]),
+            sub="From Groww's positions",
+            theme="green" if metrics["realised"] >= 0 else "red"
+        )
+    with k4:
+        render_kpi_card(
+            title="Market Status",
+            value=status,
+            sub=hours,
+            theme="green" if status == "OPEN" else "blue"
+        )
+
+
+def render_positions_section(positions, key_prefix, label):
+    """Positions table, quick-exit buttons and a summary for one asset type."""
+    open_rows = [p for p in positions if p["quantity"]]
+    closed_rows = [p for p in positions if not p["quantity"]]
+
+    if not open_rows:
+        st.info(f"No open {label} positions found in your account.")
+    else:
+        display_data = [
+            {
+                "Symbol": pos["symbol"],
+                "Side": pos["side"],
+                "Expiry": format_expiry_short(pos.get("expiry_date")),
+                "Qty": pos["quantity"],
+                "Lots": (abs(pos["quantity"]) / pos["lot_size"]) if pos.get("lot_size") else None,
+                "Entry Price": pos["entry_price"],
+                "LTP": pos["ltp"],
+                "Notional": pos["entry_value"],
+                "P&L": pos["unrealized_pnl"],
+                "P&L %": pos["unrealized_pnl_pct"],
+                "_pos": pos,
+            }
+            for pos in open_rows
+        ]
+        df_display = pd.DataFrame(display_data).drop(columns="_pos")
+        df_display = df_display.sort_values("P&L %", ascending=False, na_position="last").reset_index(drop=True)
+
+        st.markdown("#### Open Positions (Sortable)")
+        st.dataframe(
+            df_display.style.format({
+                "Qty": "{:,.0f}",
+                "Lots": "{:,.4g}",
+                "Entry Price": "₹{:,.2f}",
+                "LTP": "₹{:,.2f}",
+                "Notional": "₹{:,.2f}",
+                "P&L": "₹{:,.2f}",
+                "P&L %": "{:+.2f}%"
+            }, na_rep="—"),
+            width='stretch',
+            height=min(400, 40 + 35 * len(df_display))
+        )
+
+        # Quick Exit Buttons Below Table (priced winners only, highest P&L% first)
+        st.markdown("**Quick Exit Buttons (profitable positions, highest P&L% first):**")
+        st.caption("A limit order 0.5% through the last price, on the tick grid, in the position's own product. "
+                   "Longs are sold, shorts bought back.")
+
+        # Prominent, persistent result banner - stays visible (and full-width) after the rerun
+        # that a button click triggers, instead of a message tucked into a narrow column.
+        last_exit = st.session_state.get(f"{key_prefix}_last_exit")
+        if last_exit:
+            if last_exit["success"]:
+                st.success(
+                    f"✅ **{last_exit['symbol']}** exit order placed @ ₹{last_exit['exit_price']:,.2f} | "
+                    f"Order ID: `{last_exit['order_id']}` | Status: **{last_exit['order_status']}**"
+                )
+                st.caption("Status is read back from the API immediately after placement. Confirm the final fill in the Groww app / order book.")
+            else:
+                st.error(f"❌ **{last_exit['symbol']}** exit failed: {last_exit['order_id']}")
+            if st.button("Dismiss", key=f"{key_prefix}_dismiss_exit"):
+                del st.session_state[f"{key_prefix}_last_exit"]
+                st.rerun()
+
+        # Only positions an exit order can be built for: priced, profitable, tick size known.
+        winning_positions = sorted(
+            [p for p in display_data if (p["P&L %"] or 0) > 0 and p["_pos"].get("tick")],
+            key=lambda p: p["P&L %"],
+            reverse=True
+        )
+
+        if winning_positions:
+            exit_button_cols = st.columns(min(5, len(winning_positions)))
+            for idx, pos_data in enumerate(winning_positions):
+                pos = pos_data["_pos"]
+                with exit_button_cols[idx % len(exit_button_cols)]:
+                    # Keyed by the position itself, never by list order: the click reruns the page,
+                    # the list may re-sort after a refresh, and one contract can be held as both
+                    # MIS and NRML.
+                    if st.button(
+                        f"Exit {pos_data['Symbol'][:15]} {pos['product']} (+{pos_data['P&L %']:.2f}%)",
+                        key=f"{key_prefix}_exit_{pos['exchange']}_{pos['symbol']}_{pos['product']}",
+                        width='stretch'
+                    ):
+                        success, result_text, exit_price, order_status = place_quick_exit_order(pos_data["_pos"])
+                        st.session_state[f"{key_prefix}_last_exit"] = {
+                            "symbol": pos_data["Symbol"],
+                            "success": success,
+                            "order_id": result_text,
+                            "exit_price": exit_price,
+                            "order_status": order_status,
+                        }
+                        st.rerun()
+        else:
+            st.info("No priced, profitable positions to quick-exit right now.")
+
+        st.markdown("---")
+        st.markdown(f"### {label} Summary")
+        priced_rows = [p for p in display_data if p["P&L"] is not None]
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Open Positions", len(open_rows))
+        with col2:
+            st.metric("Winning Positions", len([p for p in priced_rows if p["P&L"] > 0]))
+        with col3:
+            st.metric("Losing Positions", len([p for p in priced_rows if p["P&L"] < 0]))
+        with col4:
+            avg_return = sum(p["P&L %"] for p in priced_rows) / len(priced_rows) if priced_rows else None
+            st.metric("Average Return %", f"{avg_return:+.2f}%" if avg_return is not None else "—")
+
+    if closed_rows:
+        st.markdown("#### Closed (quantity 0, realised P&L only)")
+        st.dataframe(
+            pd.DataFrame([
+                {"Symbol": p["symbol"], "Expiry": format_expiry_short(p.get("expiry_date")),
+                 "Realised P&L": p["realised_pnl"]}
+                for p in closed_rows
+            ]).style.format({"Realised P&L": "₹{:,.2f}"}),
+            width='stretch'
+        )
+
 
 # --------------- DASHBOARD TABS ---------------
 tab_overview, tab_equity, tab_commodity, tab_analytics, tab_greeks = st.tabs([
@@ -371,495 +513,149 @@ tab_overview, tab_equity, tab_commodity, tab_analytics, tab_greeks = st.tabs([
 with tab_overview:
     st.markdown("### 💼 FnO Portfolio Summary (All Positions)")
 
-    # Market Status Indicator
     col_market_eq, col_market_cm = st.columns(2)
-    with col_market_eq:
-        if equity_metrics["count"] > 0:
-            st.info("📊 **Equity FnO:** Market Hours 09:15-15:30 IST (Currently **CLOSED**)")
-        else:
-            st.info("📊 **Equity FnO:** No active positions")
-
-    with col_market_cm:
-        if commodity_metrics["count"] > 0:
-            st.success("🏆 **Commodity FnO:** 24x5 Trading (Currently **OPEN**)")
-        else:
-            st.info("🏆 **Commodity FnO:** No active positions")
+    for column, metrics, asset_type, name in (
+        (col_market_eq, equity_metrics, "EQUITY", "Equity FnO"),
+        (col_market_cm, commodity_metrics, "COMMODITY", "Commodity FnO"),
+    ):
+        with column:
+            status, hours = market_status(asset_type)
+            if metrics["count"] > 0:
+                st.info(f"**{name}:** {hours} (currently **{status}**, by the clock; holidays not known)")
+            else:
+                st.info(f"**{name}:** No open positions")
 
     k1, k2, k3, k4 = st.columns(4)
 
     with k1:
         render_kpi_card(
-            title="Total Amount Invested",
-            value=format_inr(total_invested),
-            sub=f"Full: {format_inr_full(total_invested)}<br>Active Positions: {position_count}",
+            title="Notional at Entry",
+            value=format_inr(all_metrics["total_invested"]),
+            sub=f"Full: {format_inr_full(all_metrics['total_invested'])}<br>Open Positions: {all_metrics['count']}",
             theme="blue"
         )
 
     with k2:
-        pnl_theme = "green" if total_fno_pnl >= 0 else "red"
         render_kpi_card(
             title="Total Unrealized P&L",
-            value=format_inr(total_fno_pnl),
-            sub=f"{total_pnl_pct:+.2f}% Overall | {format_inr_full(total_fno_pnl)}",
-            theme=pnl_theme
+            value=format_inr(all_metrics["total_pnl"]),
+            sub=f"{all_metrics['pnl_pct']:+.2f}% | priced {all_metrics['priced']} of {all_metrics['count']}",
+            theme="green" if all_metrics["total_pnl"] >= 0 else "red"
         )
 
     with k3:
         render_kpi_card(
-            title="Current Portfolio Value",
-            value=format_inr(total_fno_value),
-            sub=f"Full: {format_inr_full(total_fno_value)}",
-            theme="blue"
+            title="Realised P&L",
+            value=format_inr(all_metrics["realised"]),
+            sub=f"Full: {format_inr_full(all_metrics['realised'])}",
+            theme="green" if all_metrics["realised"] >= 0 else "red"
         )
 
     with k4:
         render_kpi_card(
-            title="Available Margin",
-            value=format_inr(collateral_available + clear_cash),
-            sub=f"For new positions",
+            title="F&O Balance Available",
+            value=format_inr(fno_balance_available),
+            sub=f"Margin used (F&O + MCX): {format_inr(fno_margin_used)}",
             theme="green"
         )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Charts
     c_left, c_right = st.columns(2)
 
     with c_left:
         st.markdown("#### 📊 P&L Distribution by Position")
-        if fno_positions:
-            pnl_data = pd.DataFrame([
-                {
-                    "Symbol": pos.get("symbol", "UNKNOWN"),
-                    "Investment": pos.get("entry_value", 0.0),
-                    "P&L": pos.get("unrealized_pnl", 0.0),
-                    "P&L %": pos.get("unrealized_pnl_pct", 0.0)
-                }
-                for pos in fno_positions
-                if pos.get("entry_value", 0.0) > 0 or pos.get("total_value", 0.0) > 0
-            ])
-
-            if not pnl_data.empty:
-                # Sort by P&L for better visualization
-                pnl_data = pnl_data.sort_values("P&L", ascending=True)
-
-                fig_pnl = px.bar(
-                    pnl_data,
-                    x="Symbol",
-                    y="P&L",
-                    color="P&L",
-                    color_continuous_scale=['#ef4444', '#fbbf24', '#22c55e'],
-                    hover_data={"Investment": ":.2f", "P&L %": ":.2f%", "P&L": ":.2f"},
-                    title="Unrealized P&L by Position"
-                )
-                fig_pnl.update_layout(
-                    margin=dict(t=10, b=10, l=10, r=10),
-                    height=340,
-                    showlegend=False,
-                    xaxis_tickangle=-45
-                )
-                st.plotly_chart(fig_pnl, width='content')
-            else:
-                st.info("No valid position data to display.")
+        pnl_data = pd.DataFrame([
+            {
+                "Symbol": pos["symbol"],
+                "Notional": pos["entry_value"],
+                "P&L": pos["unrealized_pnl"],
+                "P&L %": pos["unrealized_pnl_pct"]
+            }
+            for pos in open_positions if pos["priced"]
+        ])
+        if not pnl_data.empty:
+            pnl_data = pnl_data.sort_values("P&L", ascending=True)
+            fig_pnl = px.bar(
+                pnl_data,
+                x="Symbol",
+                y="P&L",
+                color="P&L",
+                color_continuous_scale=['#ef4444', '#fbbf24', '#22c55e'],
+                hover_data={"Notional": ":.2f", "P&L %": ":.2f", "P&L": ":.2f"},
+                title="Unrealized P&L by Position"
+            )
+            fig_pnl.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=340,
+                showlegend=False,
+                xaxis_tickangle=-45
+            )
+            st.plotly_chart(fig_pnl, width='content')
+        elif open_positions:
+            st.info("No open position has a live price, so there is no P&L to chart.")
         else:
-            st.info("No FnO positions found.")
+            st.info("No open FnO positions found.")
 
     with c_right:
         st.markdown("#### 🎯 Position Breakdown by Asset Class")
-        if fno_positions:
+        if open_positions:
             type_counts = pd.DataFrame([
                 {"AssetType": pos.get("type", "UNKNOWN"), "Count": 1}
-                for pos in fno_positions
+                for pos in open_positions
             ]).groupby("AssetType").size().reset_index(name="Count")
 
-            if not type_counts.empty:
-                fig_type = px.pie(
-                    type_counts,
-                    values="Count",
-                    names="AssetType",
-                    hole=0.45,
-                    title="Position Distribution (Equity vs Commodity)",
-                    color_discrete_map={"EQUITY": "#3b82f6", "COMMODITY": "#f59e0b"}
-                )
-                fig_type.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
-                st.plotly_chart(fig_type, width='content')
-            else:
-                st.info("No position data available.")
+            fig_type = px.pie(
+                type_counts,
+                values="Count",
+                names="AssetType",
+                hole=0.45,
+                title="Position Distribution (Equity vs Commodity)",
+                color_discrete_map={"EQUITY": "#3b82f6", "COMMODITY": "#f59e0b"}
+            )
+            fig_type.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
+            st.plotly_chart(fig_type, width='content')
         else:
-            st.info("No FnO positions found.")
+            st.info("No open FnO positions found.")
 
 # ===== TAB 2: EQUITY FNO POSITIONS =====
 with tab_equity:
     st.subheader("📈 Equity FnO Positions (NIFTY, BANKNIFTY, FINNIFTY, etc.)")
-    st.markdown("Futures and options contracts on equity indices. Market hours: 09:15-15:30 IST.")
-
-    # Equity metrics KPI
-    eq_k1, eq_k2, eq_k3, eq_k4 = st.columns(4)
-
-    with eq_k1:
-        render_kpi_card(
-            title="Total Invested",
-            value=format_inr(equity_metrics["total_invested"]),
-            sub=f"Active: {equity_metrics['count']}",
-            theme="blue"
-        )
-
-    with eq_k2:
-        eq_theme = "green" if equity_metrics["total_pnl"] >= 0 else "red"
-        render_kpi_card(
-            title="Unrealized P&L",
-            value=format_inr(equity_metrics["total_pnl"]),
-            sub=f"{equity_metrics['pnl_pct']:+.2f}%",
-            theme=eq_theme
-        )
-
-    with eq_k3:
-        render_kpi_card(
-            title="Current Value",
-            value=format_inr(equity_metrics["total_value"]),
-            sub="Portfolio",
-            theme="blue"
-        )
-
-    with eq_k4:
-        status_theme = "blue" if equity_metrics["count"] == 0 else "red"
-        render_kpi_card(
-            title="Market Status",
-            value="CLOSED",
-            sub="09:15-15:30 IST",
-            theme=status_theme
-        )
-
+    st.markdown("Futures and options contracts on equity indices and stocks.")
+    render_segment_kpis(equity_metrics, "EQUITY")
     st.markdown("<br>", unsafe_allow_html=True)
-
-    if equity_positions and equity_metrics["count"] > 0:
-        # Create display dataframe for equity positions
-        display_data = []
-        for pos in equity_positions:
-            entry_val = float(pos.get("entry_value", 0.0))
-            if equity_metrics["total_invested"] > 0:
-                pct_of_total = (entry_val / equity_metrics["total_invested"]) * 100.0
-            else:
-                pct_of_total = 0.0
-
-            symbol = pos.get("symbol", "")
-            expiry_display = format_expiry_short(symbol)
-
-            display_data.append({
-                "Symbol": symbol,
-                "Expiry": expiry_display,
-                "Qty": int(pos.get("quantity", 0)) if pos.get("quantity") else 0,
-                "% of Total": pct_of_total,
-                "Entry Price": pos.get("entry_price", 0.0),
-                "LTP": pos.get("ltp", 0.0),
-                "Investment": entry_val,
-                "Current Value": pos.get("total_value", 0.0),
-                "P&L": pos.get("unrealized_pnl", 0.0),
-                "P&L %": pos.get("unrealized_pnl_pct", 0.0)
-            })
-
-        df_display = pd.DataFrame(display_data)
-
-        # Sort by P&L % descending (winners first)
-        df_display = df_display.sort_values("P&L %", ascending=False).reset_index(drop=True)
-
-        # Sortable Table with Quick Exit Buttons
-        st.markdown("#### Positions with Quick Exit (Sortable)")
-
-        # Display base dataframe
-        st.dataframe(
-            df_display.style.format({
-                "Qty": "{:,.0f}",
-                "% of Total": "{:.2f}%",
-                "Entry Price": "₹{:,.2f}",
-                "LTP": "₹{:,.2f}",
-                "Investment": "₹{:,.2f}",
-                "Current Value": "₹{:,.2f}",
-                "P&L": "₹{:,.2f}",
-                "P&L %": "{:+.2f}%"
-            }),
-            width='stretch',
-            height=400
-        )
-
-        # Quick Exit Buttons Below Table (winners only, highest P&L% first)
-        st.markdown("**Quick Exit Buttons (profitable positions, highest P&L% first):**")
-
-        # Prominent, persistent result banner - stays visible (and full-width) after the rerun
-        # that a button click triggers, instead of a message tucked into a narrow column.
-        last_exit = st.session_state.get("eq_last_exit")
-        if last_exit:
-            if last_exit["success"]:
-                st.success(
-                    f"✅ **{last_exit['symbol']}** exit order placed @ ₹{last_exit['exit_price']:.2f} | "
-                    f"Order ID: `{last_exit['order_id']}` | Status: **{last_exit['order_status']}**"
-                )
-                st.caption("Status is read back from the API immediately after placement. Confirm the final fill in the Groww app / order book.")
-            else:
-                st.error(f"❌ **{last_exit['symbol']}** exit failed: {last_exit['order_id']}")
-            if st.button("Dismiss", key="eq_dismiss_exit"):
-                del st.session_state["eq_last_exit"]
-                st.rerun()
-
-        winning_positions = sorted(
-            [p for p in display_data if p["P&L %"] > 0],
-            key=lambda p: p["P&L %"],
-            reverse=True
-        )
-
-        if winning_positions:
-            exit_button_cols = st.columns(min(5, len(winning_positions)))
-            for idx, pos_data in enumerate(winning_positions):
-                with exit_button_cols[idx % len(exit_button_cols)]:
-                    if st.button(
-                        f"Exit {pos_data['Symbol'][:15]} (+{pos_data['P&L %']:.2f}%)",
-                        key=f"eq_exit_{idx}_{pos_data['Symbol']}",
-                        width='stretch'
-                    ):
-                        symbol = pos_data['Symbol']
-                        quantity = pos_data['Qty']
-                        ltp = pos_data['LTP']
-
-                        success, result, exit_price, order_status = place_quick_exit_order(
-                            symbol=symbol,
-                            quantity=quantity,
-                            ltp=ltp,
-                            exchange=EXCHANGE_NSE,
-                            segment=SEGMENT_FNO
-                        )
-
-                        st.session_state["eq_last_exit"] = {
-                            "symbol": symbol,
-                            "success": success,
-                            "order_id": result,
-                            "exit_price": exit_price,
-                            "order_status": order_status,
-                        }
-                        st.rerun()
-        else:
-            st.info("No profitable positions to quick-exit right now.")
-
-        # Summary statistics
-        st.markdown("---")
-        st.markdown("### Equity FnO Summary")
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric("Total Positions", equity_metrics["count"])
-
-        with col2:
-            winners = len([p for p in display_data if p["P&L"] > 0])
-            st.metric("Winning Positions", winners)
-
-        with col3:
-            losers = len([p for p in display_data if p["P&L"] < 0])
-            st.metric("Losing Positions", losers)
-
-        with col4:
-            avg_return = df_display["P&L %"].mean() if len(df_display) > 0 else 0
-            st.metric("Average Return %", f"{avg_return:+.2f}%")
-
-    else:
-        st.info("No open Equity FnO positions found in your account.")
+    render_positions_section(equity_positions, "eq", "Equity FnO")
 
 # ===== TAB 3: COMMODITY FNO POSITIONS =====
 with tab_commodity:
     st.subheader("🏆 Commodity FnO Positions (GOLD, SILVER, CRUDE, COPPER, etc.)")
-    st.markdown("Futures and options contracts on commodities. Trading: 24x5 (mostly 9:00-23:30 IST with gaps).")
-
-    # Commodity metrics KPI
-    cm_k1, cm_k2, cm_k3, cm_k4 = st.columns(4)
-
-    with cm_k1:
-        render_kpi_card(
-            title="Total Invested",
-            value=format_inr(commodity_metrics["total_invested"]),
-            sub=f"Active: {commodity_metrics['count']}",
-            theme="blue"
-        )
-
-    with cm_k2:
-        cm_theme = "green" if commodity_metrics["total_pnl"] >= 0 else "red"
-        render_kpi_card(
-            title="Unrealized P&L",
-            value=format_inr(commodity_metrics["total_pnl"]),
-            sub=f"{commodity_metrics['pnl_pct']:+.2f}%",
-            theme=cm_theme
-        )
-
-    with cm_k3:
-        render_kpi_card(
-            title="Current Value",
-            value=format_inr(commodity_metrics["total_value"]),
-            sub="Portfolio",
-            theme="blue"
-        )
-
-    with cm_k4:
-        status_theme = "green" if commodity_metrics["count"] > 0 else "blue"
-        render_kpi_card(
-            title="Market Status",
-            value="OPEN",
-            sub="24x5 Trading",
-            theme=status_theme
-        )
-
+    st.markdown("Futures and options contracts on MCX commodities.")
+    render_segment_kpis(commodity_metrics, "COMMODITY")
     st.markdown("<br>", unsafe_allow_html=True)
-
-    if commodity_positions and commodity_metrics["count"] > 0:
-        # Create display dataframe for commodity positions
-        display_data = []
-        for pos in commodity_positions:
-            entry_val = float(pos.get("entry_value", 0.0))
-            if commodity_metrics["total_invested"] > 0:
-                pct_of_total = (entry_val / commodity_metrics["total_invested"]) * 100.0
-            else:
-                pct_of_total = 0.0
-
-            symbol = pos.get("symbol", "")
-            expiry_display = format_expiry_short(symbol)
-
-            display_data.append({
-                "Symbol": symbol,
-                "Expiry": expiry_display,
-                "Qty": int(pos.get("quantity", 0)) if pos.get("quantity") else 0,
-                "% of Total": pct_of_total,
-                "Entry Price": pos.get("entry_price", 0.0),
-                "LTP": pos.get("ltp", 0.0),
-                "Investment": entry_val,
-                "Current Value": pos.get("total_value", 0.0),
-                "P&L": pos.get("unrealized_pnl", 0.0),
-                "P&L %": pos.get("unrealized_pnl_pct", 0.0)
-            })
-
-        df_display = pd.DataFrame(display_data)
-
-        # Sort by P&L % descending (winners first)
-        df_display = df_display.sort_values("P&L %", ascending=False).reset_index(drop=True)
-
-        # Sortable Table with Quick Exit Buttons
-        st.markdown("#### Positions with Quick Exit (Sortable)")
-
-        # Display base dataframe
-        st.dataframe(
-            df_display.style.format({
-                "Qty": "{:,.0f}",
-                "% of Total": "{:.2f}%",
-                "Entry Price": "₹{:,.2f}",
-                "LTP": "₹{:,.2f}",
-                "Investment": "₹{:,.2f}",
-                "Current Value": "₹{:,.2f}",
-                "P&L": "₹{:,.2f}",
-                "P&L %": "{:+.2f}%"
-            }),
-            width='stretch',
-            height=400
-        )
-
-        # Quick Exit Buttons Below Table (winners only, highest P&L% first)
-        st.markdown("**Quick Exit Buttons (profitable positions, highest P&L% first):**")
-
-        # Prominent, persistent result banner - stays visible (and full-width) after the rerun
-        # that a button click triggers, instead of a message tucked into a narrow column.
-        last_exit = st.session_state.get("cm_last_exit")
-        if last_exit:
-            if last_exit["success"]:
-                st.success(
-                    f"✅ **{last_exit['symbol']}** exit order placed @ ₹{last_exit['exit_price']:.2f} | "
-                    f"Order ID: `{last_exit['order_id']}` | Status: **{last_exit['order_status']}**"
-                )
-                st.caption("Status is read back from the API immediately after placement. Confirm the final fill in the Groww app / order book.")
-            else:
-                st.error(f"❌ **{last_exit['symbol']}** exit failed: {last_exit['order_id']}")
-            if st.button("Dismiss", key="cm_dismiss_exit"):
-                del st.session_state["cm_last_exit"]
-                st.rerun()
-
-        winning_positions = sorted(
-            [p for p in display_data if p["P&L %"] > 0],
-            key=lambda p: p["P&L %"],
-            reverse=True
-        )
-
-        if winning_positions:
-            exit_button_cols = st.columns(min(5, len(winning_positions)))
-            for idx, pos_data in enumerate(winning_positions):
-                with exit_button_cols[idx % len(exit_button_cols)]:
-                    if st.button(
-                        f"Exit {pos_data['Symbol'][:15]} (+{pos_data['P&L %']:.2f}%)",
-                        key=f"cm_exit_{idx}_{pos_data['Symbol']}",
-                        width='stretch'
-                    ):
-                        symbol = pos_data['Symbol']
-                        quantity = pos_data['Qty']
-                        ltp = pos_data['LTP']
-
-                        success, result, exit_price, order_status = place_quick_exit_order(
-                            symbol=symbol,
-                            quantity=quantity,
-                            ltp=ltp,
-                            exchange=EXCHANGE_MCX,
-                            segment=SEGMENT_COMMODITY
-                        )
-
-                        st.session_state["cm_last_exit"] = {
-                            "symbol": symbol,
-                            "success": success,
-                            "order_id": result,
-                            "exit_price": exit_price,
-                            "order_status": order_status,
-                        }
-                        st.rerun()
-        else:
-            st.info("No profitable positions to quick-exit right now.")
-
-        # Summary statistics
-        st.markdown("---")
-        st.markdown("### Commodity FnO Summary")
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric("Total Positions", commodity_metrics["count"])
-
-        with col2:
-            winners = len([p for p in display_data if p["P&L"] > 0])
-            st.metric("Winning Positions", winners)
-
-        with col3:
-            losers = len([p for p in display_data if p["P&L"] < 0])
-            st.metric("Losing Positions", losers)
-
-        with col4:
-            avg_return = df_display["P&L %"].mean() if len(df_display) > 0 else 0
-            st.metric("Average Return %", f"{avg_return:+.2f}%")
-
-    else:
-        st.info("No open Commodity FnO positions found in your account.")
+    render_positions_section(commodity_positions, "cm", "Commodity FnO")
 
 # ===== TAB 4: P&L ANALYTICS & POSITION SENTIMENT =====
 with tab_analytics:
     st.subheader("📊 Position Sentiment & Price Direction Analysis")
     st.markdown(
         """
-        Automatically analyze each option position to understand your **directional exposure**.
-        - **CALLS (🟢 Bullish):** You profit if the underlying price goes **UP**
-        - **PUTS (🔴 Bearish):** You profit if the underlying price goes **DOWN**
-        - **Conflicting Positions:** Same underlying with both calls & puts (hedging or straddle strategy)
+        Which way each open position profits, from its contract type **and** whether you bought or sold it.
+        - **Bullish 🟢:** bought calls, sold puts and long futures profit if the underlying goes **UP**
+        - **Bearish 🔴:** bought puts, sold calls and short futures profit if it goes **DOWN**
+        - **Conflicting:** exposure on both sides of the same underlying (hedges, straddles, spreads)
         """
     )
 
-    if fno_positions and position_count > 0:
-        # Get portfolio sentiment summary
+    if open_positions:
         portfolio_summary = get_position_summary(fno_positions)
 
-        # Portfolio sentiment KPIs
         s1, s2, s3, s4 = st.columns(4)
 
         with s1:
             render_kpi_card(
                 title="Portfolio Sentiment",
                 value=portfolio_summary["net_sentiment"],
-                sub=f"Overall directional bias",
+                sub="Overall directional bias",
                 theme="blue"
             )
 
@@ -867,7 +663,7 @@ with tab_analytics:
             render_kpi_card(
                 title="Bullish Positions",
                 value=f"{portfolio_summary['total_bullish']}",
-                sub="Calls: Profit if UP ↑",
+                sub="Profit if UP ↑",
                 theme="green"
             )
 
@@ -875,7 +671,7 @@ with tab_analytics:
             render_kpi_card(
                 title="Bearish Positions",
                 value=f"{portfolio_summary['total_bearish']}",
-                sub="Puts: Profit if DOWN ↓",
+                sub="Profit if DOWN ↓",
                 theme="red"
             )
 
@@ -883,13 +679,12 @@ with tab_analytics:
             render_kpi_card(
                 title="Conflicting Underlyings",
                 value=f"{len(portfolio_summary['conflicting'])}",
-                sub="Both calls & puts held",
+                sub="Exposure on both sides",
                 theme="blue"
             )
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Main analytics section
         analytics_tab1, analytics_tab2, analytics_tab3 = st.tabs([
             "🎯 Position Sentiment Table",
             "📈 P&L Performance",
@@ -898,87 +693,37 @@ with tab_analytics:
 
         # ===== ANALYTICS TAB 1: POSITION SENTIMENT TABLE (GROUPED BY EQUITY & COMMODITY) =====
         with analytics_tab1:
-            # Group positions by underlying, expiry, AND type
             grouped_positions = group_positions_by_underlying_expiry(fno_positions)
 
-            # Separate into Equity and Commodity based on position type (from API data)
-            # Build a map of (underlying, expiry, type) -> position_type for classification
-            position_type_map = {}
-            for pos in fno_positions:
-                symbol = pos.get("symbol", "")
-                sentiment_info = extract_position_sentiment(symbol)
-                underlying = sentiment_info.get("underlying", "UNKNOWN")
-                position_type = pos.get("type", "UNKNOWN")  # EQUITY or COMMODITY from API
-
-                # Extract expiry for grouping key
-                expiry_match = re.search(r'(\d{2})([A-Z]{3})', symbol)
-                if expiry_match:
-                    day, month = expiry_match.groups()
-                    expiry_key = f"{day}{month}"
-                else:
-                    expiry_key = "UNKNOWN"
-
-                option_type = sentiment_info.get("option_type", "UNKNOWN")
-                key = (underlying, expiry_key, option_type)
-                position_type_map[key] = position_type
-
-            # Classify grouped positions using the actual type from API
-            equity_groups = []
-            commodity_groups = []
-            for g in grouped_positions:
-                # Find the position type for this group
-                key = (g["underlying"], g["expiry_key"], g["option_type"])
-                pos_type = position_type_map.get(key, "UNKNOWN")
-
-                if pos_type == "EQUITY":
-                    equity_groups.append(g)
-                elif pos_type == "COMMODITY":
-                    commodity_groups.append(g)
-                else:
-                    # Fallback: if unknown, try to classify by keyword
-                    if any(kw in g["underlying"].upper() for kw in ["GOLD", "SILVER", "CRUDE", "COPPER", "NICKEL", "ZINC", "LEAD", "ALUMINUM"]):
-                        commodity_groups.append(g)
-                    else:
-                        equity_groups.append(g)
-
             def render_positions_table(positions_group, title):
-                """Helper function to render a positions table"""
+                """Helper function to render a grouped positions table"""
                 if not positions_group:
                     st.info(f"No {title.lower()} positions")
                     return
 
                 st.markdown(f"#### {title}")
 
-                # Build display dataframe
                 display_data = []
                 for group in positions_group:
-                    if group["option_type"] == "CALL":
-                        type_display = "CALL"
-                        direction_arrow = "📈"  # Chart going UP - CALL profits if price goes UP
-                    elif group["option_type"] == "PUT":
-                        type_display = "PUT"
-                        direction_arrow = "📉"  # Chart going DOWN - PUT profits if price goes DOWN
-                    else:
-                        type_display = group["option_type"]
-                        direction_arrow = "➡️"
-
+                    sentiment = position_sentiment(
+                        {"kind": group["option_type"], "underlying": group["underlying"],
+                         "quantity": 1 if group["side"] == "LONG" else -1}
+                    )["sentiment"]
                     display_data.append({
                         "Asset": group["underlying"],
-                        "Type": type_display,
+                        "Type": group["option_type"],
+                        "Side": group["side"],
                         "Expiry": group["expiry"],
-                        "Qty": group["position_count"],
-                        "Invested ₹": group["total_invested"],
-                        "Current ₹": group["total_value"],
-                        "P&L ₹": group["total_pnl"],
-                        "P&L %": group["total_pnl_pct"],
+                        "Contracts": group["position_count"],
+                        "Notional ₹": group["total_invested"],
+                        "P&L ₹": group["total_pnl"] if group["unpriced"] < group["position_count"] else None,
+                        "P&L %": group["total_pnl_pct"] if group["unpriced"] < group["position_count"] else None,
                         "Performance": group["pnl_arrow"],
-                        "Direction": direction_arrow,
-                        "_type": type_display
+                        "Direction": {"BULLISH": "📈", "BEARISH": "📉"}.get(sentiment, "➡️"),
                     })
 
                 df = pd.DataFrame(display_data)
 
-                # Create styled dataframe
                 def highlight_type_column(val):
                     if val == "CALL":
                         return "background-color: #4caf50; color: white; font-weight: bold"
@@ -987,43 +732,46 @@ with tab_analytics:
                     else:
                         return "background-color: #999999; color: white"
 
-                styled = df[["Asset", "Type", "Expiry", "Qty", "Invested ₹", "Current ₹", "P&L ₹", "P&L %", "Performance", "Direction"]].style.format({
-                    "Invested ₹": "₹{:,.0f}",
-                    "Current ₹": "₹{:,.0f}",
+                def shade_pnl(val):
+                    # Green or red, stronger up to +/-10%. Done by hand: pandas' background_gradient
+                    # needs matplotlib, which this project does not install.
+                    if val is None or pd.isna(val) or val == 0:
+                        return ""
+                    alpha = 0.15 + 0.6 * min(abs(val), 10) / 10
+                    rgb = "34, 197, 94" if val > 0 else "239, 68, 68"
+                    return f"background-color: rgba({rgb}, {alpha:.2f})"
+
+                styled = df.style.format({
+                    "Notional ₹": "₹{:,.0f}",
                     "P&L ₹": "₹{:,.0f}",
                     "P&L %": "{:+.2f}%"
-                }).map(
+                }, na_rep="—").map(
                     highlight_type_column,
                     subset=["Type"]
-                ).background_gradient(
-                    subset=["P&L %"],
-                    cmap="RdYlGn",
-                    vmin=-10,
-                    vmax=10
+                ).map(
+                    shade_pnl,
+                    subset=["P&L %"]
                 )
 
-                st.dataframe(styled, width='stretch', height=400)
+                st.dataframe(styled, width='stretch', height=min(400, 40 + 35 * len(df)))
 
-                # Expandable detail section
                 with st.expander(f"🔍 Expand to see all symbols ({len(positions_group)} groups)"):
                     for group in positions_group:
-                        type_emoji = "🟢" if group["option_type"] == "CALL" else "🔴"
                         st.markdown(
-                            f"**{type_emoji} {group['underlying']} {group['option_type']} - {group['expiry']}** "
-                            f"({group['position_count']} contracts | P&L: {group['pnl_arrow']} {group['total_pnl_pct']:+.2f}%)"
+                            f"**{group['underlying']} {group['option_type']} {group['side']} - {group['expiry']}** "
+                            f"({group['position_count']} contracts | P&L: {group['pnl_arrow']} {group['total_pnl_pct']:+.2f}%"
+                            f"{', ' + str(group['unpriced']) + ' unpriced' if group['unpriced'] else ''})"
                         )
                         for symbol in group["symbols"]:
                             st.code(symbol, language="text")
 
-            # Display Equity positions
             st.markdown("### 📈 Equity FnO Positions")
-            render_positions_table(equity_groups, "Equity FnO")
+            render_positions_table([g for g in grouped_positions if g["asset_type"] == "EQUITY"], "Equity FnO")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # Display Commodity positions
             st.markdown("### 🏆 Commodity FnO Positions")
-            render_positions_table(commodity_groups, "Commodity FnO")
+            render_positions_table([g for g in grouped_positions if g["asset_type"] == "COMMODITY"], "Commodity FnO")
 
         # ===== ANALYTICS TAB 2: P&L PERFORMANCE =====
         with analytics_tab2:
@@ -1031,55 +779,54 @@ with tab_analytics:
 
             analytics_df = pd.DataFrame([
                 {
-                    "Symbol": pos.get("symbol", "UNKNOWN"),
-                    "Type": pos.get("type", "UNKNOWN"),
-                    "Invested": pos.get("entry_value", 0.0),
-                    "Current": pos.get("total_value", 0.0),
-                    "P&L": pos.get("unrealized_pnl", 0.0),
-                    "P&L %": pos.get("unrealized_pnl_pct", 0.0)
+                    "Symbol": pos["symbol"],
+                    "Type": pos["type"],
+                    "Notional": pos["entry_value"],
+                    "Current": pos["total_value"],
+                    "P&L": pos["unrealized_pnl"],
+                    "P&L %": pos["unrealized_pnl_pct"]
                 }
-                for pos in fno_positions
-                if pos.get("entry_value", 0.0) > 0 or pos.get("total_value", 0.0) > 0
+                for pos in open_positions if pos["priced"]
             ])
 
-            if not analytics_df.empty:
+            if analytics_df.empty:
+                st.info("No open position has a live price, so there is no P&L to analyse.")
+            else:
                 c1, c2 = st.columns(2)
 
                 with c1:
-                    winners = len(analytics_df[analytics_df['P&L'] > 0])
-                    losers = len(analytics_df[analytics_df['P&L'] < 0])
-                    neutral = len(analytics_df[analytics_df['P&L'] == 0])
-
                     summary_data = pd.DataFrame({
                         "Status": ["Winners", "Losers", "Neutral"],
-                        "Count": [winners, losers, neutral]
+                        "Count": [
+                            len(analytics_df[analytics_df['P&L'] > 0]),
+                            len(analytics_df[analytics_df['P&L'] < 0]),
+                            len(analytics_df[analytics_df['P&L'] == 0]),
+                        ]
                     })
-
                     summary_data = summary_data[summary_data['Count'] > 0]
 
-                    if not summary_data.empty:
-                        fig_summary = px.pie(
-                            summary_data,
-                            values="Count",
-                            names="Status",
-                            color_discrete_map={"Winners": "#22c55e", "Losers": "#ef4444", "Neutral": "#94a3b8"},
-                            hole=0.45,
-                            title="Position Performance"
-                        )
-                        fig_summary.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
-                        st.plotly_chart(fig_summary, width='content')
+                    fig_summary = px.pie(
+                        summary_data,
+                        values="Count",
+                        names="Status",
+                        color_discrete_map={"Winners": "#22c55e", "Losers": "#ef4444", "Neutral": "#94a3b8"},
+                        hole=0.45,
+                        title="Position Performance"
+                    )
+                    fig_summary.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
+                    st.plotly_chart(fig_summary, width='content')
 
                 with c2:
-                    st.markdown("#### Investment Allocation")
-                    top_positions = analytics_df.nlargest(10, "Invested")
+                    st.markdown("#### Notional: Entry vs Now")
+                    top_positions = analytics_df.nlargest(10, "Notional")
 
                     fig_val = px.bar(
                         top_positions,
                         x="Symbol",
-                        y=["Invested", "Current"],
+                        y=["Notional", "Current"],
                         barmode="group",
                         color_discrete_sequence=["#94a3b8", "#3b82f6"],
-                        hover_data={"P&L": ":.2f", "P&L %": ":.2f%"}
+                        hover_data={"P&L": ":.2f", "P&L %": ":.2f"}
                     )
                     fig_val.update_layout(
                         margin=dict(t=10, b=10, l=10, r=10),
@@ -1095,26 +842,12 @@ with tab_analytics:
                 m1, m2, m3, m4 = st.columns(4)
 
                 with m1:
-                    best_position = analytics_df.loc[analytics_df["P&L %"].idxmax()] if len(analytics_df) > 0 else None
-                    if best_position is not None:
-                        st.metric(
-                            "Best Performer",
-                            f"{best_position['Symbol']}",
-                            f"{best_position['P&L %']:+.2f}%"
-                        )
-                    else:
-                        st.metric("Best Performer", "N/A", "0%")
+                    best_position = analytics_df.loc[analytics_df["P&L %"].idxmax()]
+                    st.metric("Best Performer", f"{best_position['Symbol']}", f"{best_position['P&L %']:+.2f}%")
 
                 with m2:
-                    worst_position = analytics_df.loc[analytics_df["P&L %"].idxmin()] if len(analytics_df) > 0 else None
-                    if worst_position is not None:
-                        st.metric(
-                            "Worst Performer",
-                            f"{worst_position['Symbol']}",
-                            f"{worst_position['P&L %']:+.2f}%"
-                        )
-                    else:
-                        st.metric("Worst Performer", "N/A", "0%")
+                    worst_position = analytics_df.loc[analytics_df["P&L %"].idxmin()]
+                    st.metric("Worst Performer", f"{worst_position['Symbol']}", f"{worst_position['P&L %']:+.2f}%")
 
                 with m3:
                     total_gain = analytics_df[analytics_df['P&L'] > 0]['P&L'].sum()
@@ -1134,7 +867,7 @@ with tab_analytics:
             with col_strat1:
                 if portfolio_summary["total_bullish"] > 0 or portfolio_summary["total_bearish"] > 0:
                     strategy_df = pd.DataFrame({
-                        "Sentiment": ["Bullish (Calls)", "Bearish (Puts)"],
+                        "Sentiment": ["Bullish", "Bearish"],
                         "Count": [portfolio_summary["total_bullish"], portfolio_summary["total_bearish"]]
                     })
                     strategy_df = strategy_df[strategy_df["Count"] > 0]
@@ -1143,7 +876,7 @@ with tab_analytics:
                         strategy_df,
                         values="Count",
                         names="Sentiment",
-                        color_discrete_map={"Bullish (Calls)": "#22c55e", "Bearish (Puts)": "#ef4444"},
+                        color_discrete_map={"Bullish": "#22c55e", "Bearish": "#ef4444"},
                         title="Bullish vs Bearish Positioning"
                     )
                     fig_sentiment.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
@@ -1153,46 +886,25 @@ with tab_analytics:
 
             with col_strat2:
                 st.markdown("**Key Insights:**")
-                if portfolio_summary["total_bullish"] > portfolio_summary["total_bearish"]:
-                    st.success(
-                        f"""
-                        ✅ **Overall Bullish Bias**
-                        - {portfolio_summary['total_bullish']} bullish positions (Calls)
-                        - {portfolio_summary['total_bearish']} bearish positions (Puts)
-                        - You expect upside movement in most underlyings
-                        """
-                    )
-                elif portfolio_summary["total_bearish"] > portfolio_summary["total_bullish"]:
-                    st.error(
-                        f"""
-                        ⚠️ **Overall Bearish Bias**
-                        - {portfolio_summary['total_bearish']} bearish positions (Puts)
-                        - {portfolio_summary['total_bullish']} bullish positions (Calls)
-                        - You expect downside movement in most underlyings
-                        """
-                    )
+                bullish, bearish = portfolio_summary["total_bullish"], portfolio_summary["total_bearish"]
+                if bullish > bearish:
+                    st.success(f"✅ **Overall Bullish Bias**\n- {bullish} position(s) profit if prices rise\n- {bearish} profit if they fall")
+                elif bearish > bullish:
+                    st.error(f"⚠️ **Overall Bearish Bias**\n- {bearish} position(s) profit if prices fall\n- {bullish} profit if they rise")
                 else:
-                    st.info(
-                        f"""
-                        ⚪ **Neutral / Balanced**
-                        - {portfolio_summary['total_bullish']} bullish positions (Calls)
-                        - {portfolio_summary['total_bearish']} bearish positions (Puts)
-                        - Your portfolio is balanced
-                        """
-                    )
+                    st.info(f"⚪ **Neutral / Balanced**\n- {bullish} bullish and {bearish} bearish position(s)")
 
-            # Conflicting positions analysis
             if portfolio_summary["conflicting"]:
                 st.markdown("---")
-                st.markdown("##### ⚖️ Conflicting Positions (Hedging / Straddles)")
+                st.markdown("##### ⚖️ Conflicting Positions (Hedges / Straddles / Spreads)")
                 st.markdown(
                     f"""
-                    You have **both calls and puts** on these underlyings:
+                    You have exposure on **both sides** of these underlyings:
                     {', '.join(sorted(portfolio_summary['conflicting']))}
 
                     **What this means:**
                     - You might be hedging (protecting against big moves in either direction)
-                    - Or running a straddle (profit from any big move, loss from no movement)
+                    - Or running a straddle or spread (profit from a range or a big move)
                     """
                 )
             else:
@@ -1210,46 +922,61 @@ with tab_greeks:
         - **Gamma (Γ):** Rate of delta change; higher gamma = more reactive to price moves.
         - **Theta (Θ):** Time decay (daily P&L from passage of time alone). Negative for buyers, positive for sellers.
         - **Vega (ν):** Sensitivity to implied volatility changes.
+        - **Position Δ:** contract delta × your signed quantity, so a sold call shows negative delta.
         """
     )
 
-    if fno_positions:
-        options_only = [pos for pos in fno_positions if pos.get("type", "").upper() == "OPTION"]
+    options_only = [p for p in open_positions if p.get("kind") in ("CALL", "PUT")]
+    greeks = result.get("greeks") or {}
 
-        if options_only:
-            greeks_df = pd.DataFrame([
-                {
-                    "Symbol": pos.get("symbol", "UNKNOWN"),
-                    "Delta": float(pos.get("delta", 0.0)),
-                    "Gamma": float(pos.get("gamma", 0.0)),
-                    "Theta": float(pos.get("theta", 0.0)),
-                    "Vega": float(pos.get("vega", 0.0))
-                }
-                for pos in options_only
-            ])
-
-            st.markdown("#### Greeks Heatmap")
-            fig_heatmap = go.Figure(data=go.Heatmap(
-                z=[greeks_df['Delta'], greeks_df['Gamma'], greeks_df['Theta'], greeks_df['Vega']],
-                x=greeks_df['Symbol'],
-                y=['Delta', 'Gamma', 'Theta', 'Vega'],
-                colorscale='RdYlGn',
-                zmid=0
-            ))
-            fig_heatmap.update_layout(height=300, margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig_heatmap, width='content')
-
-            st.markdown("#### Greeks Summary Table")
-            st.dataframe(
-                greeks_df.style.format({
-                    "Delta": "{:.4f}",
-                    "Gamma": "{:.4f}",
-                    "Theta": "{:.4f}",
-                    "Vega": "{:.4f}"
-                }),
-                width='stretch'
-            )
-        else:
-            st.info("No options positions found. Greeks analysis is for options only.")
+    if not options_only:
+        st.info("No open options positions. Greeks analysis is for options only.")
+    elif not greeks:
+        st.warning(
+            "No Greeks available. Groww positions carry none; they come from Groww's `get_greeks` call, "
+            "which needs its paid data plan."
+            + (f" Groww answered: `{result['greeks_error']}`" if result.get("greeks_error") else "")
+        )
     else:
-        st.info("No open FnO positions for Greeks analysis.")
+        greeks_df = pd.DataFrame([
+            {
+                "Symbol": pos["symbol"],
+                "Qty": pos["quantity"],
+                "Delta": greeks[pos["symbol"]].get("delta"),
+                "Gamma": greeks[pos["symbol"]].get("gamma"),
+                "Theta": greeks[pos["symbol"]].get("theta"),
+                "Vega": greeks[pos["symbol"]].get("vega"),
+                "IV": greeks[pos["symbol"]].get("iv"),
+                "Position Δ": (greeks[pos["symbol"]].get("delta") or 0.0) * pos["quantity"],
+            }
+            for pos in options_only if pos["symbol"] in greeks
+        ])
+        missing = [p["symbol"] for p in options_only if p["symbol"] not in greeks]
+        if missing:
+            st.warning(f"No Greeks for {', '.join(missing)}"
+                       + (f": `{result['greeks_error']}`" if result.get("greeks_error") else "."))
+
+        st.markdown("#### Greeks Heatmap (per contract)")
+        fig_heatmap = go.Figure(data=go.Heatmap(
+            z=[greeks_df['Delta'], greeks_df['Gamma'], greeks_df['Theta'], greeks_df['Vega']],
+            x=greeks_df['Symbol'],
+            y=['Delta', 'Gamma', 'Theta', 'Vega'],
+            colorscale='RdYlGn',
+            zmid=0
+        ))
+        fig_heatmap.update_layout(height=300, margin=dict(t=10, b=10, l=10, r=10))
+        st.plotly_chart(fig_heatmap, width='content')
+
+        st.markdown("#### Greeks Summary Table")
+        st.dataframe(
+            greeks_df.style.format({
+                "Qty": "{:,.0f}",
+                "Delta": "{:.4f}",
+                "Gamma": "{:.4f}",
+                "Theta": "{:.4f}",
+                "Vega": "{:.4f}",
+                "IV": "{:.2f}",
+                "Position Δ": "{:,.2f}",
+            }, na_rep="—"),
+            width='stretch'
+        )
