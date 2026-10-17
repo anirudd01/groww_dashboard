@@ -17,6 +17,26 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REAL_DB = os.path.join(ROOT, "data", "market.db")
 
+#: NSE's constituent lists as downloaded on 2026-10-15, so universe tests do not depend on what this
+#: machine last stored.
+NSE_FIXTURES = os.path.join(ROOT, "tests", "fixtures", "nse")
+
+
+def seed_constituents(path: str = None) -> dict:
+    """Store the fixture NSE lists as the ``index_constituents`` set (the test database by default)."""
+    from market import index_constituents as ic
+
+    def read(filename):
+        with open(os.path.join(NSE_FIXTURES, filename), encoding="utf-8-sig") as handle:
+            return ic.parse_csv(handle.read())
+
+    lists = {key: read(filename) for key, (_, filename) in ic.INDEX_FILES.items()}
+    banks = {row["symbol"] for row in read(ic.BANK_INDEX_FILE)}
+    document = ic.build_document(lists, banks, "2026-10-15T00:00:00+00:00")
+    ic.save(document, path)
+    return document
+
+
 #: Env var prefixes that carry broker credentials minted into tokens here.
 CREDENTIAL_PREFIXES = ("DHAN_", "IND_MONEY_")
 
@@ -31,6 +51,7 @@ class isolate:
         env.update(extra or {})
         self._patch = mock.patch.dict(os.environ, env, clear=True)
         self._patch.start()
+        seed_constituents()
 
     def path(self, name: str) -> str:
         return os.path.join(self.tmp.name, name)
@@ -38,6 +59,13 @@ class isolate:
     def stop(self) -> None:
         self._patch.stop()
         self.tmp.cleanup()
+
+
+def real_constituents_missing() -> bool:
+    """True when this machine has not stored NSE's constituent lists (the real database, read-only)."""
+    from market import index_constituents
+
+    return index_constituents.load(REAL_DB) is None
 
 
 def real_closes_missing() -> bool:
@@ -68,6 +96,7 @@ class seeded_fno:
         self._patch.start()
         save_closes(rows)
         save_universe({symbol: "1" for symbol in sorted({symbol for _, symbol in rows})}, [])
+        seed_constituents()
         return self
 
     def stop(self):

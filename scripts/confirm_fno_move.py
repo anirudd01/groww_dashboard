@@ -8,7 +8,7 @@
 The F&O pages flag a one-day fall whose size matches a split or bonus ratio (1/2, 2/3, 1/10, ...),
 because Kite adjusts its candles after the ex-date but rows already stored keep the old prices.
 A match is only a suspicion: a demerger, a buyback or a genuine crash can look the same. Check one
-(``python scripts/update_fno_history.py --fix-splits`` re-fetches the suspects: if Kite's adjusted
+(``python scripts/kite.py history --fix-splits`` re-fetches the suspects: if Kite's adjusted
 candles remove the jump it was a corporate action, otherwise it stays a fall), and if it is a real
 move, ``add`` it here with the reason. The note is what a later reader sees.
 
@@ -49,7 +49,7 @@ def main() -> int:
     if args.command == "suspected":
         rows = load_closes()
         if not rows:
-            print("No closes stored yet: run 'python scripts/update_fno_history.py'.")
+            print("No closes stored yet: run 'python scripts/kite.py history'.")
             return 1
         found = suspected_corporate_actions(rows, load_confirmed_moves())
         if not found:

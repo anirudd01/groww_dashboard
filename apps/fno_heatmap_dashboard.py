@@ -7,7 +7,7 @@ consistency (directional efficiency), by up days, or by net change. See
 market/fno_consistency.py and docs/FNO_HEATMAP.md.
 
 Data comes only from the stored daily closes, written by
-scripts/update_fno_history.py. The page makes no API call.
+scripts/kite.py history. The page makes no API call.
 
 Visualisation only - it places no orders and generates no signals.
 
@@ -45,7 +45,7 @@ from market.fno_movers import (
     suspected_corporate_actions,
 )
 from market.market_hours import now_ist
-from market.universe import get_universe
+from apps.fno_common import nifty50 as nifty50_universe
 from ui.fno_heatmap import build_heatmap, colour_limit, rows_frame
 
 WINDOWS = [3, 5, 7, 10, 15, 20]
@@ -109,7 +109,7 @@ def main() -> None:
     rows, actions = load_history(closes_stamp())
     exclude = {(a.symbol, a.date) for a in actions} if hide_suspected else None
     all_fno = set(universe.tokens)
-    nifty50 = set(get_universe("NIFTY50").symbols) & all_fno
+    nifty50 = set(nifty50_universe().symbols) & all_fno
 
     every, left_out = consistency_rows(rows, window, all_fno, exclude)
     if not every:

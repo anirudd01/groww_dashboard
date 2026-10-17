@@ -1,13 +1,11 @@
 """Store the MCX commodity futures contracts the MCX page reads (set ``mcx_futures`` in data/market.db).
 
-Run this **manually**, about monthly: each commodity lists new expiries as old ones lapse, and the
-page warns once the stored list is about to run out. The dashboard never downloads it itself.
-
-    python scripts/fetch_mcx_futures.py
-    python scripts/fetch_mcx_futures.py --use-cached    # reuse today's saved master CSV
+Part of ``python scripts/dhan.py --master``, about monthly: each commodity lists new expiries as old
+ones lapse, and the page warns once the stored list is about to run out. The dashboard never
+downloads it itself. It reads the Dhan master that the same run already downloaded.
 
 Sources, both public (no credentials needed):
-  - Dhan's instrument master (the same 35 MB CSV ``fetch_instrument_master.py`` reads). Every MCX
+  - Dhan's instrument master (the same 35 MB CSV ``jobs/dhan_instruments.py`` reads). Every MCX
     ``FUTCOM`` row is kept: 164 contracts across 28 commodities on 2026-10-03. Options (``OPTFUT``)
     and MCX index futures (``FUTIDX``) are left out.
   - Kite's ``/instruments/MCX`` list (1.3 MB), for the fallback. Its ids are matched to Dhan's
@@ -17,22 +15,17 @@ Sources, both public (no credentials needed):
 This script places no orders and reads no account data.
 """
 
-import argparse
 import csv
 import io
 import logging
-import os
-import sys
 from collections import Counter
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import requests
 
-import requests  # noqa: E402
+from jobs.dhan_instruments import SCRIP_MASTER_URL
+from market import mcx_futures, reference_store, state_store
 
-from fetch_instrument_master import SCRIP_MASTER_URL, download  # noqa: E402
-from market import mcx_futures, reference_store, state_store  # noqa: E402
-
-logger = logging.getLogger("fetch_mcx_futures")
+logger = logging.getLogger("mcx_futures")
 
 KITE_MCX_URL = "https://api.kite.trade/instruments/MCX"
 #: The set's name before Kite ids were added (2026-10-03); removed on every run.
@@ -50,20 +43,8 @@ def kite_rows():
     return list(csv.DictReader(io.StringIO(response.text)))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--db", default=None, help="Database file (default: the shared data/market.db)")
-    parser.add_argument("--keep-raw", action="store_true", help="Also save Dhan's unedited CSV under data/instruments/")
-    parser.add_argument("--use-cached", action="store_true", help="Reuse today's saved CSV instead of downloading")
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-    try:
-        text = download(use_cached=args.use_cached, keep_raw=args.keep_raw)
-    except Exception as exc:  # noqa: BLE001 - a CLI should explain, not traceback
-        logger.error("FAILED to fetch the instrument master: %s", exc)
-        return 1
-
+def run(args, text: str) -> int:
+    """Store every MCX future in ``text`` (Dhan's master CSV), with Kite's ids where they match."""
     contracts = mcx_futures.contracts_from_master(csv.DictReader(io.StringIO(text)))
     if not contracts:
         logger.error("No MCX futures in the master; refusing to store an empty list.")
@@ -84,6 +65,3 @@ def main() -> int:
                 mcx_futures.last_expiry(contracts), mcx_futures.MCX_SET, args.db or state_store.db_path())
     return 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

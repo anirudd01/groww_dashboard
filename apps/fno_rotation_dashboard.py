@@ -18,7 +18,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import streamlit as st
 
-from apps.fno_common import freshness, panels, require_history, source_caption, suspected_toggle, universe_options
+from apps.fno_common import freshness, nifty50, panels, require_history, source_caption, suspected_toggle, universe_options
 from market.price_panel import UNIVERSE_EX_NIFTY, UNIVERSE_NIFTY50, equal_weight_index, restrict
 from market.rotation import (
     IMPROVING,
@@ -33,7 +33,6 @@ from market.rotation import (
     sector_indices,
     trails,
 )
-from market.sector_mapping import NIFTY_50_SECTORS
 from ui.insight_charts import CONFIG, rotation_chart
 
 VIEW_SECTORS = "Nifty 50 sectors"
@@ -73,8 +72,8 @@ def main() -> None:
     closes = data["close"]
     benchmark = equal_weight_index(restrict(closes, options[UNIVERSE_NIFTY50]))
     if view == VIEW_SECTORS:
-        series = sector_indices(closes, {s: sec for s, sec in NIFTY_50_SECTORS.items()
-                                         if s in options[UNIVERSE_NIFTY50]})
+        series = sector_indices(closes, {c.symbol: c.sector for c in nifty50().constituents
+                                         if c.symbol in options[UNIVERSE_NIFTY50]})
     else:
         series = restrict(closes, options[UNIVERSE_NIFTY50 if view == VIEW_NIFTY else UNIVERSE_EX_NIFTY])
     ratio, mom = rotation(series, benchmark, lookback, momentum)

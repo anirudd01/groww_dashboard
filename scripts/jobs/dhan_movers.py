@@ -1,9 +1,9 @@
 """Save the close of Dhan's stock gainers and losers to the SQLite database, so there is a history.
 
-    python scripts/store_dhan_movers.py --dry-run      # fetch and show, write nothing (any time)
-    python scripts/store_dhan_movers.py                # store the latest finished session's close
-    python scripts/store_dhan_movers.py --top 20 --universes "Nifty 50,Nifty Bank"
-    python scripts/store_dhan_movers.py --intraday --every 15   # also snapshots while open (off by default)
+    python scripts/dhan.py --dry-run      # fetch and show, write nothing (any time)
+    python scripts/dhan.py                # store the latest finished session's close
+    python scripts/dhan.py --top 20 --universes "Nifty 50,Nifty Bank"
+    python scripts/dhan.py --intraday --every 15   # also snapshots while open (off by default)
 
 Dhan's ranking endpoint only answers "today against the previous close", so a history exists
 only if it is saved as it happens. Each capture adds to two tables of data/market.db (git-ignored,
@@ -28,25 +28,13 @@ Needs the Dhan credentials in .env, like the dashboards.
 Read-only: it calls one ranking endpoint and places no orders. Never prints tokens.
 """
 
-import argparse
-import logging
 import os
-import sys
 import time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(os.path.join(ROOT, ".env"), override=True)
-except ImportError:
-    pass
-
-from market import dhan_movers_history as history  # noqa: E402
-from market import dhan_movers_store as store  # noqa: E402
-from market.market_hours import now_ist  # noqa: E402
+from jobs.common import ROOT
+from market import dhan_movers_history as history
+from market import dhan_movers_store as store
+from market.market_hours import now_ist
 
 DEFAULT_UNTIL = "16:05"
 #: Dhan returns at most 100 per side and has no paging, so 100 keeps everything it gives.
@@ -58,16 +46,19 @@ def until_today(text: str):
     return now_ist().replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--top", type=int, default=DEFAULT_TOP,
-                        help=f"Stocks kept per side per universe (default {DEFAULT_TOP}, which is the most Dhan returns)")
-    parser.add_argument("--universes", help="Comma-separated universe keys or labels (default: all of them)")
-    parser.add_argument("--intraday", action="store_true", help="Also store snapshots while the market is open (off by default)")
-    parser.add_argument("--every", type=int, metavar="MINUTES", help="With --intraday, keep capturing at this interval")
-    parser.add_argument("--until", default=DEFAULT_UNTIL, help=f"With --every, stop at this IST time (default {DEFAULT_UNTIL})")
-    parser.add_argument("--dry-run", action="store_true", help="Fetch and summarise, but write nothing and ignore the session")
-    args = parser.parse_args()
+def add_arguments(parser) -> None:
+    group = parser.add_argument_group("movers (the data job)")
+    group.add_argument("--top", type=int, default=DEFAULT_TOP,
+                       help=f"Stocks kept per side per universe (default {DEFAULT_TOP}, which is the most Dhan returns)")
+    group.add_argument("--universes", help="Comma-separated universe keys or labels (default: all of them)")
+    group.add_argument("--intraday", action="store_true", help="Also store snapshots while the market is open (off by default)")
+    group.add_argument("--every", type=int, metavar="MINUTES", help="With --intraday, keep capturing at this interval")
+    group.add_argument("--until", default=DEFAULT_UNTIL, help=f"With --every, stop at this IST time (default {DEFAULT_UNTIL})")
+    group.add_argument("--dry-run", action="store_true", help="Fetch and summarise, but write nothing and ignore the session")
+
+
+def check_arguments(args, parser) -> None:
+    """Reject bad combinations before any job runs (``parser.error`` exits)."""
     if not 1 <= args.top <= 100:
         parser.error("--top must be between 1 and 100")
     if args.every is not None and not args.intraday:
@@ -75,11 +66,13 @@ def main() -> int:
     if args.every is not None and args.every < 2:
         parser.error("--every must be at least 2 minutes: one capture already takes about 50 s")
     try:
-        universes = history.resolve_universes(args.universes.split(",") if args.universes else None)
+        history.resolve_universes(args.universes.split(",") if args.universes else None)
     except ValueError as exc:
         parser.error(str(exc))
-    logging.basicConfig(level=logging.WARNING)
 
+
+def run(args) -> int:
+    universes = history.resolve_universes(args.universes.split(",") if args.universes else None)
     from market.providers.dhan import DhanProvider
 
     provider = DhanProvider()
@@ -120,6 +113,3 @@ def main() -> int:
             print("Stopped.")
             return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

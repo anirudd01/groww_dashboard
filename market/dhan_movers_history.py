@@ -1,6 +1,6 @@
 """Keep a history of Dhan's stock gainers and losers, in the shared SQLite database.
 
-``scripts/store_dhan_movers.py`` calls this. Dhan's ``/data/marketmovers`` only ever answers
+``scripts/dhan.py`` calls this. Dhan's ``/data/marketmovers`` only ever answers
 "today against the previous close", so a history exists only if it is saved as it happens.
 Each capture asks Dhan for the gainers and losers of every chosen universe (F&O stocks,
 Nifty 50, each NSE sector index, ...) and writes them to two tables of ``data/market.db``

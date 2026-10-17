@@ -2,7 +2,7 @@
 
 Two views: the Nifty 50 (all of which trade in F&O) and every NSE F&O stock.
 Past days come from the stored daily closes, written by
-scripts/update_fno_history.py. Today, while the market is open, comes from one
+scripts/kite.py history. Today, while the market is open, comes from one
 bulk Kite quote for all ~210 stocks.
 
 Visualisation only - it places no orders and generates no signals.
@@ -57,7 +57,7 @@ from market.market_hours import (
     session_state,
 )
 from market.providers.base import InstrumentRef
-from market.universe import get_universe
+from apps.fno_common import nifty50 as nifty50_universe
 from ui.shading import shade_change
 
 logger = logging.getLogger(__name__)
@@ -304,7 +304,7 @@ def main(view: str = VIEW_ALL) -> None:
         st.warning(f"The history ends on {stored_days[-1]}. Run 'python {UPDATE_SCRIPT}' to catch up.",
                    icon=":material/history:")
 
-    nifty50 = set(get_universe("NIFTY50").symbols) & set(universe.tokens)
+    nifty50 = set(nifty50_universe().symbols) & set(universe.tokens)
     all_fno = set(universe.tokens)
 
     symbols = nifty50 if view == VIEW_NIFTY50 else all_fno

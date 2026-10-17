@@ -4,7 +4,7 @@ import json
 
 # Allow running as `python scripts/test_api.py` from the repo root while still
 # importing groww_api/groww_client.py.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 try:
     from dotenv import load_dotenv

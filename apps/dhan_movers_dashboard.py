@@ -9,7 +9,7 @@ found in its Swagger spec but absent from its docs), so each screen is one or tw
     Options  - open interest by strike, calls against puts, and a contract table
     History  - the stored closes: any past session's gainers and losers, breadth over time, and
                the stocks that keep topping the lists. Read from data/market.db, which
-               scripts/store_dhan_movers.py fills; nothing is fetched from Dhan on this screen
+               scripts/dhan.py fills; nothing is fetched from Dhan on this screen
 
 The live screens rank today against the previous close, so they have no multi-day view; the
 F&O pages and the History screen cover that. After the close, and on holidays, they show the
@@ -481,7 +481,7 @@ def history_screen(day: str, universe: str, rows: int) -> None:
         with right:
             st.markdown(":red[**Most often a top loser**]")
             st.dataframe(repeat_frame(data["repeat_losers"]), hide_index=True, column_config=REPEAT_COLUMNS)
-    st.caption(f"Source: stored closes in {store.DB_PATH}, written by scripts/store_dhan_movers.py. Nothing is fetched from Dhan here.")
+    st.caption(f"Source: stored closes in {store.DB_PATH}, written by scripts/dhan.py. Nothing is fetched from Dhan here.")
 
 
 # -- page --------------------------------------------------------------------
@@ -554,7 +554,7 @@ def main() -> None:
                 dhan_provider.clear()
 
     if screen is None:
-        st.info("No history stored yet. Run `python scripts/store_dhan_movers.py` after 16:00 IST, or any time later: "
+        st.info("No history stored yet. Run `python scripts/dhan.py` after 16:00 IST, or any time later: "
                 "it stores the latest finished session's close.", icon=":material/database:")
         return
     run_every = REFRESH_SECONDS if auto and live else None

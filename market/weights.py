@@ -5,7 +5,7 @@ dashboard must not depend on a third-party fundamentals source being reachable
 while the market is open, and a weight that silently changes mid-session would
 make two refreshes of the same screen disagree.
 
-They are produced offline by ``scripts/fetch_index_weights.py`` and stored in the
+They are produced offline by ``scripts/dhan.py --master`` and stored in the
 shared SQLite database by ``market/reference_store.py``. Run the script
 manually, weekly or monthly - share
 counts move slowly, so a stale-by-a-week weight is a rounding error, while a
@@ -118,7 +118,7 @@ def load_weights(
             path=label,
             error=(
                 f"No weights stored ({label}). Run "
-                "'python scripts/fetch_index_weights.py' to generate them."
+                "'python scripts/dhan.py --master' to generate them."
             ),
         )
 

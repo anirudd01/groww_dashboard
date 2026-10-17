@@ -4,6 +4,8 @@ A navbar page ("Dhan Movers") built on Dhan's own server-side ranking endpoint,
 `POST https://api.dhan.co/v2/data/marketmovers`. Dhan ranks the instruments, so each
 screen is one or two calls and no history is stored. It is separate from the
 [F&O movers pages](FNO_MOVERS.md), which are Kite-based and cover multi-day moves.
+To see a raw request and reply for this endpoint, use the Tools → Dhan API Explorer page
+([DHAN_API_EXPLORER.md](DHAN_API_EXPLORER.md)).
 
 Visualisation only: it places no orders and generates no signals. The futures
 "build-up" labels describe what open interest and price did today; they predict nothing.
@@ -103,7 +105,7 @@ Things to know when reading them:
 - `putCallRatio` varies by strike (0.64 at 23500, 3.67 at 22000), so it is a per-contract figure.
   Dhan does not say how it is computed; the page labels it as Dhan's.
 
-## History: `scripts/store_dhan_movers.py`
+## History: `scripts/dhan.py`
 
 The endpoint only answers "today against the previous close", so a history exists only if it is
 saved as it happens. The script stores **the close of each session** in two tables of the shared
@@ -111,10 +113,10 @@ SQLite database `data/market.db` (the file the F&O 1-minute history lives in), a
 and open interest.
 
 ```bash
-python scripts/store_dhan_movers.py --dry-run     # fetch and print, write nothing, any time of day
-python scripts/store_dhan_movers.py               # store the latest finished session's close (about 50 s)
-python scripts/store_dhan_movers.py --top 20 --universes "Nifty 50,Nifty Bank"
-python scripts/store_dhan_movers.py --intraday --every 15   # optional snapshots while open; off by default
+python scripts/dhan.py --dry-run     # fetch and print, write nothing, any time of day
+python scripts/dhan.py               # store the latest finished session's close (about 50 s)
+python scripts/dhan.py --top 20 --universes "Nifty 50,Nifty Bank"
+python scripts/dhan.py --intraday --every 15   # optional snapshots while open; off by default
 ```
 
 | Table | One row per | Columns |
@@ -224,7 +226,7 @@ what the live heat map reads.
 | `market/dhan_movers_history.py` | The history: which session a capture belongs to, fetching with a retry, the rows, and the once-per-session guard |
 | `market/dhan_movers_store.py` | The two tables in the shared store: schema, the one-transaction write, and the reads the History screen uses |
 | `market/intraday_store.py` | The shared SQLite store (path, WAL, connection). `connect(extra_schema=...)` and `connect_readonly()` were added so other features share it |
-| `scripts/store_dhan_movers.py` | Command line for the history (single capture, or a loop) |
+| `scripts/dhan.py` | Command line for the history (single capture, or a loop) |
 | `ui/shading.py` | Green/red cell shading, shared with the F&O movers page |
 | `tests/test_dhan_movers.py`, `tests/test_dhan_movers_history.py`, `tests/test_dhan_movers_store.py` | Request, parsing, provider call, dashboard and history tests; nothing reaches Dhan |
 

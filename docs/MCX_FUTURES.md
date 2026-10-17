@@ -9,7 +9,7 @@ Visualisation only: it places no orders and generates no signals.
 ```bash
 streamlit run pulse_dashboard.py                                  # the "MCX Futures" page
 streamlit run apps/mcx_futures_dashboard.py --server.port 8512    # on its own
-python scripts/fetch_mcx_futures.py                               # the contract list; run monthly
+python scripts/dhan.py --master                               # the contract list; run monthly
 ```
 
 Code: [`apps/mcx_futures_dashboard.py`](../apps/mcx_futures_dashboard.py) (page),
@@ -71,11 +71,11 @@ candle call when the chart's contract or interval changes (candles are cached fo
 
 ## The contract list
 
-`scripts/fetch_mcx_futures.py` stores every MCX commodity future in the `mcx_futures` set of
+`scripts/dhan.py --master` stores every MCX commodity future in the `mcx_futures` set of
 `data/market.db`:
 
 - **Dhan:** every `FUTCOM` row of Dhan's public instrument master, the same 35 MB CSV that
-  `fetch_instrument_master.py` reads (`--use-cached` reuses today's saved copy). Options (`OPTFUT`) and
+  `scripts/dhan.py --master` reads (`--use-cached` reuses today's saved copy). Options (`OPTFUT`) and
   MCX index futures (`FUTIDX`) are left out.
 - **Kite:** each contract's `instrument_token` and `tradingsymbol` (`CRUDEOIL26OCTFUT`), from Kite's public
   `/instruments/MCX` list (1.3 MB), matched on commodity and expiry.

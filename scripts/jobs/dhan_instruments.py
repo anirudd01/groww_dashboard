@@ -1,12 +1,11 @@
-"""Generate the broker instrument ids the dashboard reads at startup (stored in the database).
+"""Generate the Dhan instrument ids the dashboard reads at startup (stored in the database).
 
-Run this **manually** - monthly, or whenever a symbol stops resolving. The
-dashboard never downloads an instrument master itself.
+Part of ``python scripts/dhan.py --master`` - run it monthly, or whenever a symbol
+stops resolving. The dashboard never downloads an instrument master itself.
 
-    python scripts/fetch_instrument_master.py
-    python scripts/fetch_instrument_master.py --verbose
-    python scripts/fetch_instrument_master.py --keep-raw      # also save the CSV
-    python scripts/fetch_instrument_master.py --use-cached    # reuse today's CSV
+    python scripts/dhan.py --master-only                 # constituents, these ids, MCX futures, weights
+    python scripts/dhan.py --master-only --keep-raw      # also save the CSV
+    python scripts/dhan.py --master-only --use-cached    # reuse today's CSV
 
 Why this is a script and not a startup step
 -------------------------------------------
@@ -27,7 +26,7 @@ and suspensions. So this is monthly-or-on-demand work, not per-boot work.
 When to re-run
 --------------
 - After an NSE index reconstitution.
-- After editing ``market/sector_mapping.py`` or adding a universe.
+- After adding an index to ``market/index_constituents.py``.
 - When the dashboard's "Data gaps" panel reports unresolved symbols, or the
   logs say a symbol is missing from the stored instrument ids.
 
@@ -41,26 +40,22 @@ This script places no orders and reads no account data. The instrument master
 is a public file, so it needs no broker credentials at all.
 """
 
-import argparse
 import csv
 import io
 import logging
 import os
-import sys
 import time
 from datetime import date, datetime, timezone
-from typing import Dict, Iterable, Set, Tuple
+from typing import Dict, Iterable, Set
 
 import requests
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from market import reference_store, state_store
+from market.instruments import DHAN_SET
+from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX
+from market.universe import tracked_symbols
 
-from market import reference_store, state_store  # noqa: E402
-from market.instruments import DHAN_SET  # noqa: E402
-from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX  # noqa: E402
-from market.universe import UNIVERSES, get_universe  # noqa: E402
-
-logger = logging.getLogger("fetch_instrument_master")
+logger = logging.getLogger("dhan_instruments")
 
 SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
 
@@ -90,27 +85,6 @@ KEPT_COLUMNS = (
 
 def raw_path(day: date) -> str:
     return os.path.join(RAW_DIR, f"{RAW_PREFIX}{day.isoformat()}.csv")
-
-
-def tracked_symbols() -> Tuple[Dict[str, Set[str]], list]:
-    """Symbols to resolve, grouped by segment, across every configured universe.
-
-    A universe that has no constituents yet (Nifty Next 50) is skipped rather
-    than treated as an error - it is a placeholder, not a failure.
-    """
-    wanted: Dict[str, Set[str]] = {SEGMENT_CASH: set(), SEGMENT_INDEX: set()}
-    included = []
-    for key in UNIVERSES:
-        try:
-            universe = get_universe(key)
-        except (KeyError, ValueError) as exc:
-            logger.info("Skipping universe %s: %s", key, exc)
-            continue
-        segment = (universe.segment or SEGMENT_CASH).upper()
-        wanted.setdefault(segment, set()).update(universe.symbols)
-        included.append(key)
-        logger.info("  %-20s %3d symbols (%s)", key, len(universe), segment)
-    return wanted, included
 
 
 def download(use_cached: bool, keep_raw: bool) -> str:
@@ -189,11 +163,10 @@ def build_payload(instruments, missing, universes: Iterable[str]) -> dict:
         "provider": "dhan",
         "universes": sorted(universes),
         "note": (
-            "Generated offline by scripts/fetch_instrument_master.py. The "
-            "dashboard reads this file and never downloads an instrument "
-            "master at runtime. Regenerate after an NSE index reconstitution, "
-            "after editing market/sector_mapping.py, or when a symbol stops "
-            "resolving."
+            "Generated offline by scripts/dhan.py --master. The dashboard "
+            "reads this set and never downloads an instrument master at "
+            "runtime. Regenerate after an NSE index reconstitution or when a "
+            "symbol stops resolving."
         ),
         "symbol_count": sum(len(rows) for rows in instruments.values()),
         "missing": missing,
@@ -204,44 +177,19 @@ def build_payload(instruments, missing, universes: Iterable[str]) -> dict:
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default=None, help="Database file (default: the shared data/market.db)")
-    parser.add_argument("--verbose", action="store_true", help="Log every symbol")
-    parser.add_argument(
-        "--keep-raw",
-        action="store_true",
-        help="Also save Dhan's unedited CSV under data/instruments/",
-    )
-    parser.add_argument(
-        "--use-cached",
-        action="store_true",
-        help="Reuse today's saved CSV instead of downloading again",
-    )
-    args = parser.parse_args()
-
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO, format="%(message)s"
-    )
-
+def log_universes(universes) -> None:
     logger.info("Universes to resolve:")
-    wanted, universes = tracked_symbols()
+    for universe in universes:
+        logger.info("  %-20s %3d symbols (%s)", universe.key, len(universe), universe.segment)
+
+
+def run(args, text: str) -> int:
+    """Resolve every tracked symbol in ``text`` (Dhan's master CSV, see ``download``) and store the ids."""
+    wanted, universes = tracked_symbols(args.db)
+    log_universes(universes)
     total = sum(len(symbols) for symbols in wanted.values())
     if not total:
-        logger.error("No universes have constituents configured - nothing to do.")
-        return 1
-
-    try:
-        text = download(use_cached=args.use_cached, keep_raw=args.keep_raw)
-    except Exception as exc:  # noqa: BLE001 - a CLI should explain, not traceback
-        logger.error("FAILED to fetch the instrument master: %s", exc)
-        logger.error(
-            "The file is public, so this is a network problem rather than a "
-            "credentials one. The %s set can also be filled in by hand: it is a plain "
-            "symbol -> security_id map and the ids are visible in Dhan's own "
-            "instrument list.",
-            DHAN_SET,
-        )
+        logger.error("No universes have constituents stored - nothing to do.")
         return 1
 
     instruments, missing = extract(text, wanted, verbose=args.verbose)
@@ -257,17 +205,13 @@ def main() -> int:
             "  %s: %d unresolved - %s", segment, len(symbols), ", ".join(symbols)
         )
 
-    payload = build_payload(instruments, missing, universes)
+    payload = build_payload(instruments, missing, [u.key for u in universes])
     reference_store.save_document(DHAN_SET, payload, nested=("instruments",), path=args.db)
     logger.info("Stored %d instruments as %s in %s", resolved, DHAN_SET, args.db or state_store.db_path())
     if missing:
         logger.warning(
             "Some symbols did not resolve. Check them against NSE - a renamed "
-            "or delisted constituent needs market/sector_mapping.py updating too."
+            "or delisted constituent shows up in NSE's list before the broker's."
         )
         return 2
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

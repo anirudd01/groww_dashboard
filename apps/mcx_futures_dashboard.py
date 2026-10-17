@@ -6,7 +6,7 @@ against the previous close, the day's range, volume and open interest. Click a r
 
 Data from Dhan, falling back to Kite when Dhan fails (market/mcx_futures.py says why that order):
 one quote call for every live contract, then one candle call for the charted one. The contract
-list is read from data/market.db, which ``python scripts/fetch_mcx_futures.py`` fills; run it
+list is read from data/market.db, which ``python scripts/dhan.py --master`` fills; run it
 about monthly.
 
 Visualisation only - it places no orders and generates no signals.

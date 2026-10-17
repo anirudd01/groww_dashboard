@@ -77,7 +77,7 @@ class HeatmapConfig:
     # by the stored weights below. Both are selectable in the UI.
     aggregation_method: str = EQUAL_WEIGHT
     # Weights are read from the database at startup and never fetched live.
-    # Generate them with scripts/fetch_index_weights.py. None is the shared
+    # Generate them with scripts/dhan.py --master. None is the shared
     # data/market.db; a path points at another database (PULSE_STATE_DB does too).
     weights_path: Optional[str] = None
 

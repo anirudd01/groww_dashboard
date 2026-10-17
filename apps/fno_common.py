@@ -58,9 +58,17 @@ def panels(hide_suspected: bool = True):
     return _panels(closes_stamp(), hide_suspected)
 
 
+def nifty50():
+    """The Nifty 50 universe (members and sectors), or stop the page saying what to run."""
+    try:
+        return get_universe("NIFTY50")
+    except (KeyError, ValueError) as exc:
+        st.error(str(exc), icon=":material/error:")
+        st.stop()
+
+
 def universe_options(universe) -> dict:
-    nifty50 = get_universe("NIFTY50").symbols
-    return universe_sets(universe.tokens, nifty50)
+    return universe_sets(universe.tokens, nifty50().symbols)
 
 
 def universe_picker(universe, key: str, default: str = UNIVERSES[0], container=None):

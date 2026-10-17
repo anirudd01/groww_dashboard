@@ -165,7 +165,7 @@ def main() -> int:
     save_session(session)
     print(f"\nLogged in as {_masked(session.user_id)}. Session saved to the shared database ({state_store.db_path()})")
     print(f"Valid until {session.expires_at} ({session.hours_left():.1f} h).")
-    print("Start the dashboard, or verify with: python scripts/check_heatmap_universe.py --provider kite")
+    print("Start the dashboard, or verify with: python scripts/debug/check_heatmap_universe.py --provider kite")
     return 0
 
 

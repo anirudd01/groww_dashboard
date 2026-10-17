@@ -7,7 +7,7 @@ Verifies, without starting Streamlit, for each configured broker:
   4. whether the broker's websocket actually delivers ticks
 
 Usage:
-    python scripts/check_heatmap_universe.py [--seconds 20] [--provider dhan]
+    python scripts/debug/check_heatmap_universe.py [--seconds 20] [--provider dhan]
 """
 
 import argparse
@@ -16,7 +16,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 try:
     from dotenv import load_dotenv
@@ -61,7 +61,7 @@ def probe_provider(provider, universe) -> bool:
           f"{len(resolved)}/{len(universe)} resolved")
     if missing:
         print("      ids come from a generated file, not a live download - "
-              "run 'python scripts/fetch_instrument_master.py' to refresh it")
+              "run 'python scripts/dhan.py --master-only' to refresh it")
     for symbol in missing:
         print(f"      unresolved: {symbol}")
     if not resolved:

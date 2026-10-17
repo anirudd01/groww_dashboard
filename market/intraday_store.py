@@ -1,7 +1,7 @@
 """SQLite store for F&O stock history: 1-minute bars plus daily open/close.
 
 One file, ``data/market.db`` (git-ignored, rebuilt by
-``scripts/backfill_intraday.py``). Two tables and one view:
+``scripts/kite.py intraday``). Two tables and one view:
 
   minute_bars  symbol, ts, open, high, low, close, volume, oi
   daily_bars   symbol, date, open, high, low, close, volume
@@ -32,7 +32,7 @@ from datetime import datetime
 from typing import Iterable, List, Optional, Tuple
 
 DB_PATH = os.path.join("data", "market.db")
-BACKFILL_SCRIPT = "scripts/backfill_intraday.py"
+BACKFILL_SCRIPT = "scripts/kite.py intraday"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS minute_bars (

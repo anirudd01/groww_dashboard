@@ -4,6 +4,7 @@
     F&O:      Nifty 50 Movers | All F&O Movers | F&O Heatmap | Dhan Movers
     Insights: Breadth | Overnight vs Intraday | Rotation | Gap Fills | Gap Streaks
     MCX:      MCX Futures
+    Tools:    Dhan API Explorer
 
 Every page is a direct link (ui/navbar.py): no dropdown to open first, no
 "more" menu. The Insights pages read only the stored history
@@ -16,7 +17,7 @@ Visualisation only - it places no orders and generates no signals.
 
 import streamlit as st
 
-from apps import dhan_movers_dashboard
+from apps import dhan_api_explorer, dhan_movers_dashboard
 from apps import fno_breadth_dashboard as breadth
 from apps import fno_gap_fills_dashboard as gap_fills
 from apps import fno_gap_streaks_dashboard as gap_streaks
@@ -67,6 +68,10 @@ def nav_spec():
         ("MCX", [
             (st.Page(mcx.page_mcx_futures, title="MCX Commodity Futures", icon=":material/oil_barrel:",
                      url_path="mcx-futures"), "MCX Futures"),
+        ]),
+        ("Tools", [
+            (st.Page(dhan_api_explorer.page_dhan_api_explorer, title="Dhan API Explorer", icon=":material/api:",
+                     url_path="dhan-api-explorer"), "Dhan API Explorer"),
         ]),
     ]
 

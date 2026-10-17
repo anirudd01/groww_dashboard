@@ -1,13 +1,15 @@
 """Instrument universes for the sector heatmap.
 
 A universe is a named list of constituents plus their sector classification.
-Add NIFTY NEXT 50 by filling in ``NIFTY_NEXT_50_SECTORS`` in
-``market/sector_mapping.py`` - no other code needs to change.
 
 Two kinds of universe exist:
 
-* **Cash equity** (``SEGMENT_CASH``) - Nifty 50 members, aggregated into
-  sectors by the heatmap.
+* **Cash equity** (``SEGMENT_CASH``) - an NSE index's members (Nifty 50, Nifty
+  Next 50), aggregated into sectors by the heatmap. The members and their
+  sectors come from NSE's published lists, stored in ``data/market.db`` by
+  ``python scripts/<broker>.py --master`` (see ``market/index_constituents.py``).
+  They are read from the database on every lookup, so a ``--master`` run is
+  picked up without a code change.
 * **Index** (``SEGMENT_INDEX``) - NSE indices, where each constituent *is*
   its own tile and no aggregation happens. See ``market/index_mapping.py``.
 
@@ -16,10 +18,10 @@ exchange segment without anything above them knowing broker specifics.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
+from market import index_constituents
 from market.index_mapping import ALL_INDICES
-from market.sector_mapping import NIFTY_50_SECTORS, NIFTY_NEXT_50_SECTORS
 
 # All cash-equity constituents trade on NSE in the CASH segment.
 DEFAULT_EXCHANGE = "NSE"
@@ -96,38 +98,64 @@ def _build_index_universe() -> Universe:
     )
 
 
-NIFTY_50 = _build("NIFTY50", "Nifty 50", NIFTY_50_SECTORS)
-NIFTY_NEXT_50 = _build("NIFTYNEXT50", "Nifty Next 50", NIFTY_NEXT_50_SECTORS)
 SECTORAL_INDICES = _build_index_universe()
-
-UNIVERSES: Dict[str, Universe] = {
-    NIFTY_50.key: NIFTY_50,
-    NIFTY_NEXT_50.key: NIFTY_NEXT_50,
-    SECTORAL_INDICES.key: SECTORAL_INDICES,
-}
 
 #: Key of the index board, used by the dashboard's second page.
 INDEX_UNIVERSE_KEY = SECTORAL_INDICES.key
 
-DEFAULT_UNIVERSE_KEY = NIFTY_50.key
+DEFAULT_UNIVERSE_KEY = "NIFTY50"
+
+MASTER_HINT = "Run 'python scripts/kite.py --master' (or dhan.py / indmoney.py) to download NSE's lists."
 
 
-def get_universe(key: str = DEFAULT_UNIVERSE_KEY) -> Universe:
+def universes(path: Optional[str] = None) -> Dict[str, Universe]:
+    """Every known universe, keyed by key: the stored NSE indices, then the index board.
+
+    An index in ``INDEX_FILES`` that is not stored yet is still listed, with no
+    constituents, so asking for it explains what to run rather than "unknown".
+    ``path`` is a database file, for tests; the default is the shared one.
+    """
+    document = index_constituents.load(path) or {}
+    stored = document.get("indices") or {}
+    labels = document.get("labels") or {}
+    found: Dict[str, Universe] = {}
+    for key in list(index_constituents.INDEX_FILES) + [k for k in stored if k not in index_constituents.INDEX_FILES]:
+        label = labels.get(key) or index_constituents.INDEX_FILES.get(key, (key, ""))[0]
+        members = stored.get(key) or {}
+        found[key] = _build(key, label, {symbol: row.get("sector", "") for symbol, row in members.items()})
+    found[SECTORAL_INDICES.key] = SECTORAL_INDICES
+    return found
+
+
+def get_universe(key: str = DEFAULT_UNIVERSE_KEY, path: Optional[str] = None) -> Universe:
     """Look up a universe by key, raising a clear error for unknown keys."""
     normalised = (key or DEFAULT_UNIVERSE_KEY).upper().replace(" ", "").replace("_", "")
-    universe = UNIVERSES.get(normalised)
+    known = universes(path)
+    universe = known.get(normalised)
     if universe is None:
         raise KeyError(
-            f"Unknown universe {key!r}. Available: {', '.join(sorted(UNIVERSES))}"
+            f"Unknown universe {key!r}. Available: {', '.join(sorted(known))}"
         )
     if not universe.constituents:
         raise ValueError(
-            f"Universe {universe.key!r} has no constituents configured. "
-            "Populate its sector mapping in market/sector_mapping.py first."
+            f"Universe {universe.key!r} has no constituents stored. {MASTER_HINT}"
         )
     return universe
 
 
-def available_universes() -> List[Universe]:
-    """Universes that actually have constituents configured."""
-    return [u for u in UNIVERSES.values() if u.constituents]
+def available_universes(path: Optional[str] = None) -> List[Universe]:
+    """Universes that actually have constituents stored."""
+    return [u for u in universes(path).values() if u.constituents]
+
+
+def tracked_symbols(path: Optional[str] = None) -> Tuple[Dict[str, Set[str]], List[Universe]]:
+    """Symbols the instrument-id sets must resolve, grouped by segment, and the universes they came from.
+
+    Shared by every broker's ``--master`` run. An index with no constituents
+    stored is left out: there is nothing to resolve for it.
+    """
+    wanted: Dict[str, Set[str]] = {SEGMENT_CASH: set(), SEGMENT_INDEX: set()}
+    included = available_universes(path)
+    for universe in included:
+        wanted.setdefault((universe.segment or SEGMENT_CASH).upper(), set()).update(universe.symbols)
+    return wanted, included

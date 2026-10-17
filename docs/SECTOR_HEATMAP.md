@@ -49,9 +49,9 @@ To run it alongside the other dashboards, give it its own port with `--server.po
 Verify the data pipeline and live feed without starting Streamlit:
 
 ```bash
-python scripts/check_heatmap_universe.py --seconds 20
-python scripts/check_heatmap_universe.py --provider dhan --seconds 20   # one broker
-python scripts/check_heatmap_universe.py --provider indmoney --board indices
+python scripts/debug/check_heatmap_universe.py --seconds 20
+python scripts/debug/check_heatmap_universe.py --provider dhan --seconds 20   # one broker
+python scripts/debug/check_heatmap_universe.py --provider indmoney --board indices
 ```
 
 It exits `OK` only when the **websocket** delivered ticks, and warns explicitly
@@ -227,7 +227,7 @@ No credential is logged or stored by any module added for this dashboard.
 | Auth (Groww) | `groww_api/client.py` *(existing, unchanged)* | One authentication per process |
 | API (Groww) | `groww_api/api_calls.py` *(extended)* | Instrument resolution, previous close, batched LTP |
 | Config | `market/config.py` | All tunables, env-overridable |
-| Universe | `market/universe.py`, `market/sector_mapping.py` | Constituents and sector classification |
+| Universe | `market/universe.py`, `market/index_constituents.py` | Constituents and sector classification (NSE's lists, stored by `--master`) |
 | Indices | `market/index_mapping.py` | Which NSE indices the index board shows |
 | Models | `market/models.py` | `StockMarketData`, `SectorMarketData`, `FeedStatus` |
 | Feed | `market/live_feed.py` | `LiveMarketDataService` — the background worker |
@@ -344,10 +344,29 @@ the close could only make things worse.
 
 ## Instrument universe and sector mapping
 
-Constituents live in [`market/sector_mapping.py`](../market/sector_mapping.py)
-as a plain `symbol -> sector` dict; [`market/universe.py`](../market/universe.py)
-turns it into a `Universe`. All Nifty 50 members are `exchange=NSE`,
-`segment=CASH`.
+Constituents and their sectors come from NSE's own published lists, the
+constituent CSVs on niftyindices.com (`Company Name, Industry, Symbol, Series,
+ISIN Code`). Every broker's `--master` run (`python scripts/kite.py --master`,
+`dhan.py --master`, `indmoney.py --master`) downloads them first and stores them
+as the `index_constituents` set in `data/market.db`;
+[`market/universe.py`](../market/universe.py) reads that set on every lookup and
+turns each index into a `Universe`. Nothing about membership is hand-kept. All
+members are `exchange=NSE`, `segment=CASH`.
+
+niftyindices.com drops the connection of a client that does not look like a
+browser, so the download uses one `requests` session with a browser User-Agent
+and opens the home page first (verified 2026-10-15; the CSVs themselves only need
+the User-Agent).
+
+**Sector labels** are NSE's `Industry` column (its macro-economic sector), with
+two changes made in [`market/index_constituents.py`](../market/index_constituents.py):
+three long names are shortened (`Fast Moving Consumer Goods` -> `FMCG`,
+`Automobile and Auto Components` -> `Automobile`, `Oil Gas & Consumable Fuels`
+-> `Oil, Gas & Consumable Fuels`), and banks are split out of Financial Services:
+a Financial Services stock that is also in the Nifty Bank index (NSE's
+`ind_niftybanklist.csv`, downloaded in the same run) is labelled `Banks`. Banks
+are about a third of the Nifty 50, so lumping them with NBFCs and insurers would
+hide the biggest single move on the board.
 
 **Exchange tokens are never hardcoded.** Each provider resolves its own
 instrument ids from that broker's instrument master — for Dhan via the
@@ -355,9 +374,10 @@ stored instrument ids described below, for Groww via `get_all_instruments()`. No
 above the provider layer ever sees a broker-specific id; aggregation and the UI
 work only in canonical NSE symbols.
 
-To update after an NSE reshuffle, edit the dict — nothing else changes. Run
-`python scripts/check_heatmap_universe.py` afterwards; it reports any symbol
-that no longer resolves.
+After an NSE reshuffle, run any broker's `--master`: the constituent lists and
+that broker's ids are refreshed together, and the run logs which symbols joined
+and left. Run `python scripts/debug/check_heatmap_universe.py` afterwards; it
+reports any symbol that no longer resolves.
 
 ### Instrument ids are stored, not downloaded
 
@@ -374,10 +394,10 @@ Of those rows the dashboard uses about sixty, and two fields from each. So the
 download is a **script**, not a startup step:
 
 ```bash
-python scripts/fetch_instrument_master.py              # writes data/market.db (dhan_instruments)
-python scripts/fetch_instrument_master.py --verbose    # log every symbol
-python scripts/fetch_instrument_master.py --keep-raw   # also keep Dhan's CSV
-python scripts/fetch_instrument_master.py --use-cached # reuse today's CSV
+python scripts/dhan.py --master              # writes data/market.db (dhan_instruments)
+python scripts/dhan.py --master --verbose    # log every symbol
+python scripts/dhan.py --master --keep-raw   # also keep Dhan's CSV
+python scripts/dhan.py --master --use-cached # reuse today's CSV
 ```
 
 It streams the CSV with `csv.DictReader`, keeps only the symbols in the
@@ -390,7 +410,7 @@ Same contract as the weights: generated offline, stored, never fetched live.
 | Trigger | Why |
 |---|---|
 | After an NSE index reconstitution | Effective end of March and end of September; the constituent set changes |
-| After editing `market/sector_mapping.py`, or adding a universe | New symbols have no id until they are resolved |
+| After adding an index to `INDEX_FILES` in `market/index_constituents.py` | New symbols have no id until they are resolved |
 | When the "Data gaps" panel reports unresolved symbols | A symbol was renamed, delisted or demerged |
 | Roughly monthly otherwise | Cheap insurance; the loader warns past 90 days |
 
@@ -422,7 +442,7 @@ With `--keep-raw`, Dhan's unedited response is saved under `data/instruments/`
 the broker that issued it:
 
 ```bash
-python scripts/fetch_indmoney_instruments.py   # writes data/market.db (indmoney_instruments)
+python scripts/indmoney.py --master   # writes data/market.db (indmoney_instruments)
 ```
 
 Same contract and same shape, with two differences: INDmoney's instrument lists
@@ -432,12 +452,13 @@ Dhan's (both are the NSE token), but index ids are INDmoney's own and its index
 names differ, so the script carries an `INDEX_NAMES` table translating
 `BANKNIFTY` → `BANK NIFTY` and so on. Re-run it on the same triggers as Dhan's.
 
-### Configurable universe (Phase 3 readiness)
+### Configurable universe
 
-`PULSE_HEATMAP_UNIVERSE` selects the universe (default `NIFTY50`). A
-`NIFTYNEXT50` slot already exists with an empty mapping; fill in
-`NIFTY_NEXT_50_SECTORS` and it becomes selectable with no code changes. An
-unpopulated universe raises a clear error rather than rendering an empty board.
+`PULSE_HEATMAP_UNIVERSE` selects the universe (default `NIFTY50`; `NIFTYNEXT50`
+is the other one). Adding an index is one line in `INDEX_FILES`
+(`market/index_constituents.py`: key, label, NSE file name) and a `--master` run.
+A universe with nothing stored raises a clear error naming the command to run
+rather than rendering an empty board.
 
 ---
 
@@ -481,33 +502,36 @@ separate, planned feature; see [`ROADMAP.md`](ROADMAP.md).
 
 ### Where the weights come from
 
-Neither broker supplies them. This was checked rather than assumed: Dhan's
-detailed scrip master (32 columns) and Groww's instrument master (21 columns)
-both carry ISIN, lot size, margins and circuit limits, but **no market
-capitalisation and no share count**. The one "market cap" reference in Dhan's
-docs describes its ScanX screener, not a data endpoint.
+No broker's instrument master or quote feed carries them: Dhan's detailed
+scrip master (32 columns) and Groww's instrument master (21 columns) both carry
+ISIN, lot size, margins and circuit limits, but **no market capitalisation and no
+share count**. Dhan's Data API does have them, per stock: `POST
+/v2/data/companyinfo` (in the 2026-10-01 Swagger spec, not the public docs)
+returns `MARKET_CAP` (Rs crore) in its `CO` section and `PROMOTER_HOLDING` (%) in
+`SHP`, in about 0.4 s a call.
 
-So weights come from a file, generated offline:
+So weights are generated offline, as part of Dhan's reference-data run:
 
 ```bash
-python scripts/fetch_index_weights.py            # writes data/market.db (index_weights)
-python scripts/fetch_index_weights.py --verbose  # one line per symbol
+python scripts/dhan.py --master-only             # ... then weights -> data/market.db (index_weights)
+python scripts/dhan.py --master-only --verbose   # one line per symbol
 ```
 
 | | |
 |---|---|
-| Source | Yahoo Finance `quoteSummary` - public, no API key, no account |
-| Basis | **Free-float market cap** (`floatShares x price`), the basis NSE itself uses |
-| NSE contact | None. NSE is never called. |
-| When to run | Manually, weekly or monthly. Share counts move slowly. |
-| Runtime behaviour | The dashboard **reads the file only**. It never fetches weights while running. |
+| Source | Dhan `companyinfo`, one call per Nifty 50 / Next 50 stock (~90 s for 100) |
+| Basis | **Free-float market cap** = market cap x (1 - promoter holding). NSE's own free float also excludes a few other locked-in holdings, so this is an approximation |
+| Checked | 2026-10-15, against the earlier Yahoo `floatShares` weights for ten Nifty 50 stocks: within-index weights agreed to about a percentage point (ITC and LT, which have no promoter, differed most). Yahoo is no longer used |
+| Gaps | A stock Dhan returns no market cap for is listed under `failures` and gets no weight (MOTHERSON on 2026-10-15) |
+| When to run | Monthly. Share counts move slowly; the UI warns past 45 days. |
+| Runtime behaviour | The dashboard **reads the stored set only**. It never fetches weights while running. |
 
 The dashboard reading a static file rather than a live source is deliberate: a
 weight that changed mid-session would make two refreshes of the same screen
 disagree, and a fundamentals lookup that stalls during market hours would stall
 the dashboard.
 
-The file is plain JSON, so it can equally be filled in **by hand** from NSE's
+The set is a plain `symbol -> figures` map, so it can equally be filled in **by hand** from NSE's
 published index factsheet if the automated source ever breaks. Only ratios
 within a sector matter, so any consistent unit works. Format is documented in
 [`market/weights.py`](../market/weights.py).
@@ -629,7 +653,7 @@ row per tile. Adding an index is one row; security ids are resolved from the
 instrument master at startup and are never hardcoded. Verify with:
 
 ```bash
-python scripts/check_heatmap_universe.py --board indices --provider dhan
+python scripts/debug/check_heatmap_universe.py --board indices --provider dhan
 ```
 
 Below the tiles, two tables list every index with LTP, change, previous close,
@@ -693,7 +717,7 @@ erroring out.
 Each board runs its own `LiveMarketDataService` with its own websocket. Dhan
 allows 5 concurrent connections per client id and INDmoney 3 per user, so two
 is comfortable, and the feed for a board you have not opened is never started.
-On INDmoney, both boards plus a `check_heatmap_universe.py` run use all three.
+On INDmoney, both boards plus a `scripts/debug/check_heatmap_universe.py` run use all three.
 
 Dhan's quote rate limit (1 request/second) applies **per client id, not per
 connection**, so the throttle is process-wide rather than per provider
@@ -838,7 +862,7 @@ too, instead of leaving a board of unexplained blanks.
 ### 1. ~~Groww's websocket feed never completes its handshake~~ — fixed on Groww's side
 
 > **Resolved 2026-09-21.** Groww's socket gateway now completes the handshake
-> and streams live LTP ticks; `check_heatmap_universe.py --provider groww`
+> and streams live LTP ticks; `scripts/debug/check_heatmap_universe.py --provider groww`
 > exits `OK` on the websocket. The investigation below is kept only as the
 > record of what was wrong on 2026-09-18 and how it was proved.
 >
@@ -1032,9 +1056,8 @@ last real session's close and reads +0.00% rather than that session's move.
 
 `TATAMOTORS` no longer exists in Groww's instrument master. It has split into
 `TMPV` (passenger vehicles, ISIN `INE155A01022` — the original Tata Motors ISIN)
-and `TMCV` (commercial vehicles). The mapping uses **`TMPV`** as the continuing
-index entity. If NSE also includes `TMCV` in the Nifty 50, add it to
-`NIFTY_50_SECTORS`.
+and `TMCV` (commercial vehicles). NSE's list uses **`TMPV`** as the continuing
+index entity; whatever NSE lists is what the dashboard tracks.
 
 ### 7. Constituent list drift
 
@@ -1042,14 +1065,14 @@ The Nifty 50 list is a point-in-time snapshot and NSE reconstitutes the Nifty
 indices twice a year — effective end of March and end of September — plus
 ad-hoc changes for mergers, demergers and suspensions.
 
-After a reshuffle, two things need updating and neither happens on its own:
+After a reshuffle, two things need updating, and one `--master` run per broker
+does both, in order:
 
-1. `NIFTY_50_SECTORS` in `market/sector_mapping.py` — which symbols exist and
-   what sector each belongs to.
-2. `python scripts/fetch_instrument_master.py` — the broker ids for the new
-   symbols.
+1. NSE's constituent lists — which symbols exist and what sector each belongs to.
+2. That broker's ids for the new symbols.
 
-A symbol present in step 1 but missing from step 2 is unresolved, not wrong: it
+So run `--master` on each broker you use (`kite.py`, `dhan.py`, `indmoney.py`). A
+symbol in the lists but missing from a broker's ids is unresolved, not wrong: it
 appears in the "Data gaps" panel and is excluded from its sector's average.
 
 ---
@@ -1095,7 +1118,7 @@ All optional; every one has a working default. Put them in `.env`.
 
 ## Verifying that live data is actually updating
 
-1. **`python scripts/check_heatmap_universe.py --seconds 20`** — prints the
+1. **`python scripts/debug/check_heatmap_universe.py --seconds 20`** — prints the
    session, auth result, token/previous-close resolution, then a status line
    every 2 s. It exits `OK` only if the **websocket** delivered ticks, and warns
    explicitly when prices came from the REST fallback instead.
@@ -1157,7 +1180,7 @@ Seams that already exist for later work:
 |---|---|
 | Another weighting scheme | `AGGREGATION_STRATEGIES` in `market/sector_aggregation.py` |
 | A fifth broker | `PROVIDER_FACTORIES` in `market/providers/registry.py`; `market/providers/kite.py` is the most recent worked example (and the only one with a browser login) |
-| Nifty Next 50 and other universes | `NIFTY_NEXT_50_SECTORS` in `market/sector_mapping.py`, selected by `PULSE_HEATMAP_UNIVERSE` |
+| Other index universes (e.g. Nifty 100) | One line in `INDEX_FILES` in `market/index_constituents.py`, then `--master`; selected by `PULSE_HEATMAP_UNIVERSE` |
 | A different price source per screen | `MarketDataProvider` / `FeedHandle` in `market/providers/base.py` |
 | Historical previous close on another broker | `get_prior_session_close` in `market/providers/base.py` — optional, so a broker without one degrades rather than breaks |
 

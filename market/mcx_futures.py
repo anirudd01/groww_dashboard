@@ -11,7 +11,7 @@ reports volume as 0 once the session ends.
 
 Contracts
 ---------
-Read from the ``mcx_futures`` set in the shared database, which ``scripts/fetch_mcx_futures.py``
+Read from the ``mcx_futures`` set in the shared database, which ``scripts/dhan.py --master``
 fills from both brokers' public instrument lists (164 ``FUTCOM`` rows, 28 commodities, on
 2026-10-03), matched on commodity and expiry. Never downloaded at runtime - same rule as
 ``market/instruments.py``. Re-run the script monthly: new expiries are listed as old ones lapse.
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 MCX_SET = "mcx_futures"
 #: Broker order: the first one that answers serves the page.
 PROVIDERS = ("dhan", "kite")
-SCRIPT = "scripts/fetch_mcx_futures.py"
+SCRIPT = "scripts/dhan.py --master"
 
 #: Commodity -> group, for filtering and ordering. Anything new on MCX lands in "Other".
 GROUPS = {

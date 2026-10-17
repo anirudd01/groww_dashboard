@@ -19,7 +19,7 @@ import calendar
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from market.market_hours import now_ist
 
@@ -295,3 +295,20 @@ def merge_by_symbol(*rankings: List[Mover]) -> List[Mover]:
         for mover in ranking:
             seen.setdefault(mover.symbol, mover)
     return list(seen.values())
+
+
+def universe_members(gainers: list, losers: list) -> Tuple[Dict[str, dict], bool]:
+    """A stock universe's members, read off its raw gainers and losers (``data`` rows), and whether
+    the list may be cut short.
+
+    Dhan ranks every member that moved, so for a universe of up to 100 stocks the two lists
+    together are the whole universe. A side that came back with ``MAX_LIMIT`` rows may have
+    been cut off, and a stock that has not traded yet today is in neither. There is no sector
+    in the rows: membership is all this gives (docs/DHAN_API_EXPLORER.md).
+    """
+    members: Dict[str, dict] = {}
+    for row in list(gainers or []) + list(losers or []):
+        symbol = (row or {}).get("tradingSymbol")
+        if symbol:
+            members.setdefault(symbol, row)
+    return members, len(gainers or []) >= MAX_LIMIT or len(losers or []) >= MAX_LIMIT

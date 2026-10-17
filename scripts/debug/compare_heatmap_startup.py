@@ -1,6 +1,6 @@
 """Time how long each broker takes to bring up a heatmap board. Read-only.
 
-    python scripts/compare_heatmap_startup.py [--board sectors|indices|both]
+    python scripts/debug/compare_heatmap_startup.py [--board sectors|indices|both]
         [--provider dhan] [--seconds 20] [--out results.json]
 
 Mirrors what LiveMarketDataService does on its first visit to a board, one stage
@@ -29,7 +29,7 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 try:
     from dotenv import load_dotenv

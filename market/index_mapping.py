@@ -15,10 +15,10 @@ Editing this list
 ``symbol`` must match the instrument master exactly (Dhan publishes indices
 under ``EXCH_ID=NSE, SEGMENT=I, INSTRUMENT=INDEX``). Security ids are resolved
 at startup and are never hardcoded, so adding an index means adding one row
-here - run ``python scripts/check_heatmap_universe.py --board indices``
+here - run ``python scripts/debug/check_heatmap_universe.py --board indices``
 afterwards to confirm it resolves.
 
-``sector`` links an index to a sector in ``sector_mapping.py`` for drill-down.
+``sector`` links an index to a sector label (``market/index_constituents.py``) for drill-down.
 It is the sector whose **Nifty 50 members** are shown when the tile is clicked,
 which is deliberately *not* the index's real constituent list - the brokers do
 not publish that, and the UI says so. ``None`` means no sensible link exists
@@ -37,7 +37,7 @@ class IndexDefinition:
     symbol: str
     #: What the tile shows.
     label: str
-    #: Sector in ``sector_mapping.py`` whose Nifty 50 members the drill-down
+    #: Sector label (see ``market/index_constituents.py``) whose Nifty 50 members the drill-down
     #: lists, or None when no honest link exists.
     sector: Optional[str] = None
     #: Broad market benchmarks render after the sectoral tiles.

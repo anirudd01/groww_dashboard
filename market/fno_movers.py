@@ -3,7 +3,7 @@
 Every broker answers "what did this stock close at on each day" only one
 instrument per request, while "what is it at right now" is one bulk request for
 up to 1000 instruments. So the daily closes are kept locally, built up by
-``scripts/update_fno_history.py``, and the dashboard reads them:
+``scripts/kite.py history``, and the dashboard reads them:
 
 * past days come from the database - no API call at all;
 * today, while the market is open, is one bulk quote on top.
@@ -12,7 +12,7 @@ Everything lives in the shared database ``data/market.db`` (``market/intraday_st
 
 the ``daily_bars`` table
     One row per (symbol, date): open, high, low, close, volume, from Kite's daily candles. The
-    1-minute backfill (``scripts/backfill_intraday.py``) fills the same table, so there is one
+    1-minute backfill (``scripts/kite.py intraday``) fills the same table, so there is one
     daily history, not two. ``load_closes`` hands it back as ``{(date, symbol): row}``.
 the ``fno_universe`` set (``market/reference_store.py``)
     The stocks with NSE futures (from Kite's public NFO dump), each with its Kite
@@ -48,7 +48,7 @@ UNIVERSE_SET = "fno_universe"
 #: ``{"moves": {"SYMBOL": {"YYYY-MM-DD": "why"}}}``. Kept with ``scripts/confirm_fno_move.py``.
 CONFIRMED_SET = "fno_confirmed_moves"
 CONFIRM_SCRIPT = "scripts/confirm_fno_move.py"
-UPDATE_SCRIPT = "scripts/update_fno_history.py"
+UPDATE_SCRIPT = "scripts/kite.py history"
 
 CLOSE_COLUMNS = ("date", "symbol", "open", "high", "low", "close", "volume")
 
@@ -509,7 +509,7 @@ def suspected_corporate_actions(
 
     Kite adjusts its candles retroactively, but rows already stored keep the old
     prices, so an ex-date shows as a huge one-day fall. This only *suspects*: a
-    demerger, a buyback or a genuine crash can match too. ``update_fno_history.py
+    demerger, a buyback or a genuine crash can match too. ``scripts/kite.py history
     --fix-splits`` settles each case by re-fetching the stock, since a real
     corporate action disappears once Kite's adjusted candles replace the rows.
     ``confirmed`` is a set of (symbol, date) pairs already checked and known to

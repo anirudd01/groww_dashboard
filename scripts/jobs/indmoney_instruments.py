@@ -1,11 +1,10 @@
 """Generate the INDmoney (INDstocks) instrument ids the dashboard reads (stored in the database).
 
-Run this **manually** - monthly, or whenever a symbol stops resolving. The
-dashboard never downloads an instrument master itself.
+This is ``python scripts/indmoney.py --master`` - monthly, or whenever a symbol
+stops resolving. The dashboard never downloads an instrument master itself.
 
-    python scripts/fetch_indmoney_instruments.py
-    python scripts/fetch_indmoney_instruments.py --verbose
-    python scripts/fetch_indmoney_instruments.py --keep-raw     # also save the CSVs
+    python scripts/indmoney.py --master
+    python scripts/indmoney.py --master --keep-raw     # also save the CSVs
 
 Unlike Dhan's public scrip master, INDmoney's needs an access token, taken
 from the shared INDmoney session (minted from the TOTP credentials in ``.env``
@@ -29,27 +28,22 @@ the ``dhan_instruments`` set. Loaded by ``market/providers/indmoney.py``.
 This script places no orders and reads no account data.
 """
 
-import argparse
 import csv
 import io
 import logging
 import os
-import sys
 from datetime import date, datetime, timezone
 from typing import Dict, Set
 
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from jobs.dhan_instruments import log_universes
+from market import reference_store, state_store
+from market.instruments import INDMONEY_SET
+from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX
+from market.universe import tracked_symbols
 
-from fetch_instrument_master import tracked_symbols  # noqa: E402
-from market import reference_store, state_store  # noqa: E402
-from market.instruments import INDMONEY_SET  # noqa: E402
-from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX  # noqa: E402
-
-logger = logging.getLogger("fetch_indmoney_instruments")
+logger = logging.getLogger("indmoney_instruments")
 
 INSTRUMENTS_URL = "https://api.indstocks.com/market/instruments"
 
@@ -149,25 +143,8 @@ def extract_indices(text: str, wanted: Set[str]) -> Dict[str, dict]:
     return found
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default=None, help="Database file (default: the shared data/market.db)")
-    parser.add_argument("--verbose", action="store_true", help="Log every symbol")
-    parser.add_argument(
-        "--keep-raw", action="store_true", help="Also save the unedited CSVs under data/instruments/"
-    )
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-    # Loaded here, not at import: the tests import this module, and a
-    # module-level load would leak real credentials into their environment.
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(os.path.join(ROOT, ".env"), override=True)
-    except ImportError:
-        pass
-
+def run(args) -> int:
+    # Imported here, not at module level: the tests import this module for its parsers.
     from market.providers.indmoney import IndMoneyProvider
 
     provider = IndMoneyProvider()
@@ -178,8 +155,8 @@ def main() -> int:
         return 1
     token = provider.auth_headers()["Authorization"]
 
-    logger.info("Universes to resolve:")
-    wanted, universes = tracked_symbols()
+    wanted, universes = tracked_symbols(args.db)
+    log_universes(universes)
 
     try:
         equities = extract_equities(
@@ -216,10 +193,10 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": f"{INSTRUMENTS_URL}?source=equity|index",
         "provider": "indmoney",
-        "universes": sorted(universes),
+        "universes": sorted(u.key for u in universes),
         "note": (
-            "Generated offline by scripts/fetch_indmoney_instruments.py. The "
-            "dashboard reads this file and never downloads an instrument "
+            "Generated offline by scripts/indmoney.py --master. The "
+            "dashboard reads this set and never downloads an instrument "
             "master at runtime."
         ),
         "symbol_count": resolved,
@@ -233,6 +210,3 @@ def main() -> int:
     logger.info("Stored %d instruments as %s in %s", resolved, INDMONEY_SET, args.db or state_store.db_path())
     return 2 if missing else 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -5,7 +5,7 @@ which stocks fill reliably or tend to "gap and go". See market/gap_fills.py and
 docs/FNO_INSIGHTS.md.
 
 Data: data/market.db (1-minute bars + daily_gaps), written by
-scripts/backfill_intraday.py. Not checked in; the page says so if it is missing.
+scripts/kite.py intraday. Not checked in; the page says so if it is missing.
 No API call. Visualisation only.
 
 The "Gap Fills" page of pulse_dashboard.py; on its own:

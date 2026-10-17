@@ -1,6 +1,6 @@
 """Compare 1-minute history across Kite, Groww, INDmoney and Dhan. Read-only.
 
-    python scripts/compare_intraday_providers.py [--end 2026-09-25] [--out results.json]
+    python scripts/debug/compare_intraday_providers.py [--end 2026-09-25] [--out results.json]
 
 For five liquid stocks it measures, per broker:
   1. the widest 1-minute window one call accepts (sweeps 7..90 days),
@@ -25,7 +25,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 try:
     from dotenv import load_dotenv

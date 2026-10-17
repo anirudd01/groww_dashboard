@@ -1,12 +1,13 @@
 """Backfill 1-minute bars and daily open/close for every F&O stock into SQLite.
 
-    python scripts/backfill_intraday.py                  # last 60 days, all F&O stocks
-    python scripts/backfill_intraday.py --symbols RELIANCE,TCS
-    python scripts/backfill_intraday.py --days 120       # older history: 2 calls per stock
-    python scripts/backfill_intraday.py --full           # re-fetch stored days too (after a split)
+    python scripts/kite.py intraday                          # last 60 days, all F&O stocks
+    python scripts/kite.py intraday --symbols RELIANCE,TCS
+    python scripts/kite.py intraday --intraday-days 120      # older history: 2 calls per stock
+    python scripts/kite.py intraday --full                   # re-fetch stored days too (after a split)
 
-Needs today's Kite session (``python scripts/kite_login.py``) and
-the ``fno_universe`` set in ``data/market.db`` (``python scripts/update_fno_history.py``).
+Needs today's Kite session (``python scripts/kite_login.py``) and the ``fno_universe``
+set in ``data/market.db``, which the ``history`` job stores (``python scripts/kite.py``
+runs ``history`` first).
 
 Cost: Kite returns at most **60 days of 1-minute bars per call**, one stock per
 call (a 61-day window is rejected with 400; tested 2026-09-27). So a 60-day
@@ -23,22 +24,16 @@ Writes data/market.db (git-ignored; see market/intraday_store.py for the
 schema). Read-only against the broker: no orders, no account data.
 """
 
-import argparse
 import logging
-import os
-import sys
 import time
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-
-from market.fno_movers import load_universe  # noqa: E402
-from market.intraday_store import (  # noqa: E402
-    DB_PATH,
+from market import state_store
+from market.fno_movers import load_universe
+from market.intraday_store import (
     connect,
     kite_daily_rows,
     kite_minute_rows,
@@ -47,9 +42,9 @@ from market.intraday_store import (  # noqa: E402
     upsert_daily,
     upsert_minutes,
 )
-from market.market_hours import now_ist  # noqa: E402
+from market.market_hours import now_ist
 
-logger = logging.getLogger("backfill_intraday")
+logger = logging.getLogger("intraday")
 
 #: Widest 1-minute window Kite accepts in one call (61 days -> HTTP 400).
 MAX_MINUTE_DAYS = 60
@@ -94,24 +89,8 @@ def fetch(provider, token: str, interval: str, start: datetime, end: datetime):
     return []
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--days", type=int, default=MAX_MINUTE_DAYS,
-                        help="Calendar days to fetch for a stock with no stored bars (default 60)")
-    parser.add_argument("--full", action="store_true", help="Re-fetch the whole --days window even where bars are stored")
-    parser.add_argument("--symbols", help="Comma-separated subset (default: every F&O stock)")
-    parser.add_argument("--db", default=DB_PATH)
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    logging.getLogger("market").setLevel(logging.WARNING)
-
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(os.path.join(ROOT, ".env"), override=True)
-    except ImportError:
-        pass
-
+def run(args) -> int:
+    db = args.db or state_store.db_path()
     universe = load_universe()
     if not universe.tokens:
         logger.error("%s", universe.error)
@@ -140,11 +119,11 @@ def main() -> int:
     today = now.date()
     settled = (now.hour, now.minute) >= SETTLED_AFTER
     exclude = None if settled else today.isoformat()
-    # --days 60 means 60 calendar dates including today: one call per stock.
-    default_first = today - timedelta(days=args.days - 1)
+    # --intraday-days 60 means 60 calendar dates including today: one call per stock.
+    default_first = today - timedelta(days=args.intraday_days - 1)
 
-    conn = connect(args.db)
-    logger.info("Fetching 1-minute + daily candles for %d stocks into %s ...", len(tokens), args.db)
+    conn = connect(db)
+    logger.info("Fetching 1-minute + daily candles for %d stocks into %s ...", len(tokens), db)
     started = time.monotonic()
     calls, failed = 0, []
     for i, (symbol, token) in enumerate(sorted(tokens.items()), 1):
@@ -177,7 +156,7 @@ def main() -> int:
     conn.close()
     logger.info(
         "Done in %.0f s, %d requests. %s: %d minute bars for %d stocks (%s .. %s), %d daily bars (%s .. %s)",
-        time.monotonic() - started, calls, args.db, stats["minute_bars"], stats["symbols"],
+        time.monotonic() - started, calls, db, stats["minute_bars"], stats["symbols"],
         stats["first_bar"], stats["last_bar"], stats["daily_bars"], stats["first_day"], stats["last_day"],
     )
     if not settled:
@@ -187,6 +166,3 @@ def main() -> int:
         return 2
     return 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

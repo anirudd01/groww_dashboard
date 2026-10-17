@@ -135,7 +135,7 @@ zero, not yesterday's price.
 ### Diagnosing it
 
 ```bash
-python scripts/check_heatmap_universe.py --provider groww --seconds 40
+python scripts/debug/check_heatmap_universe.py --provider groww --seconds 40
 ```
 
 Exits `OK` only if the **websocket** delivered ticks, and says so explicitly

@@ -1,10 +1,10 @@
 """Build / extend the F&O daily-close history the movers dashboard reads.
 
-    python scripts/update_fno_history.py              # last 30 days for every F&O stock
-    python scripts/update_fno_history.py --days 400   # backfill ~a year (same cost)
-    python scripts/update_fno_history.py --symbols RELIANCE,TCS
-    python scripts/update_fno_history.py --full --days 60   # re-fetch stored days too (after a split)
-    python scripts/update_fno_history.py --fix-splits       # find suspected splits/bonuses and re-fetch just those stocks
+    python scripts/kite.py history                         # catch up every F&O stock (30 days for a new one)
+    python scripts/kite.py history --history-days 400      # backfill ~a year (same cost)
+    python scripts/kite.py history --symbols RELIANCE,TCS
+    python scripts/kite.py history --full --history-days 60   # re-fetch stored days too (after a split)
+    python scripts/kite.py history --fix-splits            # find suspected splits/bonuses and re-fetch just those stocks
 
 Run it once to backfill, then once a day after 16:00 IST (or weekly - one run
 fills every missing day). It needs today's Kite session
@@ -28,19 +28,13 @@ value that settled late is corrected on the next run.
 Read-only: no orders, no account data.
 """
 
-import argparse
 import logging
-import os
-import sys
 import time
 from datetime import date, timedelta
 
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-
-from market.fno_movers import (  # noqa: E402
+from market.fno_movers import (
     UNIVERSE_SET,
     build_universe,
     candle_rows,
@@ -51,9 +45,9 @@ from market.fno_movers import (  # noqa: E402
     suspected_corporate_actions,
     upsert_closes,
 )
-from market.market_hours import now_ist  # noqa: E402
+from market.market_hours import now_ist
 
-logger = logging.getLogger("update_fno_history")
+logger = logging.getLogger("fno_history")
 
 DUMP_URL = "https://api.kite.trade/instruments/{exchange}"
 #: Today's candle is trusted as the close only after this IST time.
@@ -84,27 +78,8 @@ def fetch_candles(provider, token: str, start: str, end: str):
     return []
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--days", type=int, default=30, help="Calendar days to fetch for a stock with no history")
-    parser.add_argument("--full", action="store_true",
-                        help="Re-fetch the whole --days window even where rows are stored (refreshes split-adjusted closes)")
-    parser.add_argument("--fix-splits", action="store_true",
-                        help="Re-fetch, over the whole stored range, only the stocks whose history shows a "
-                             "split-like fall, then report which were corporate actions (the jump disappears "
-                             "once Kite's adjusted candles replace the rows) and which were real moves")
-    parser.add_argument("--symbols", help="Comma-separated subset (default: every F&O stock)")
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    logging.getLogger("market").setLevel(logging.WARNING)
-
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(os.path.join(ROOT, ".env"), override=True)
-    except ImportError:
-        pass
-
+def run(args) -> int:
+    full, days = args.full, args.history_days
     from market.providers.kite import KiteProvider
 
     logger.info("Downloading Kite's public NFO and NSE instrument lists ...")
@@ -153,8 +128,8 @@ def main() -> int:
         logger.info("Suspected: %s. Re-fetching those stocks over the whole stored range.",
                     "; ".join(f"{a.symbol} {a.date} ({a.change_pct:+.1f}%)" for a in suspects))
         tokens = {s: t for s, t in tokens.items() if s in names}
-        args.full = True
-        args.days = (today - date.fromisoformat(min(day for day, _ in rows))).days + 1
+        full = True
+        days = (today - date.fromisoformat(min(day for day, _ in rows))).days + 1
     last_by_symbol = {}
     for day, symbol in rows:
         if day > last_by_symbol.get(symbol, ""):
@@ -162,17 +137,21 @@ def main() -> int:
 
     logger.info("Fetching daily candles for %d stocks (~%.0f s) ...", len(tokens), len(tokens) * 0.36)
     started = time.monotonic()
-    changed, failed = 0, []
+    stored_before = set(rows)
+    last_day_before = max((day for day, _ in rows), default="-")
+    fetched, changed, failed = 0, 0, []
     for i, (symbol, token) in enumerate(sorted(tokens.items()), 1):
         last = last_by_symbol.get(symbol)
-        start = last if last and not args.full else (today - timedelta(days=args.days)).isoformat()
+        start = last if last and not full else (today - timedelta(days=days)).isoformat()
         try:
             candles = fetch_candles(provider, token, start, today.isoformat())
         except Exception as exc:  # noqa: BLE001 - one stock must not stop the run
             failed.append(symbol)
             logger.warning("  %s: %s", symbol, exc)
             continue
-        changed += upsert_closes(rows, candle_rows(symbol, candles, exclude_date=exclude))
+        new_rows = candle_rows(symbol, candles, exclude_date=exclude)
+        fetched += len(new_rows)
+        changed += upsert_closes(rows, new_rows)
         if i % 50 == 0:
             logger.info("  %d/%d", i, len(tokens))
 
@@ -185,11 +164,18 @@ def main() -> int:
                        else "adjusted: Kite's candles now show it as a corporate action")
             logger.info("  %s %s: %s", action.symbol, action.date, outcome)
     days = sorted({d for d, _ in rows})
+    added = len(set(rows) - stored_before)
     logger.info(
-        "Done in %.0f s: %d rows added/updated, %d stocks x %d days in data/market.db (%s .. %s)",
-        time.monotonic() - started, changed, len({s for _, s in rows}), len(days),
-        days[0] if days else "-", days[-1] if days else "-",
+        "Done in %.0f s: %d candles fetched -> %d new, %d revised, %d already stored. "
+        "%d stocks x %d days in data/market.db (%s .. %s)",
+        time.monotonic() - started, fetched, added, changed - added, fetched - changed,
+        len({s for _, s in rows}), len(days), days[0] if days else "-", days[-1] if days else "-",
     )
+    if fetched and not changed:
+        # The intraday job writes the same daily_bars rows, so a day it already stored
+        # shows up here as "already stored", not as new.
+        logger.info("Nothing new: the history already ran to %s (scripts/kite.py intraday also fills "
+                    "daily_bars).", last_day_before)
     if not settled:
         logger.info("Today's candle was left out (before %02d:%02d IST it is only the live price).", *SETTLED_AFTER)
     if failed:
@@ -197,6 +183,3 @@ def main() -> int:
         return 2
     return 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

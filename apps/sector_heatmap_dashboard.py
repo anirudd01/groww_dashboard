@@ -785,7 +785,7 @@ def sidebar_controls(config: HeatmapConfig, show_maths: bool = True) -> Controls
                         st.caption(
                             ":warning: Weights are over "
                             f"{int(weight_set.age_days)} days old. Re-run "
-                            "scripts/fetch_index_weights.py."
+                            "scripts/dhan.py --master."
                         )
                 else:
                     st.caption(f":warning: {weight_set.error}")

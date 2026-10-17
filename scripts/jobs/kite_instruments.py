@@ -1,11 +1,10 @@
 """Generate the Zerodha Kite instrument ids the dashboard reads (stored in the database).
 
-Run this **manually** - monthly, or whenever a symbol stops resolving. The
-dashboard never downloads an instrument master itself.
+Part of ``python scripts/kite.py --master`` - monthly, or whenever a symbol stops
+resolving. The dashboard never downloads an instrument master itself.
 
-    python scripts/fetch_kite_instruments.py
-    python scripts/fetch_kite_instruments.py --verbose
-    python scripts/fetch_kite_instruments.py --keep-raw     # also save the CSV
+    python scripts/kite.py --master-only               # constituents + these ids, no data jobs
+    python scripts/kite.py --master-only --keep-raw    # also save the CSV
 
 Kite's NSE dump (``/instruments/NSE``) is public - it needs no API key or
 login - and is small: ~0.7 MB, ~10,300 rows, cash equities plus 136 NSE
@@ -29,27 +28,22 @@ the ``dhan_instruments`` set. Loaded by ``market/providers/kite.py``.
 This script places no orders and reads no account data.
 """
 
-import argparse
 import csv
 import io
 import logging
 import os
-import sys
 from datetime import date, datetime, timezone
 from typing import Dict, Set
 
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from jobs.dhan_instruments import log_universes
+from market import reference_store, state_store
+from market.instruments import KITE_SET
+from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX
+from market.universe import tracked_symbols
 
-from fetch_instrument_master import tracked_symbols  # noqa: E402
-from market import reference_store, state_store  # noqa: E402
-from market.instruments import KITE_SET  # noqa: E402
-from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX  # noqa: E402
-
-logger = logging.getLogger("fetch_kite_instruments")
+logger = logging.getLogger("kite_instruments")
 
 INSTRUMENTS_URL = "https://api.kite.trade/instruments/NSE"
 
@@ -124,18 +118,9 @@ def extract(text: str, wanted: Dict[str, Set[str]]) -> Dict[str, Dict[str, dict]
     return {SEGMENT_CASH: cash, SEGMENT_INDEX: index}
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default=None, help="Database file (default: the shared data/market.db)")
-    parser.add_argument("--verbose", action="store_true", help="Log every symbol")
-    parser.add_argument(
-        "--keep-raw", action="store_true", help="Also save the unedited CSV under data/instruments/"
-    )
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-    logger.info("Universes to resolve:")
-    wanted, universes = tracked_symbols()
+def run(args) -> int:
+    wanted, universes = tracked_symbols(args.db)
+    log_universes(universes)
 
     try:
         instruments = extract(download(args.keep_raw), wanted)
@@ -168,10 +153,10 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": INSTRUMENTS_URL,
         "provider": "kite",
-        "universes": sorted(universes),
+        "universes": sorted(u.key for u in universes),
         "note": (
-            "Generated offline by scripts/fetch_kite_instruments.py. The "
-            "dashboard reads this file and never downloads an instrument "
+            "Generated offline by scripts/kite.py --master. The "
+            "dashboard reads this set and never downloads an instrument "
             "master at runtime. security_id is Kite's instrument_token."
         ),
         "symbol_count": resolved,
@@ -185,6 +170,3 @@ def main() -> int:
     logger.info("Stored %d instruments as %s in %s", resolved, KITE_SET, args.db or state_store.db_path())
     return 2 if missing else 0
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

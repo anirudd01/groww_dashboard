@@ -4,7 +4,7 @@ A gap is "filled" when the price trades back to the previous close during the
 same session: a gap-up fills when a minute bar's low reaches the previous close,
 and a gap-down fills when a high does. The time to fill is measured from 09:15.
 
-Sources, both in ``data/market.db`` (``scripts/backfill_intraday.py``):
+Sources, both in ``data/market.db`` (``scripts/kite.py intraday``):
 
 * the gap itself comes from the ``daily_gaps`` view (official open against the
   previous official close, from daily candles; see ``market/intraday_store.py``

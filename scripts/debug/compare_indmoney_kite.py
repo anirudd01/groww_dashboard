@@ -1,6 +1,6 @@
 """Compare INDmoney and Kite daily data for the F&O universe. Read-only.
 
-    python scripts/compare_indmoney_kite.py [--days 45] [--out results.json]
+    python scripts/debug/compare_indmoney_kite.py [--days 45] [--out results.json]
 
 Needs a valid Kite session (python scripts/kite_login.py) and the INDmoney
 TOTP credentials in .env (the token is minted by market/providers/indmoney_session.py). Checks the instrument mapping, every daily
@@ -18,7 +18,7 @@ ap.add_argument("--days", type=int, default=45, help="calendar days of daily can
 ap.add_argument("--out", help="also write the full results as JSON to this path")
 ARGS = ap.parse_args()
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT = ARGS.out
 IST = timezone(timedelta(hours=5, minutes=30))
 sys.path.insert(0, ROOT)

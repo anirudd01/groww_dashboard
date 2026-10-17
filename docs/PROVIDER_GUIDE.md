@@ -246,7 +246,7 @@ contract by open interest, not by nearest expiry.
 The goal is to store daily open and close for about 500 instruments, then work out gap-ups and gap-downs and the top gainers and losers over any window.
 
 1. **Store daily candles, not rankings.** One row per stock per day: `date,symbol,open,high,low,close,volume`. Every ranking, gap or custom window is calculated when read.
-   - The `daily_bars` table in `data/market.db` already uses this layout. Extend it and `scripts/update_fno_history.py` rather than starting a second store.
+   - The `daily_bars` table in `data/market.db` already uses this layout. Extend it and `scripts/kite.py history` rather than starting a second store.
    - It is all SQLite: at 500 stocks × 250 days that is about 125k rows, and the intraday bars sit in the same file: [`INTRADAY_HISTORY.md`](INTRADAY_HISTORY.md).
 2. **Formulas.**
    - `gap % = open(d) / close(d-1) - 1`
@@ -265,7 +265,7 @@ The goal is to store daily open and close for about 500 instruments, then work o
    **Recommendation (verified 2026-09-25):** run the cron after 16:00 IST with **INDmoney** first and **Kite** as fallback. INDmoney's candles matched Kite's on every open, high, low, close and volume except one corporate action, it's 7–8× cheaper to fetch, and it logs in without a person. See the [comparison log](PROVIDER_COMPARISON_LOG.md). Groww can't supply `open`, so it can't do gaps.
 
 - On a missed day, the next run backfills from candles. Candles cost one request per stock (Kite and Dhan) no matter how many days they cover, so catching up costs the same as a single day.
-- **Corporate actions:** INDmoney returns raw exchange prices, while Kite adjusts past prices after an ex-date (HINDPETRO, 14 Aug 2026: INDmoney shows a −4.8% gap, Kite +0.09%). Rows a daily cron stores are unadjusted with either broker, so repair a window with Kite (`update_fno_history.py --full --days N`). See [Known limitations](FNO_MOVERS.md#known-limitations).
+- **Corporate actions:** INDmoney returns raw exchange prices, while Kite adjusts past prices after an ex-date (HINDPETRO, 14 Aug 2026: INDmoney shows a −4.8% gap, Kite +0.09%). Rows a daily cron stores are unadjusted with either broker, so repair a window with Kite (`scripts/kite.py history --full --history-days N`). See [Known limitations](FNO_MOVERS.md#known-limitations).
 - **One `403 TokenException` from INDmoney can be transient.** Retry once before generating a new token, because generating one revokes the token everyone else is using.
 
 1. **The WebSocket doesn't help here.** It streams live ticks and carries no history. Use it only for live boards.

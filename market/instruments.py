@@ -7,7 +7,7 @@ sixty. Downloading that on every boot cost 15-40 s for data that changes at
 most once a day, and in practice changes meaningfully only when NSE
 reconstitutes an index.
 
-They are produced offline by ``scripts/fetch_instrument_master.py`` (and the
+They are produced offline by ``scripts/dhan.py --master`` (and the
 INDmoney and Kite equivalents) and stored in the shared SQLite database by
 ``market/reference_store.py``. The script is meant to be run manually - monthly,
 or whenever a symbol stops resolving.
@@ -17,8 +17,9 @@ startup, never fetched live.
 
 What is *not* in here
 ---------------------
-Sector membership. That lives in ``market/sector_mapping.py`` and is the
-editable source of truth for which symbols the dashboard tracks. This only
+Index membership and sectors. Those come from NSE's published lists (the
+``index_constituents`` set, see ``market/index_constituents.py``) and decide
+which symbols the dashboard tracks. This only
 answers "what number does the broker call RELIANCE".
 
 If the ids are missing or a symbol is absent, resolution fails loudly and names
@@ -49,9 +50,9 @@ INDMONEY_SET = "indmoney_instruments"
 KITE_SET = "kite_instruments"
 
 #: The script that regenerates each broker's set.
-DHAN_SCRIPT = "scripts/fetch_instrument_master.py"
-INDMONEY_SCRIPT = "scripts/fetch_indmoney_instruments.py"
-KITE_SCRIPT = "scripts/fetch_kite_instruments.py"
+DHAN_SCRIPT = "scripts/dhan.py --master"
+INDMONEY_SCRIPT = "scripts/indmoney.py --master"
+KITE_SCRIPT = "scripts/kite.py --master"
 
 #: Beyond this the loader warns that the ids are getting old. Not an error:
 #: security ids of existing instruments are stable, and NSE reconstitutes the

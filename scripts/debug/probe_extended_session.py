@@ -1,8 +1,8 @@
 """Does any broker's live feed carry pre-open or post-close (closing auction) data? Read-only.
 
-    python scripts/probe_extended_session.py --until 09:16     # start before 09:00
-    python scripts/probe_extended_session.py --until 16:05     # start before 15:15
-    python scripts/probe_extended_session.py --seconds 20      # quick check that it works
+    python scripts/debug/probe_extended_session.py --until 09:16     # start before 09:00
+    python scripts/debug/probe_extended_session.py --until 16:05     # start before 15:15
+    python scripts/debug/probe_extended_session.py --seconds 20      # quick check that it works
 
 Leave it running through the window. Every second, for each configured broker
 (Groww is skipped: its subscription ended), it samples the websocket's latest
@@ -30,7 +30,7 @@ import sys
 import time
 from datetime import datetime, time as dtime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 try:
     from dotenv import load_dotenv
@@ -44,7 +44,7 @@ from market.market_hours import now_ist, session_state  # noqa: E402
 from market.providers.registry import build_providers  # noqa: E402
 from market.universe import DEFAULT_UNIVERSE_KEY, get_universe  # noqa: E402
 
-OUT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+OUT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                         "data", "extended_session_probe.csv")
 SKIP = {"groww"}
 SAMPLE = ["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS", "SBIN", "ITC", "LT"]
