@@ -1,8 +1,8 @@
 """F&O and MCX positions from Groww, priced and described for the F&O dashboard.
 
 What a Groww position carries (docs/api/GROWW_API_PORTFOLIO.md): signed net ``quantity``,
-``net_price`` (average price of the open quantity), ``credit_*`` for what was bought and
-``debit_*`` for what was sold, ``product`` and ``realised_pnl``. It carries no expiry, strike,
+``credit_*`` for what was bought and ``debit_*`` for what was sold (and ``carry_forward_*`` for
+earlier days), ``net_price``, ``product`` and ``realised_pnl``. It carries no expiry, strike,
 lot size, tick size or Greeks; those come from the instrument list (groww_api/instruments.py)
 and, for Greeks, from ``get_greeks``.
 
@@ -12,6 +12,10 @@ Rules this module keeps, each one a bug it used to have:
   values are notional (``|quantity| * price``) so they add up across longs and shorts.
 * **No price means no P&L.** Groww refuses market data without the paid data plan; the price,
   value and P&L are then None, never the entry price passed off as a live one.
+* **The entry price is the open quantity's cost, not ``net_price``.** ``net_price`` is the
+  average of every buy, so after a partial exit it double-counts what ``realised_pnl`` already
+  booked (GOLD, 2026-10-16: 500 bought, 400 sold; ``net_price`` 148240.8, real cost of the last
+  100 148400). See ``open_entry_price``.
 * **Closed today still counts.** A position squared off today has quantity 0 and a realised P&L;
   it is kept so that P&L is not lost.
 """
@@ -35,15 +39,36 @@ def _number(value) -> float:
         return 0.0
 
 
+def open_entry_price(p: Dict[str, Any]) -> float:
+    """Average cost of the open quantity, in rupees; 0.0 when the position is flat.
+
+    Groww's ``realised_pnl`` is what the closed part made, so the open part's cost is whatever of
+    the money in and out it does not explain: (bought - sold + realised) / quantity. That holds for
+    longs and shorts (quantity is signed) and equals ``net_price`` when nothing was closed. Falls
+    back to ``net_price``, then the opening side's price, if the fills do not add up to a price.
+    """
+    quantity = _number(p.get("quantity"))
+    if not quantity:
+        return 0.0
+    bought = (_number(p.get("credit_quantity")) * _number(p.get("credit_price"))
+              + _number(p.get("carry_forward_credit_quantity")) * _number(p.get("carry_forward_credit_price")))
+    sold = (_number(p.get("debit_quantity")) * _number(p.get("debit_price"))
+            + _number(p.get("carry_forward_debit_quantity")) * _number(p.get("carry_forward_debit_price")))
+    entry = (bought - sold + _number(p.get("realised_pnl"))) / quantity
+    if entry > 0:
+        return entry
+    entry = _number(p.get("net_price"))
+    if entry > 0:
+        return entry
+    return _number(p.get("credit_price") if quantity > 0 else p.get("debit_price"))
+
+
 def build_position(p: Dict[str, Any], ltp: Optional[float], info: Optional[ContractInfo]) -> Dict[str, Any]:
     """One raw Groww position as the dashboard's row. ``ltp`` None means it could not be priced."""
     symbol = p.get("trading_symbol", "UNKNOWN")
     exchange = str(p.get("exchange") or "NSE").upper()
     quantity = int(_number(p.get("quantity")))
-    entry = _number(p.get("net_price"))
-    if entry <= 0 and quantity:
-        # net_price is documented as the net average price; fall back to the side that opened it.
-        entry = _number(p.get("credit_price") if quantity > 0 else p.get("debit_price"))
+    entry = open_entry_price(p)
     ltp = float(ltp) if ltp is not None and ltp > 0 else None
 
     entry_value = abs(quantity) * entry
@@ -132,12 +157,18 @@ class PositionProcessor:
     def get_option_greeks(self, positions: List[Dict[str, Any]]) -> Tuple[Dict[str, dict], Optional[str]]:
         """``({symbol: greeks}, error)`` for the open option positions.
 
-        Stops at the first failure: without the data plan every call is refused the same way,
-        so the reason is reported once instead of being retried per contract.
+        MCX options are skipped: on the paid plan ``get_greeks`` answers "Internal error occurred"
+        for every MCX option tried (2026-10-18) and the option chain does not know MCX underlyings.
+        Stops at the first other failure: without the data plan every call is refused the same
+        way, so the reason is reported once instead of being retried per contract.
         """
         greeks: Dict[str, dict] = {}
+        error = None
         for pos in positions:
             if pos.get("kind") not in ("CALL", "PUT") or not pos.get("quantity") or not pos.get("expiry_date"):
+                continue
+            if pos.get("exchange") == "MCX":
+                error = "Groww gives no Greeks for MCX options."
                 continue
             try:
                 greeks[pos["symbol"]] = self.api.get_greeks(
@@ -145,4 +176,4 @@ class PositionProcessor:
                     trading_symbol=pos["symbol"], expiry=pos["expiry_date"])
             except Exception as e:
                 return greeks, str(e)
-        return greeks, None
+        return greeks, error

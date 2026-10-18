@@ -5,14 +5,19 @@ the members of these lists. Source and sector labelling: ``market/index_constitu
 
 niftyindices.com refuses a client that does not look like a browser (the connection is
 dropped), so this uses one ``requests`` session with a browser User-Agent and opens the
-home page before the CSVs, as a browser would. Five small requests, about a second.
+home page before the CSVs, as a browser would. About twenty small requests, a few seconds:
+the universes' lists, then every index tile's list (``INDEX_MEMBER_FILES``), each file once.
+
+A member list that fails to download is reported (exit 2) and the stored one is kept; if
+none was stored, that tile shows no weight on the NSE Sectoral Indices board until a run
+succeeds.
 
 Public files: no account, no credentials. Read-only.
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 import requests
 
@@ -41,21 +46,45 @@ def fetch_list(session: requests.Session, filename: str) -> list:
     return rows
 
 
+def fetch_members(session: requests.Session, fetched: Dict[str, list]) -> Tuple[Dict[str, list], list]:
+    """Every index tile's constituent symbols, reusing lists already in ``fetched`` (by file)."""
+    members, failed = {}, []
+    for symbol, filename in ic.INDEX_MEMBER_FILES.items():
+        try:
+            if filename not in fetched:
+                fetched[filename] = fetch_list(session, filename)
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("  %-18s skipped - %s: %s", symbol, filename, exc)
+            failed.append(symbol)
+            continue
+        members[symbol] = [row["symbol"] for row in fetched[filename]]
+        logger.info("  %-18s %3d stocks  (%s)", symbol, len(members[symbol]), filename)
+    return members, failed
+
+
 def run(db: Optional[str] = None) -> int:
     try:
         session = new_session()
-        lists = {}
+        lists, fetched = {}, {}
         for key, (label, filename) in ic.INDEX_FILES.items():
-            lists[key] = fetch_list(session, filename)
+            lists[key] = fetched[filename] = fetch_list(session, filename)
             logger.info("  %-12s %3d stocks  (%s)", key, len(lists[key]), filename)
-        banks = {row["symbol"] for row in fetch_list(session, ic.BANK_INDEX_FILE)}
+        fetched[ic.BANK_INDEX_FILE] = fetch_list(session, ic.BANK_INDEX_FILE)
+        banks = {row["symbol"] for row in fetched[ic.BANK_INDEX_FILE]}
     except (requests.RequestException, ValueError) as exc:
         stored = ic.load(db)
         logger.error("Could not download NSE's lists: %s", exc)
         logger.error("Keeping the stored lists (from %s).", stored.get("generated_at") if stored else "never - none stored")
         return 1
 
-    document = ic.build_document(lists, banks, datetime.now(timezone.utc).isoformat())
+    logger.info("Index member lists (for the NSE Sectoral Indices board's weights):")
+    members, failed = fetch_members(session, fetched)
+    stored_members = ic.load_index_members(db)
+    for symbol in failed:
+        if symbol in stored_members:
+            members[symbol] = stored_members[symbol]
+            logger.warning("  %-18s keeping the stored list (%d stocks)", symbol, len(members[symbol]))
+    document = ic.build_document(lists, banks, datetime.now(timezone.utc).isoformat(), members)
     previous = (ic.load(db) or {}).get("indices") or {}
     for key, members in document["indices"].items():
         before = set(previous.get(key) or ())
@@ -66,4 +95,4 @@ def run(db: Optional[str] = None) -> int:
     sectors = sorted({row["sector"] for members in document["indices"].values() for row in members.values()})
     logger.info("Stored %s in %s (%d sectors: %s)", ic.CONSTITUENTS_SET, db or state_store.db_path(),
                 len(sectors), ", ".join(sectors))
-    return 0
+    return 2 if failed else 0

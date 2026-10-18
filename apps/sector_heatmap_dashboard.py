@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover - mirrors the other dashboards
         except Exception:
             pass
 
-from market.config import HeatmapConfig, ORDER_ALPHABETICAL, ORDER_BY_PERFORMANCE
+from market.config import HeatmapConfig, ORDERS, ORDER_BY_IMPACT
 from market.live_feed import LiveMarketDataService
 from market.market_hours import session_state
 from market.providers.registry import (
@@ -59,15 +59,27 @@ from market.models import (
     STATUS_STALE,
 )
 from market.sector_aggregation import (
-    AGGREGATION_LABELS,
-    EQUAL_WEIGHT,
-    MARKET_CAP,
     aggregate_sectors,
     lagging_sector_highlights,
     leading_sector_highlights,
-    rank_sectors,
-    sort_sectors_alphabetically,
 )
+from market.sector_impact import (
+    ORDER_BY_PERFORMANCE,
+    ORDER_LABELS,
+    attach_index_weights,
+    attach_sector_impact,
+    index_close_for_points,
+    index_level_text,
+    index_points_note,
+    index_weight_line,
+    index_weight_tooltip,
+    order_sectors,
+    partially_weighted_tiles,
+    sector_impact_tooltip,
+    sector_weight_line,
+    unweighted_tiles,
+)
+from market.index_constituents import load_index_members
 from market.index_mapping import index_by_label
 from market.universe import INDEX_UNIVERSE_KEY, get_universe
 from market.weights import load_weights
@@ -87,7 +99,7 @@ from ui.index_board import (
     index_tooltip,
     split_index_table,
 )
-from ui.sector_tiles import render_sector_tiles
+from ui.sector_tiles import default_tooltip, render_sector_tiles
 
 logging.basicConfig(
     level=os.getenv("PULSE_LOG_LEVEL", "INFO").upper(),
@@ -236,11 +248,14 @@ def status_label(status) -> str:
     return f"LIVE ({broker}{source})"
 
 
-def render_status_bar(status) -> None:
+def render_status_bar(status, index=None, index_name: str = "") -> None:
+    """Feed state, last update and coverage. ``index`` (``MarketSnapshot.index``)
+    adds the board's own index level next to the last update when it is priced."""
     colour = _STATUS_COLOURS.get(status.state, "#7f7f7f")
     last_update = (
         status.last_tick_at.strftime("%H:%M:%S") if status.last_tick_at else "-"
     )
+    level = index_level_text(index)
 
     left, middle, right = st.columns([3, 2, 2])
     with left:
@@ -252,7 +267,13 @@ def render_status_bar(status) -> None:
     with middle:
         st.markdown(
             f"<span style='color:#888;'>Last update</span> "
-            f"<span style='font-weight:600;'>{last_update}</span>",
+            f"<span style='font-weight:600;'>{last_update}</span>"
+            + (
+                f" &nbsp;<span style='color:#888;'>{index_name}</span> "
+                f"<span style='font-weight:600;'>{level}</span>"
+                if level
+                else ""
+            ),
             unsafe_allow_html=True,
         )
     with right:
@@ -324,6 +345,74 @@ def get_weights(path: Optional[str]):
     mid-session: two refreshes of the same screen have to agree.
     """
     return load_weights(path)
+
+
+@st.cache_resource(show_spinner=False)
+def get_index_members(path: Optional[str]):
+    """Index tile label -> its NSE constituents, read once per process (``--master`` stores them)."""
+    stored = load_index_members(path)
+    return {label: stored.get(d.symbol, []) for label, d in index_by_label().items()}
+
+
+def weigh_sector_board(snapshot, service: LiveMarketDataService):
+    """The Nifty 50 board's sectors: market-cap weighted %, share and impact.
+
+    With no weights stored at all every sector falls back to a plain mean,
+    and the page says so with a warning.
+    """
+    weight_set = get_weights(service.config.weights_path)
+    if not weight_set.is_usable:
+        # Never present an unweighted number as weighted.
+        st.warning(
+            "No market-cap weights are stored, so every sector % is a plain "
+            f"average of its constituents. {weight_set.error}"
+        )
+    sectors = aggregate_sectors(snapshot.stocks, weights=weight_set.weights)
+    sectors = attach_sector_impact(
+        sectors,
+        snapshot.stocks,
+        weight_set.weights,
+        # The board's own feed carries its index, so points need no other board.
+        index_previous_close=index_close_for_points(snapshot.index),
+    )
+    return sectors
+
+
+def weigh_index_board(snapshot, service: LiveMarketDataService):
+    """The index board's tiles with their free-float cap and rupee impact."""
+    weight_set = get_weights(service.config.weights_path)
+    return attach_index_weights(
+        aggregate_sectors(snapshot.stocks),
+        get_index_members(service.config.weights_path),
+        weight_set.weights,
+    )
+
+
+def render_weight_notes(sectors, order: str) -> None:
+    """Say which tiles have no weight, or only part of one - never pretend."""
+    missing = unweighted_tiles(sectors)
+    partial = partially_weighted_tiles(sectors)
+    if missing and order != ORDER_BY_PERFORMANCE:
+        st.caption(
+            f":warning: No stored weight for {len(missing)} tile(s), so they are "
+            f"ranked last, by name: {', '.join(missing)}. Run "
+            "'python scripts/dhan.py --master' to generate the weights."
+        )
+    if partial:
+        st.caption(
+            f"Weights cover only some members of {', '.join(partial)} - hover a "
+            "tile for how many. Their size and impact are understated."
+        )
+
+
+def render_fallback_note(sectors) -> None:
+    """Name the Nifty 50 sectors whose % is a plain average because no member has a weight."""
+    plain = [s.sector for s in sectors if s.fell_back_to_equal_weight]
+    if plain:
+        st.caption(
+            f"No member of {', '.join(plain)} has a stored weight, so its % is a "
+            "plain average of its constituents, not market-cap weighted."
+        )
 
 
 def render_breadth_summary(sectors) -> None:
@@ -437,12 +526,7 @@ def render_index_board(service: LiveMarketDataService, order: str) -> None:
     snapshot = service.snapshot()
     render_status_bar(snapshot.status)
 
-    sectors = aggregate_sectors(snapshot.stocks)
-    ordered = (
-        sort_sectors_alphabetically(sectors)
-        if order == ORDER_ALPHABETICAL
-        else rank_sectors(sectors)
-    )
+    ordered = order_sectors(weigh_index_board(snapshot, service), order)
     if not ordered:
         st.info("Waiting for the first index snapshot ...")
         return
@@ -451,13 +535,18 @@ def render_index_board(service: LiveMarketDataService, order: str) -> None:
         ordered,
         columns=service.config.heatmap_columns,
         min_colour_scale_pct=service.config.min_colour_scale_pct,
-        tooltip=index_tooltip,
+        tooltip=lambda s: f"{index_tooltip(s)}. {index_weight_tooltip(s)}",
+        detail=index_weight_line,
     )
     st.caption(
         "Each tile is a real NSE index measured against its own previous "
         "close - nothing here is averaged from Nifty 50 members, so these "
-        "numbers can differ from the Nifty 50 Sectors board."
+        "numbers can differ from the Nifty 50 Sectors board. The small line is "
+        "the index's free-float market cap and the rupee value its constituents "
+        "gained or lost today (cap × the index's % change). Indices overlap, so "
+        "these do not add up to anything."
     )
+    render_weight_notes(ordered, order)
     if clicked:
         go_to_index(clicked)
         st.rerun(scope="app")
@@ -557,26 +646,13 @@ def render_index_detail(index_service: LiveMarketDataService, label: str) -> Non
     )
 
 
-def render_heatmap_view(service: LiveMarketDataService, order: str, method: str) -> None:
+def render_heatmap_view(service: LiveMarketDataService, order: str) -> None:
     snapshot = service.snapshot()
-    render_status_bar(snapshot.status)
+    index_name = service.universe.label
+    render_status_bar(snapshot.status, snapshot.index, index_name)
 
-    weight_set = get_weights(service.config.weights_path)
-    if method == MARKET_CAP and not weight_set.is_usable:
-        # Never present an unweighted number as weighted.
-        st.warning(
-            f"Market-cap weighting is unavailable, showing equal weighted. "
-            f"{weight_set.error}"
-        )
-        method = EQUAL_WEIGHT
-
-    sectors = aggregate_sectors(
-        snapshot.stocks, method=method, weights=weight_set.weights
-    )
-    if order == ORDER_ALPHABETICAL:
-        ordered = sort_sectors_alphabetically(sectors)
-    else:
-        ordered = rank_sectors(sectors)
+    sectors = weigh_sector_board(snapshot, service)
+    ordered = order_sectors(sectors, order)
 
     if not ordered:
         st.info("Waiting for the first market snapshot ...")
@@ -586,12 +662,20 @@ def render_heatmap_view(service: LiveMarketDataService, order: str, method: str)
         ordered,
         columns=service.config.heatmap_columns,
         min_colour_scale_pct=service.config.min_colour_scale_pct,
+        tooltip=lambda s: f"{default_tooltip(s)}. {sector_impact_tooltip(s, index_name)}",
+        detail=lambda s: sector_weight_line(s, index_name),
     )
     st.caption(
-        "Tile colour = sector percentage change; darker means a bigger move. "
-        "Tile size is constant and carries no meaning. Click a tile to see its "
-        "constituents."
+        "Tile colour = sector percentage change (market-cap weighted); darker "
+        "means a bigger move. "
+        "Tile size is constant and carries no meaning. The small line is the "
+        f"sector's share of {index_name} by free-float market cap and its impact "
+        f"on {index_name} (share × market-cap weighted change), "
+        + index_points_note(snapshot.index, index_name, snapshot.status.provider)
+        + "Click a tile to see its constituents."
     )
+    render_weight_notes(ordered, order)
+    render_fallback_note(ordered)
     if clicked:
         go_to_sector(clicked)
         st.rerun(scope="app")
@@ -606,23 +690,32 @@ def render_heatmap_view(service: LiveMarketDataService, order: str, method: str)
 
 def render_sector_view(service: LiveMarketDataService, sector: str) -> None:
     snapshot = service.snapshot()
-    render_status_bar(snapshot.status)
+    render_status_bar(snapshot.status, snapshot.index, service.universe.label)
 
     members = snapshot.for_sector(sector)
     if not members:
         st.warning(f"No constituents configured for {sector}.")
         return
 
-    aggregated = aggregate_sectors(members)
-    summary = aggregated[0]
+    weights = get_weights(service.config.weights_path).weights
+    summary = aggregate_sectors(members, weights=weights)[0]
 
     change = (
         "no data" if summary.change_pct is None else f"{summary.change_pct:+.2f}%"
     )
     st.markdown(f"### {sector} &nbsp; `{change}`")
+    if summary.fell_back_to_equal_weight:
+        basis = "Plain average (no member has a stored weight)"
+    elif summary.weight_coverage < 1.0:
+        basis = (
+            f"Market-cap weighted over the {summary.weight_coverage:.0%} of priced "
+            "members that have a weight"
+        )
+    else:
+        basis = "Market-cap weighted"
     st.caption(
-        f"Equal-weighted average of {summary.priced_count} of "
-        f"{summary.constituent_count} constituents &nbsp;|&nbsp; "
+        f"{basis} - {summary.priced_count} of "
+        f"{summary.constituent_count} constituents priced &nbsp;|&nbsp; "
         f"{summary.positive_count} advancing, {summary.negative_count} declining"
     )
 
@@ -643,7 +736,7 @@ def render_sector_view(service: LiveMarketDataService, sector: str) -> None:
 
 
 def render_treemap_view(
-    service: LiveMarketDataService, board: str, order: str, method: str
+    service: LiveMarketDataService, board: str, order: str
 ) -> None:
     """The Plotly treemap of either board.
 
@@ -652,42 +745,45 @@ def render_treemap_view(
     way to drill down.
     """
     snapshot = service.snapshot()
-    render_status_bar(snapshot.status)
+    render_status_bar(snapshot.status, snapshot.index, service.universe.label)
 
     if board == BOARD_INDICES:
-        sectors = aggregate_sectors(snapshot.stocks)
+        sectors = weigh_index_board(snapshot, service)
+        detail = index_weight_line
+        weight_text = "the index's free-float market cap and today's rupee impact"
     else:
-        weight_set = get_weights(service.config.weights_path)
-        if method == MARKET_CAP and not weight_set.is_usable:
-            st.warning(
-                f"Market-cap weighting is unavailable, showing equal weighted. "
-                f"{weight_set.error}"
-            )
-            method = EQUAL_WEIGHT
-        sectors = aggregate_sectors(
-            snapshot.stocks, method=method, weights=weight_set.weights
+        sectors = weigh_sector_board(snapshot, service)
+        index_name = service.universe.label
+
+        def detail(sector):
+            return sector_weight_line(sector, index_name)
+
+        weight_text = (
+            f"the sector's share of {index_name} and its impact on it, "
+            + index_points_note(snapshot.index, index_name, snapshot.status.provider).rstrip(". ")
         )
-    ordered = (
-        sort_sectors_alphabetically(sectors)
-        if order == ORDER_ALPHABETICAL
-        else rank_sectors(sectors)
-    )
+    ordered = order_sectors(sectors, order)
     if not ordered:
         st.info("Waiting for the first market snapshot ...")
         return
 
     st.plotly_chart(
         build_sector_treemap(
-            ordered, min_colour_scale_pct=service.config.min_colour_scale_pct
+            ordered,
+            min_colour_scale_pct=service.config.min_colour_scale_pct,
+            detail=detail,
         ),
         width="stretch",
     )
     st.caption(
         "Treemap colour = percentage change; darker means a bigger move. Tile "
-        "size is constant and carries no meaning. The treemap is display-only - "
-        "use the tile pages to click through to constituents."
+        "size is constant and carries no meaning; tiles follow the sidebar's "
+        f"order from the top left. The small line is {weight_text}. The treemap "
+        "is display-only - use the tile pages to click through to constituents."
     )
+    render_weight_notes(ordered, order)
     if board == BOARD_SECTORS:
+        render_fallback_note(ordered)
         st.divider()
         render_breadth_summary(ordered)
         if service.config.show_highlight_tables:
@@ -702,7 +798,6 @@ def render_treemap_view(
 class Controls:
     provider_choice: str
     order: str
-    method: str
 
 
 def _persistent_radio(label: str, key: str, options, default, **kwargs):
@@ -721,7 +816,22 @@ def _persistent_radio(label: str, key: str, options, default, **kwargs):
     return value
 
 
-def sidebar_controls(config: HeatmapConfig, show_maths: bool = True) -> Controls:
+def render_weights_provenance(config: HeatmapConfig) -> None:
+    """Where the market-cap weights came from, and whether they are stale."""
+    weight_set = get_weights(config.weights_path)
+    if not weight_set.is_usable:
+        st.caption(f":warning: {weight_set.error}")
+        return
+    st.caption(f"Sector % is market-cap weighted. {weight_set.describe()}")
+    if weight_set.is_stale:
+        st.caption(
+            ":warning: Weights are over "
+            f"{int(weight_set.age_days)} days old. Re-run "
+            "scripts/dhan.py --master."
+        )
+
+
+def sidebar_controls(config: HeatmapConfig, show_weights: bool = True) -> Controls:
     """The sidebar shared by every live-heatmap page."""
     with st.sidebar:
         st.markdown("### Data provider")
@@ -748,48 +858,26 @@ def sidebar_controls(config: HeatmapConfig, show_maths: bool = True) -> Controls
         order = _persistent_radio(
             "Sector tile order",
             "sector_order",
-            [ORDER_BY_PERFORMANCE, ORDER_ALPHABETICAL],
-            config.sector_order
-            if config.sector_order in (ORDER_BY_PERFORMANCE, ORDER_ALPHABETICAL)
-            else ORDER_BY_PERFORMANCE,
-            format_func=lambda v: (
-                "Strongest first (tiles move)"
-                if v == ORDER_BY_PERFORMANCE
-                else "Alphabetical (tiles stay put)"
+            list(ORDERS),
+            config.sector_order if config.sector_order in ORDERS else ORDER_BY_IMPACT,
+            format_func=lambda v: ORDER_LABELS[v],
+            help=(
+                "Biggest impact first: by how much the tile moved its index "
+                "(free-float weight × market-cap weighted change), largest "
+                "either way first - colour shows the direction. Largest sector "
+                "first: by free-float weight, which does not change during the "
+                "session, so tiles stay put. Biggest move first: by the % on "
+                "the tile, which is market-cap weighted too."
             ),
         )
         st.caption(
-            "Colour and percentages update every second in both modes; only "
+            "Colour and percentages update every second in every order; only "
             "the tile positions differ."
         )
 
-        method = config.aggregation_method
-        if show_maths:
-            st.markdown("### Sector maths")
-            weight_set = get_weights(config.weights_path)
-            method = _persistent_radio(
-                "Sector % is",
-                "aggregation_method",
-                [EQUAL_WEIGHT, MARKET_CAP],
-                config.aggregation_method,
-                format_func=lambda v: AGGREGATION_LABELS[v],
-                help=(
-                    "Equal weighted: the average constituent's move. "
-                    "Market-cap weighted: the sector's larger names count for more."
-                ),
-            )
-            if method == MARKET_CAP:
-                if weight_set.is_usable:
-                    st.caption(weight_set.describe())
-                    if weight_set.is_stale:
-                        st.caption(
-                            ":warning: Weights are over "
-                            f"{int(weight_set.age_days)} days old. Re-run "
-                            "scripts/dhan.py --master."
-                        )
-                else:
-                    st.caption(f":warning: {weight_set.error}")
-    return Controls(provider_choice, order, method)
+        if show_weights:
+            render_weights_provenance(config)
+    return Controls(provider_choice, order)
 
 
 def _start_service(universe_key: str, provider_choice: str) -> LiveMarketDataService:
@@ -834,7 +922,7 @@ def page_sectors() -> None:
 
         @st.fragment(run_every=refresh)
         def _heatmap_fragment():
-            render_heatmap_view(service, controls.order, controls.method)
+            render_heatmap_view(service, controls.order)
 
         _heatmap_fragment()
 
@@ -843,7 +931,7 @@ def page_indices() -> None:
     """Real NSE sectoral index tiles, with drill-down."""
     init_session_state()
     config = HeatmapConfig.from_env()
-    controls = sidebar_controls(config, show_maths=False)
+    controls = sidebar_controls(config, show_weights=False)
     service = _start_service(INDEX_UNIVERSE_KEY, controls.provider_choice)
     st.markdown("## NSE Sectoral Indices")
     refresh = _refresh(service)
@@ -876,14 +964,14 @@ def _page_treemap(board: str) -> None:
     except (KeyError, ValueError) as e:
         st.error(str(e))
         st.stop()
-    controls = sidebar_controls(config, show_maths=board == BOARD_SECTORS)
+    controls = sidebar_controls(config, show_weights=board == BOARD_SECTORS)
     st.markdown(f"## Treemap: {BOARD_LABELS[board]}")
     key = INDEX_UNIVERSE_KEY if board == BOARD_INDICES else universe.key
     service = _start_service(key, controls.provider_choice)
 
     @st.fragment(run_every=_refresh(service))
     def _treemap_fragment():
-        render_treemap_view(service, board, controls.order, controls.method)
+        render_treemap_view(service, board, controls.order)
 
     _treemap_fragment()
 

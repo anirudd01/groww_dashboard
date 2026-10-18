@@ -934,8 +934,8 @@ with tab_greeks:
     elif not greeks:
         st.warning(
             "No Greeks available. Groww positions carry none; they come from Groww's `get_greeks` call, "
-            "which needs its paid data plan."
-            + (f" Groww answered: `{result['greeks_error']}`" if result.get("greeks_error") else "")
+            "which needs its paid data plan and covers NSE options only."
+            + (f" Reason: `{result['greeks_error']}`" if result.get("greeks_error") else "")
         )
     else:
         greeks_df = pd.DataFrame([

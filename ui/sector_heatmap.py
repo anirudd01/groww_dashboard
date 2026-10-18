@@ -4,7 +4,7 @@ Rendering only. All aggregation happens in ``market.sector_aggregation``; this
 module never calls the Groww API.
 """
 
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import plotly.graph_objects as go
 
@@ -35,21 +35,24 @@ def colour_scale_limit(
     return max([minimum] + magnitudes)
 
 
-def _tile_text(sector: SectorMarketData) -> str:
-    if sector.change_pct is None:
-        return f"<b>{sector.sector}</b><br>no data"
-    return f"<b>{sector.sector}</b><br>{sector.change_pct:+.2f}%"
+def _tile_text(sector: SectorMarketData, detail: Optional[str] = None) -> str:
+    change = "no data" if sector.change_pct is None else f"{sector.change_pct:+.2f}%"
+    text = f"<b>{sector.sector}</b><br>{change}"
+    return f"{text}<br><span style='font-size:12px'>{detail}</span>" if detail else text
 
 
 def build_sector_treemap(
     sectors: List[SectorMarketData],
     min_colour_scale_pct: float = 0.75,
     height: int = 620,
+    detail: Optional[Callable[[SectorMarketData], str]] = None,
 ) -> go.Figure:
     """Build the treemap for the supplied sectors, in the order given.
 
     Tile *area* is deliberately constant (value=1 for every sector): area
-    carries no meaning in Phase 1. Performance is encoded by colour only.
+    carries no meaning. Performance is encoded by colour only; the weight in
+    the index and the impact are written on the tile (``detail``) and the
+    order of the list decides the layout (``sort=False``).
     """
     limit = colour_scale_limit(sectors, min_colour_scale_pct)
 
@@ -63,6 +66,7 @@ def build_sector_treemap(
             s.constituent_count,
             s.positive_count,
             s.negative_count,
+            detail(s) if detail else "",
         ]
         for s in sectors
     ]
@@ -72,11 +76,12 @@ def build_sector_treemap(
             labels=[s.sector for s in sectors],
             parents=[""] * len(sectors),
             values=[1] * len(sectors),
-            text=[_tile_text(s) for s in sectors],
+            text=[_tile_text(s, detail(s) if detail else None) for s in sectors],
             textinfo="text",
             customdata=customdata,
             # sort=False makes Plotly lay tiles out in the order supplied
-            # instead of re-sorting by value (all values are equal here).
+            # instead of re-sorting by value (all values are equal here), so
+            # the sidebar's tile order applies: first tile top left.
             sort=False,
             tiling={"packing": "squarify", "pad": 3},
             marker={
@@ -92,7 +97,8 @@ def build_sector_treemap(
                 "<b>%{label}</b><br>"
                 "Change: %{color:+.2f}%<br>"
                 "Priced: %{customdata[0]}/%{customdata[1]} stocks<br>"
-                "Advancing: %{customdata[2]} &nbsp; Declining: %{customdata[3]}"
+                "Advancing: %{customdata[2]} &nbsp; Declining: %{customdata[3]}<br>"
+                "%{customdata[4]}"
                 "<extra></extra>"
             ),
             textfont={"size": 17, "color": "#111111"},

@@ -231,7 +231,8 @@ class IndMoneyFeedHandle(FeedHandle):
         self._token = access_token
         self._refs = list(refs)
         # Frames name the instrument by bare id, without a segment. That is
-        # unambiguous because each board is one segment with its own feed.
+        # unambiguous: equity ids are NSE tokens and index ids are INDmoney's
+        # own 400000xx range, so the Nifty 50 board's one index never collides.
         self._by_id: Dict[str, str] = {str(r.provider_id): r.symbol for r in self._refs}
 
         self._lock = threading.Lock()

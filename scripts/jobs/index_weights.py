@@ -13,6 +13,10 @@ approximation. Checked on 2026-10-15 against the earlier Yahoo ``floatShares`` f
 ten Nifty 50 stocks: within-index weights agreed to about a percentage point (ITC and LT,
 which have no promoter, differed most). Only the ratios within a sector matter.
 
+Which stocks: every member of the stored universes (Nifty 50, Nifty Next 50) plus every
+constituent of the NSE Sectoral Indices board's indices (``index_members``, Nifty 500
+included), about 510 stocks - roughly six minutes at the pace below.
+
 Read-only: no orders, no account data. Needs the Dhan credentials in ``.env``.
 """
 
@@ -24,6 +28,7 @@ from typing import Dict, Optional, Tuple
 import requests
 
 from market import reference_store, state_store
+from market.index_constituents import index_member_symbols
 from market.instruments import DHAN_SET, load_instruments
 from market.providers.base import SEGMENT_CASH
 from market.universe import available_universes
@@ -34,7 +39,7 @@ logger = logging.getLogger("index_weights")
 COMPANY_INFO_URL = "https://api.dhan.co/v2/data/companyinfo"
 CRORE = 1e7
 TRIES = 3
-#: Spacing between calls. ~100 stocks, about a minute in all.
+#: Spacing between calls. ~510 stocks, about six minutes in all.
 PAUSE_SECONDS = 0.2
 
 
@@ -79,7 +84,8 @@ def fetch_one(headers: dict, security_id: str) -> Tuple[Optional[dict], str]:
 
 def run(args) -> int:
     universes = [u for u in available_universes(args.db) if not u.is_index_board]
-    symbols = sorted({s for u in universes for s in u.symbols})
+    # The index board's tiles are sized by their constituents' weights, so those are weighed too.
+    symbols = sorted({s for u in universes for s in u.symbols} | set(index_member_symbols(args.db)))
     if not symbols:
         logger.error("No index constituents stored - nothing to weigh.")
         return 1

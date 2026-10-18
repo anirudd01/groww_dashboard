@@ -17,8 +17,10 @@ A live market-visualisation tool for observing short-term sector rotation across
 the Nifty 50. It has two screens:
 
 1. **Sector heatmap** — one clickable tile per sector, coloured by the sector's
-   percentage change vs the previous trading day's close. No individual stocks
-   appear here. Clicking a tile opens that sector's table.
+   market-cap weighted percentage change vs the previous trading day's close, with its share of the
+   index and its impact on the index on a small third line. No individual stocks
+   appear here. Clicking a tile opens that sector's table. Tiles are ordered by
+   impact, size or move (sidebar; see "Tile order, weight and impact").
 2. **Sector constituents** - a drill-down table of every Nifty 50 stock in the
    selected sector, sorted by live percentage change, highest first.
 
@@ -470,29 +472,27 @@ Per stock:
 change_pct = ((ltp - previous_close) / previous_close) * 100
 ```
 
-Per sector — an **equal-weighted average of the constituent percentage changes**:
-
-```
-sector_change_pct = mean(change_pct for priced stocks in sector)
-```
-
-This is explicit and deliberate. Market-cap weighting is **not** used, and NSE
-sector-index values are **not** used. The displayed number is the average
-performance of the constituent stocks.
-
-Constituents without a usable change (no tick yet, missing previous close) are
-counted in `constituent_count` but excluded from the mean, so one broken
-instrument cannot distort its sector. A sector with no usable prices reports
-"no data", never 0%.
-
-## Market-cap weighting
-
-Selectable in the sidebar under **Sector maths**, alongside equal weighting. The
-screen always states which definition produced the number on it.
+Per sector — a **market-cap weighted average of the constituent percentage
+changes**, using each constituent's stored free-float market cap as its weight:
 
 ```
 sector_change_pct = sum(change_pct * weight) / sum(weight)   # within the sector
 ```
+
+This is the only method. Until 2026-10-18 the sidebar had a **Sector maths →
+Sector % is: Equal weighted / Market-cap weighted** switch; it was removed at the
+user's request, together with the code, config (`PULSE_HEATMAP_AGGREGATION`) and
+tests behind it. The sidebar now just states "Sector % is market-cap weighted"
+with the weights' provenance under **Display**. NSE sector-index values are
+**not** used on this board (they are on the NSE Sectoral Indices board).
+
+Constituents without a usable change (no tick yet, missing previous close) are
+counted in `constituent_count` but excluded from the mean, so one broken
+instrument cannot distort its sector. A sector with no usable prices reports
+"no data", never 0%. A sector none of whose priced members has a weight falls
+back to a plain mean and says so (see "When weights are missing").
+
+## Market-cap weighting
 
 **What the number means.** It is a cap-weighted basket of *our own
 constituents* - "how did this sector's big names do". It is deliberately **not**
@@ -519,7 +519,7 @@ python scripts/dhan.py --master-only --verbose   # one line per symbol
 
 | | |
 |---|---|
-| Source | Dhan `companyinfo`, one call per Nifty 50 / Next 50 stock (~90 s for 100) |
+| Source | Dhan `companyinfo`, one call per Nifty 50 / Next 50 stock and per constituent of the sectoral board's indices (~510 stocks, about six minutes) |
 | Basis | **Free-float market cap** = market cap x (1 - promoter holding). NSE's own free float also excludes a few other locked-in holdings, so this is an approximation |
 | Checked | 2026-10-15, against the earlier Yahoo `floatShares` weights for ten Nifty 50 stocks: within-index weights agreed to about a percentage point (ITC and LT, which have no promoter, differed most). Yahoo is no longer used |
 | Gaps | A stock Dhan returns no market cap for is listed under `failures` and gets no weight (MOTHERSON on 2026-10-15) |
@@ -540,30 +540,15 @@ within a sector matter, so any consistent unit works. Format is documented in
 
 Never silently. A weighted number that is secretly unweighted would be a lie, so:
 
-- **No file at all** - the sidebar says so and names the script to run; selecting
-  market-cap weighting shows a warning and falls back to equal weighting.
-- **A sector with no weighted constituent** - falls back to an equal-weighted
-  mean for that sector and sets `fell_back_to_equal_weight`.
+- **No weights stored at all** - the sidebar says so and names the script to run,
+  and the Nifty 50 board shows a warning that every sector % is a plain average.
+- **A sector with no weighted constituent** - falls back to the plain (equal)
+  mean of its constituents, sets `fell_back_to_equal_weight`, and the page
+  names the sector in a caption; its drill-down says "Plain average".
 - **Partial coverage** - the weighted mean is computed from the constituents that
-  do have weights, and `weight_coverage` records the fraction. A missing weight
-  shrinks the basket; it never contributes zero.
+  do have weights, and `weight_coverage` records the fraction (the drill-down
+  caption shows it). A missing weight shrinks the basket; it never contributes zero.
 - **Weights older than 45 days** - flagged in the sidebar with the age.
-
-### Adding another method
-
-`market/sector_aggregation.py` exposes a strategy registry:
-
-```python
-AGGREGATION_STRATEGIES = {
-    "equal_weight": _equal_weight_strategy,
-    "market_cap":   weighted_change_pct,
-}
-```
-
-Each strategy takes `(changes, weights)` and returns the sector change. Adding
-`index_weight` means adding one entry plus a label in `AGGREGATION_LABELS`. The
-UI takes `SectorMarketData` objects and does not care how `change_pct` was
-produced, so no rendering code changes.
 
 ---
 
@@ -638,8 +623,9 @@ own previous close.
 The index's constituent list is wider than the Nifty 50 members we track, so the
 two boards **are expected to disagree** - and that gap is the point. It shows
 where the large caps are moving differently from the sector as a whole. Measured
-live on 2026-09-18, Nifty IT was -1.58% as a real index while the equal-weighted
-Nifty 50 IT aggregate read -1.95%.
+live on 2026-09-18, Nifty IT was -1.58% as a real index while the Nifty 50 IT
+aggregate read -1.95% (then equal weighted; the board has been market-cap
+weighted only since 2026-10-18).
 
 ### What it shows
 
@@ -647,6 +633,11 @@ Nifty 50 IT aggregate read -1.95%.
 FMCG, Healthcare, IT, Media, Metal, Oil & Gas, Pharma, Private Bank, PSU Bank,
 Realty) plus Nifty 50, Nifty Next 50 and Nifty 500 as broad benchmarks. Nifty
 Bank is a sectoral tile and is deliberately not repeated as a benchmark.
+
+Each tile's third line is the index's free-float market cap and the rupee value
+its constituents gained or lost today; the sidebar's tile order works here too
+(see "Tile order, weight and impact"). Nothing is aggregated on this board:
+an index's change is its own.
 
 The list lives in [`market/index_mapping.py`](../market/index_mapping.py), one
 row per tile. Adding an index is one row; security ids are resolved from the
@@ -679,9 +670,10 @@ open/high/low (verified matching REST to the paisa) with volume and traded
 quantity zero, which the `_positive()` guard keeps as "unknown" rather than
 turning into a fake zero.
 
-Security ids are unique *within* a segment but not across them - index id 13 and
-an equity id 13 both exist - so each board runs its own service with its own
-universe, and refs from different segments are never mixed in one request.
+Security ids are unique *within* a segment but not across them - index id 13
+(Nifty 50) and equity id 13 (ABB) both exist. The Nifty 50 board carries its own
+index alongside its stocks (see [Tile order, weight and impact](#tile-order-weight-and-impact)),
+so the Dhan provider keys every REST answer and feed packet on segment *and* id.
 
 ### Drill-down
 
@@ -761,34 +753,150 @@ its rows read the same way.
 
 ### Tile size
 
-Every tile has `value=1`. **Tile area carries no meaning in Phase 1** and in
-particular does not encode percentage change. A regression test
-(`test_tile_area_is_constant`) enforces this.
+Every tile has `value=1`. **Tile area carries no meaning** and in particular
+does not encode percentage change or weight. A regression test
+(`test_tile_area_is_constant`) enforces this. A tile's weight in its index is
+written on it instead (see the next section), and the order puts the biggest
+first.
 
 ---
 
-## Sector ordering — and the Plotly limitation
+## Tile order, weight and impact
 
-Two modes, switchable in the sidebar (default from
-`PULSE_HEATMAP_SECTOR_ORDER`):
+Every tile carries a small third line with its **weight** and its **impact**,
+so both are visible whatever order is picked:
 
-1. **Strongest first** (default) — sectors are sorted by descending
-   `change_pct` before the treemap is built, and the trace sets `sort=False` so
-   Plotly lays tiles out in the supplied order rather than re-sorting by
-   `values` (which are all equal). The strongest sector lands top-left.
-2. **Alphabetical** — a deterministic order in which a tile never moves.
+| Board | Third line | Example (Friday 2026-10-16) |
+|---|---|---|
+| Nifty 50 sectors (tiles and treemap) | share of the index · impact | `7.9% of Nifty 50 · +85 pts`, or `· impact +0.37%` |
+| NSE Sectoral Indices (tiles and treemap) | free-float market cap · rupee impact | `₹111.0 lakh cr · +₹44,401 cr` |
 
-**The limitation:** Plotly's squarify layout positions tiles from the input
-order, so as ranks change intraday the tiles *physically swap places*. This is
-correct behaviour, but on a fast-moving day it can look unstable — tiles jump
-around once per second and are harder to track by eye. Rather than fight the
-layout engine, the alphabetical mode is offered as a stable fallback.
+The hover tooltip spells it out (members weighted, the market-cap weighted move,
+points). The maths is in [`market/sector_impact.py`](../market/sector_impact.py).
 
-In **both** modes the sector name, percentage and colour update every second.
-The dashboard remains fully useful even if you never let the tiles move.
+### The three orders
 
-Ties (and sectors with no data) break alphabetically, so equal values do not
-cause tiles to shuffle randomly between refreshes.
+Switchable in the sidebar under **Sector tile order** (default from
+`PULSE_HEATMAP_SECTOR_ORDER`). The same order applies to all four boards:
+
+1. **Biggest impact first** (default, `impact`) — by how much the tile moved
+   its index, **largest absolute impact first**: a sector that knocked 30
+   points off the Nifty ranks above one that added 20. Sorting by signed impact
+   would put the biggest drag at the bottom, next to the sectors that did
+   nothing; the absolute value keeps "what moved the index" at the top, and the
+   colour still shows the direction.
+2. **Largest sector first** (`size`) — by weight (free-float market cap). The
+   weights are fixed for the session, so **the tiles stay put**: this is the
+   order to use while clicking through. It replaces the old *Alphabetical*
+   order, which existed only for that reason and has been removed.
+3. **Biggest move first** (`performance`) — by the % change shown on the tile,
+   highest first (the old "Strongest first"). On the Nifty 50 board that is the
+   market-cap weighted sector %.
+
+In every order the name, percentage, weight line and colour update every second;
+only the positions differ. Ties break by name, so equal values never swap
+places between refreshes.
+
+### How weight and impact are computed
+
+**Nifty 50 sector board.** With `w` a member's stored free-float market cap and
+`chg` its % change:
+
+```
+share  = sum(w over the sector's members) / sum(w over every member of the index)
+impact = sum(w x chg over the sector's priced members) / sum(w over the index)    # % of the index
+       = share x market-cap weighted sector change
+points = impact x index previous close / 100
+```
+
+Impact uses the same market-cap weights as the % on the tile, so a sector's
+impact is its share times its tile %; a sector with no weighted member has no
+impact (`None`) even though its tile shows a plain-average %. Checked
+on 2026-10-16 against the stored closes: IT 7.9% of the Nifty, +4.63% cap
+weighted, so +0.37% of the Nifty (about +85 points); Banks 28.9%, +0.30%,
+about +20 points; Oil & Gas 9.2%, -0.40%.
+
+**Points need the index's previous close**, so the Nifty 50 board subscribes to
+**the NIFTY 50 index itself on its own connection**: one extra instrument on the
+same websocket and in the same batched REST calls (LTP, OHLC, day bars, daily
+candles) the board already makes - no second feed, no other board, no extra
+reference-data download. The id comes from the same stored instrument set the
+NSE Sectoral Indices board uses (`NIFTY` in the `INDEX` segment:
+Dhan `IDX_I` 13, INDmoney `NIDX_40000001`, Kite `NSE:NIFTY 50`), mapped by
+`UNIVERSE_INDEX_SYMBOLS` in [`market/index_mapping.py`](../market/index_mapping.py)
+(Nifty Next 50 gets `NIFTYNXT50` the same way).
+
+The index is **not a constituent**. It lives in `MarketSnapshot.index`, never in
+`stocks`, so it is not a tile, counts in no sector, breadth, highlight or
+"50/50 priced" figure, and a missing index close is not a data gap. Its previous
+close follows the same honesty rule as the stocks: the OHLC close during the
+session, the prior session's daily candle outside it, never one filled in from
+the other. Then:
+
+| Index close | Third line | Caption |
+|---|---|---|
+| Known | `8.2% of Nifty 50 · +96 pts` | "in index points" |
+| Broker serves the index but gave no close (e.g. its candles skipped it after hours) | `8.2% of Nifty 50 · impact +0.38%` | names the broker and says the close is missing |
+| Broker does not serve indices (**Groww**) | `· impact +0.38%` | "Groww does not serve the Nifty 50 index itself" |
+
+The header shows the index level and its change next to *Last update*
+(`Nifty 50 25,100.00 (+0.40%)`) once it is priced.
+
+On Dhan the index shares security id 13 with ABB's equity id, so Dhan requests
+carry both segments in one body (`{"NSE_EQ": [...], "IDX_I": [13]}`) and answers
+and feed packets are matched on **segment and id** - the feed header's segment
+byte is `0` for `IDX_I`, `1` for `NSE_EQ`.
+
+**NSE Sectoral Indices board.** Indices overlap (Nifty Bank is inside Nifty
+Financial Services, everything is inside Nifty 500), so "share of the Nifty"
+means nothing there. Instead:
+
+```
+size   = sum(w over the index's constituents)          # its free-float market cap
+impact = size x the index's own % change / 100          # rupees gained or lost today, shown in crore
+```
+
+The constituents are NSE's published list for each index (`index_members` in the
+`index_constituents` set, below). Neither figure adds up across tiles.
+
+Both are approximations of NSE's own weights: our free float is market cap x
+(1 - promoter holding), and NSE also caps single-stock weights in some indices.
+
+### Missing weights - never pretended
+
+- A tile with **no usable weight** shows `no weight`, gets no share and no
+  impact (never a zero), and ranks **after every weighted tile** under
+  *Biggest impact* and *Largest sector*, by name. The page lists those tiles and
+  names the script to run.
+- A tile whose weights cover **only some members** is still sized from those
+  members; the page names it and the tooltip says how many (`49/50 members
+  weighted`), because its size and impact are understated.
+- No weights stored at all: every tile is unweighted, so both weight orders
+  fall back to by-name, and the page says why.
+
+### Index member lists and the weights they need
+
+`scripts/dhan.py --master` stores, besides the Nifty 50 / Next 50 universes,
+NSE's constituent list for **every index tile**
+(`INDEX_MEMBER_FILES` in [`market/index_constituents.py`](../market/index_constituents.py):
+the 14 sectoral indices plus Nifty 50, Nifty Next 50 and Nifty 500, all from
+niftyindices.com - NSE only). Dhan's instrument ids and the free-float weights
+are then generated for those stocks too: about 510 stocks instead of 99, so the
+weights step takes about six minutes instead of one. Before that run, the
+sectoral board shows `no weight` on its tiles. The member lists are not
+universes: nothing is aggregated from them, and the drill-down still lists
+Nifty 50 members only.
+
+### Treemaps
+
+The two treemap pages use the same three orders. The trace sets `sort=False`,
+so Plotly lays tiles out in the supplied order rather than re-sorting by
+`values` (all equal); the first tile lands top left. The weight line is written
+into each tile and its hover. **Limitation:** squarify packs equal-area tiles in
+order, but rows and columns depend on the chart's shape, so "first" is top left
+rather than a strict reading order, and under *Biggest impact* or *Biggest
+move* the tiles physically swap places as ranks change - pick *Largest sector
+first* for a still layout. Tile area is not the weight.
 
 ---
 
@@ -815,7 +923,7 @@ The tiles keep everything the treemap provided:
 | One tile per sector, no stocks | One button per aggregated sector |
 | Colour = percentage change | Per-tile CSS from the shared diverging scale |
 | Equal tile area | Fixed height, equal grid columns |
-| Sector name + change on the tile | Two-line button label |
+| Sector name + change on the tile | Button label, plus a smaller third line with weight and impact |
 | Dynamic ordering | Tiles render in the order passed in |
 | Constituent counts | Tooltip on hover |
 
@@ -1093,9 +1201,8 @@ All optional; every one has a working default. Put them in `.env`.
 | `PULSE_HEATMAP_PROVIDER` | `auto` | The sidebar's starting provider choice: `auto` or one broker name |
 | `PULSE_HEATMAP_UNIVERSE` | `NIFTY50` | Which universe to track |
 | `PULSE_HEATMAP_UI_REFRESH_SECONDS` | `1.0` | UI fragment refresh interval |
-| `PULSE_HEATMAP_SECTOR_ORDER` | `performance` | `performance` or `alphabetical` |
+| `PULSE_HEATMAP_SECTOR_ORDER` | `impact` | Starting tile order: `impact` (biggest impact first), `size` (largest first) or `performance` (biggest move first). Anything else, including the removed `alphabetical`, logs a warning and uses `impact` |
 | `PULSE_HEATMAP_COLUMNS` | `4` | Tiles per row |
-| `PULSE_HEATMAP_AGGREGATION` | `equal_weight` | `equal_weight` or `market_cap` |
 | `PULSE_HEATMAP_WEIGHTS_DB` | _(blank)_ | Database to read the stored weights from; blank is the shared `data/market.db` |
 | `PULSE_HEATMAP_HIGHLIGHT_TABLES` | `true` | Show the leaders/laggards tables |
 | `PULSE_HEATMAP_HIGHLIGHT_LIMIT` | `0` | Max rows per table (0 = all) |
@@ -1136,20 +1243,21 @@ All optional; every one has a working default. Put them in `.env`.
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -t .     # 403 tests, no extra dependencies
+python -m unittest discover -s tests -t .     # 827 tests, no extra dependencies
 pytest tests                                   # also works if pytest is installed
 ```
 
 | File | Tests | Covers |
 |---|---|---|
-| `tests/test_sector_heatmap.py` | 54 | Percentage change (positive, negative, zero, missing, zero previous close, non-numeric), equal-weight aggregation, partial/missing data, sector and constituent ranking, stale-feed detection, market-hours classification, **which session the latest price belongs to** (mid-session, after the close, pre-market, weekend, other timezones), universe configuration, treemap construction (constant tile area, colour driven by change, input ordering, no-data sectors) |
-| `tests/test_providers.py` | 78 | Provider interface and registry (unknown names skipped, not fatal; `zerodha` resolving to Kite), Dhan JWT client-id extraction and placeholder rejection, Dhan binary packet decoding against handcrafted frames (ticker, **quote**, previous close, OI, disconnect, concatenated and truncated packets), error-payload shapes, instrument resolution from the generated id file (segment isolation, a missing file, and that resolution never touches the network), **daily-candle previous-close selection** (stepping over today's candle, an unpublished candle, weekends, holiday gaps, short series, zero closes, unreadable or mismatched timestamps) and segment/instrument codes |
+| `tests/test_sector_heatmap.py` | 49 | Percentage change (positive, negative, zero, missing, zero previous close, non-numeric), the plain-mean fallback when nothing is weighted, partial/missing data, sector and constituent ranking, stale-feed detection, market-hours classification, **which session the latest price belongs to** (mid-session, after the close, pre-market, weekend, other timezones), universe configuration, treemap construction (constant tile area, colour driven by change, input ordering, no-data sectors) |
+| `tests/test_sector_impact.py` | 42 | Tile weight and impact: a sector's share of the index, impact = share x cap-weighted change (the same move the tile shows), points from the index close, **the board's own index on its feed** (subscribed after the constituents in the same calls, never a stock, sector, priced count or data gap; its close from candles after hours and never from OHLC; a broker without indices leaves it out; the caption's three cases; the header level), unweighted sectors getting `None` not zero, the three orders (absolute impact, weight, % change; unweighted last by name), the index board's free-float cap and rupee impact with partial and missing coverage, the tile/treemap third line and rupee formatting, the `PULSE_HEATMAP_SECTOR_ORDER` default and the removed `alphabetical`, the removed `PULSE_HEATMAP_AGGREGATION` being ignored with a warning, and storing NSE's per-index member lists (each file fetched once, a failed one skipped) |
+| `tests/test_providers.py` | 80 | Provider interface and registry (unknown names skipped, not fatal; `zerodha` resolving to Kite), Dhan JWT client-id extraction and placeholder rejection, Dhan binary packet decoding against handcrafted frames (ticker, **quote**, previous close, OI, disconnect, concatenated and truncated packets), error-payload shapes, instrument resolution from the generated id file (segment isolation, a missing file, and that resolution never touches the network), Dhan REST and feed matching on **segment and id** (index 13 and equity 13 in one request), **daily-candle previous-close selection** (stepping over today's candle, an unpublished candle, weekends, holiday gaps, short series, zero closes, unreadable or mismatched timestamps) and segment/instrument codes |
 | `tests/test_indmoney.py` | 42 | INDmoney provider: `NSE_`/`NIDX_` code building, double-encoded frame decoding and heartbeat noise, quote-mode parsing (`close` as the live price, index volume 0 as unknown), the four error-body shapes, JWT expiry, resolution from the generated file without network, REST mapping (a rejected batch, the retry for a partial first answer, 429 retry, five-per-call candle batching, candle previous-close selection), registry aliases, and the generator's index-name table and positional index-file parsing |
 | `tests/test_kite.py` | 48 | Kite provider: login checksum and URL, `request_token` extraction from a pasted redirect URL, **06:00 IST token expiry** (daytime, pre-dawn and exactly-06:00 logins), the session file (round trip, the secret never written, another key's or an expired session ignored, git-ignored), token exchange and error shapes, `token api_key:access_token` signing, binary frame splitting (heartbeat, truncation), LTP / quote / **index** packet layouts, feed-handle state, ISO daily candles, index quoting by Kite name (`NSE:NIFTY BANK`), repeated `i=` quote params, the checked-in id file, the generator, and a **read-only guard** asserting no order endpoint appears in the Kite code |
 | `tests/test_ui_colours.py` | 29 | Colour ramp ordering (stronger move = darker shade), symmetry around zero, no-data staying neutral, clamping, text contrast, tile keys/labels/CSS, and the styled constituent table |
 | `tests/test_index_board.py` | 35 | Index mapping integrity (unique symbols and labels, every drill-down link resolving to a real sector, benchmarks carrying no sector), the index universe being one group per index so nothing is averaged together, segment-code mapping, tooltips, the summary line and the index table |
 | `tests/test_instruments.py` | 25 | The stored instrument ids: loader behaviour on a missing, corrupt, empty or partly broken set, blank and `nan` ids, unknown segments, staleness against the reshuffle calendar, that the stored ids resolve every tracked symbol with a numeric id, and the generator's filtering (the futures row not shadowing the equity, the BSE listing not being used, an index not resolving in the cash segment, unresolved symbols reported rather than invented, and a round trip back through the loader) |
-| `tests/test_weighting_and_breadth.py` | 82 | Weighted means, fallback and coverage reporting when weights are missing, day-range position (including degenerate and zero-filled ranges), breadth counts, leader/laggard selection and ordering, highlight-table rendering, the stored-weights loader, the previous-close refresh window, and **which source supplies the previous close** (OHLC in session, daily candles outside it, never a silent fallback between them) |
+| `tests/test_weighting_and_breadth.py` | 79 | Weighted means, market-cap weighted sectors, the plain-mean fallback and coverage reporting when weights are missing, no method argument left, day-range position (including degenerate and zero-filled ranges), breadth counts, leader/laggard selection and ordering, highlight-table rendering, the stored-weights loader, the previous-close refresh window, and **which source supplies the previous close** (OHLC in session, daily candles outside it, never a silent fallback between them) |
 
 The tests are deliberately confined to non-UI logic — no Streamlit, no network,
 no broker credentials — so the suite runs in under a second offline.
@@ -1178,7 +1286,7 @@ Seams that already exist for later work:
 
 | Later capability | Seam |
 |---|---|
-| Another weighting scheme | `AGGREGATION_STRATEGIES` in `market/sector_aggregation.py` |
+| A different sector weighting | `aggregate_sectors` in `market/sector_aggregation.py` (market-cap only since 2026-10-18) |
 | A fifth broker | `PROVIDER_FACTORIES` in `market/providers/registry.py`; `market/providers/kite.py` is the most recent worked example (and the only one with a browser login) |
 | Other index universes (e.g. Nifty 100) | One line in `INDEX_FILES` in `market/index_constituents.py`, then `--master`; selected by `PULSE_HEATMAP_UNIVERSE` |
 | A different price source per screen | `MarketDataProvider` / `FeedHandle` in `market/providers/base.py` |

@@ -23,7 +23,7 @@ What each broker's own spec lists that we do not use (checked 2026-10-01, includ
 
 INDmoney's docs are wrong in several places (see its section), so treat its 📄 claims with the most caution. The vendor mirror [`indstocks-api-docs.md`](indstocks-api-docs.md) has had its proven-wrong passages corrected or cut, marked `[pulse_tester]`.
 
-*Last updated 2026-10-17 (INDmoney MCX quotes retested against Kite; Groww's free API plan tested: account and orders work, market data refused). Earlier: 2026-09-27, 1-minute history compared across all four brokers; Dhan TOTP token generation verified.*
+*Last updated 2026-10-18 (Groww's paid data plan tested: prices, NSE candles, option chain and Greeks work; MCX has prices but no candles or Greeks). 2026-10-17: INDmoney MCX quotes retested against Kite; Groww's free API plan tested. Earlier: 2026-09-27, 1-minute history compared across all four brokers; Dhan TOTP token generation verified.*
 
 ---
 
@@ -37,11 +37,11 @@ INDmoney's docs are wrong in several places (see its section), so treat its 📄
 | **Today's snapshot for up to 1,000 stocks in one call** | Kite, Dhan, INDmoney (all 1,000 per call) | — | Groww (50 per call) | ✅ 2026-09-25, [`FNO_MOVERS.md`](FNO_MOVERS.md) |
 | **1-minute history** (backfill of intraday bars) | **Kite** | Dhan (90 days per call) | INDmoney | Dhan: 90 days per call, but its prices differ from Kite's on 20–40% of bars and its volume on 88% ✅. Kite: 60 days per call and one call per stock. Its bars reproduce the official daily open, high and low ✅. Groww: 30 days per call, and its opens differ from Kite's on half the bars ✅. INDmoney: 7 days per call, volumes that don't match anyone, and invented flat bars after 15:15 ✅. 2026-09-27, [log](PROVIDER_COMPARISON_LOG.md), store in [`INTRADAY_HISTORY.md`](INTRADAY_HISTORY.md) |
 | **Historical backfill** (months or years of daily candles) | **Kite** (its history is corporate-action adjusted ✅) | Dhan | — | Kite: any range, 3 req/s, continuous futures ✅. Dhan: 5 years intraday 📄. INDmoney: 5 symbols per call, but one call covers at most 1 year of daily data 📄 |
-| **Option chain / Greeks** | **Dhan** or **Groww** | INDmoney | Kite | Dhan, Groww and INDmoney all return a chain with Greeks 📄. Kite has no chain API; you'd assemble it from quotes and calculate Greeks yourself 📄 |
-| **MCX commodities** | **Dhan** (Kite as fallback) | Groww (positions) | **INDmoney** | Dhan and Kite returned identical MCX prices, OHLC and OI ✅ 2026-10-03. Dhan leads because it needs no morning login and keeps volume after the close; the MCX Futures page falls back to Kite. See [MCX on Dhan and Kite](#mcx-on-dhan-and-kite-tested-2026-10-03). INDmoney now prices MCX on REST, identical to Kite, but has no candles, no last-trade time and 19 of 28 commodities ✅ 2026-10-17, see [MCX on INDmoney](#mcx-on-indmoney-retested-2026-10-17) |
-| **Portfolio / positions** | **Groww** (the existing dashboards use it) | Kite, Dhan | INDmoney for F&O | Groww's positions, holdings and margins work on its free API plan ✅ 2026-10-17, but pricing them needs its paid data plan. This account's INDmoney profile says F&O is not activated ✅ |
+| **Option chain / Greeks** | **Dhan** or **Groww** | INDmoney | Kite | Dhan, Groww and INDmoney all return a chain with Greeks 📄. Groww's work for NSE ✅ 2026-10-18 but **not for MCX** (no chain, `get_greeks` errors) ✅. Kite has no chain API; you'd assemble it from quotes and calculate Greeks yourself 📄 |
+| **MCX commodities** | **Dhan** (Kite as fallback) | Groww (positions and prices; no MCX candles ✅ 2026-10-18) | **INDmoney** | Dhan and Kite returned identical MCX prices, OHLC and OI ✅ 2026-10-03. Dhan leads because it needs no morning login and keeps volume after the close; the MCX Futures page falls back to Kite. See [MCX on Dhan and Kite](#mcx-on-dhan-and-kite-tested-2026-10-03). INDmoney now prices MCX on REST, identical to Kite, but has no candles, no last-trade time and 19 of 28 commodities ✅ 2026-10-17, see [MCX on INDmoney](#mcx-on-indmoney-retested-2026-10-17) |
+| **Portfolio / positions** | **Groww** (the existing dashboards use it) | Kite, Dhan | INDmoney for F&O | Groww's positions, holdings and margins work on its free API plan ✅ 2026-10-17; with the paid data plan F&O and MCX positions are priced, MCX in batches of 50 ✅ 2026-10-18. This account's INDmoney profile says F&O is not activated ✅ |
 | **Unattended jobs** (no one at the machine) | **Groww**, **INDmoney** or **Dhan** | — | Kite | All three mint tokens from a stored TOTP secret: Groww and INDmoney ✅ 2026-09-25, Dhan ✅ 2026-09-27. Kite always needs a browser login |
-| **Free market data** | **INDmoney** | — | — | Kite, Dhan and Groww all charge for data APIs. Groww's free plan refuses every price, candle, option-chain and Greeks call ✅ 2026-10-17 |
+| **Free market data** | **INDmoney** | — | — | Kite, Dhan and Groww all charge for data APIs. Groww's free plan refuses every price, candle, option-chain and Greeks call ✅ 2026-10-17; this account has had the paid plan since 2026-10-18 |
 
 ---
 
@@ -91,6 +91,9 @@ Scores run from 1 (poor) to 5 (best), for the uses in this repo.
 - **Strengths:**
   - The widest feature set: option chain with Greeks, expired-options data with IV and OI, 5 years of intraday history, and 20/200-level depth 📄.
   - Its socket connected in 0.17 s ✅.
+  - **Trade history with charges and the ledger by API** (`/v2/trades/{from}/{to}/{page}`, `/v2/ledger`) ✅ 2026-10-18,
+    no Data API plan needed. They feed the Trade Journal ([`DHAN_JOURNAL.md`](DHAN_JOURNAL.md)); Groww has no equivalent.
+  - Data API plan active on this account since 2026-10-18 (valid to 2026-11-19) ✅.
   - The public instrument master needs no login ✅.
   - It's the default live provider for the heatmap.
   - It has a sandbox (`sandbox.dhan.co`) for orders, portfolio, funds and historical candles, but not live quotes or the socket 📄.
@@ -230,22 +233,26 @@ contract by open interest, not by nearest expiry.
 
 ### Groww
 
-**Free API plan, tested 2026-10-17** ✅: login, profile, margins, holdings, positions (CASH, FNO and COMMODITY),
-order list, GTT/OCO smart-order list, the margin calculator and the instrument list all work. **Every market-data
-call is refused** (`Access forbidden for this request.`): quotes, LTP, OHLC, candles, expiries, option chain and
-Greeks. So on the free plan Groww is an account and order API only; the F&O dashboard then lists positions without
-prices ([`api/GROWW_API_LIVE_DATA.md`](api/GROWW_API_LIVE_DATA.md)). No API gives order history beyond today or a
-P&L report ([`api/GROWW_API_ORDERS.md`](api/GROWW_API_ORDERS.md)). The points below were measured on the paid plan
-in September 2026; what to re-check when it is back is in [`GROWW_PAID_PLAN_CHECKS.md`](GROWW_PAID_PLAN_CHECKS.md).
+**Paid data plan since 2026-10-18** ✅: quotes, LTP and OHLC for CASH, FNO and MCX, NSE candles, the NSE option
+chain and NSE Greeks all answer, about 0.35 s per call. **MCX gets prices only:** no candles (an empty answer) and
+no option chain or Greeks ([`api/GROWW_API_LIVE_DATA.md`](api/GROWW_API_LIVE_DATA.md)). On the free plan
+(2026-10-17) only the account side worked: login, profile, margins, holdings, positions, orders, smart-order lists,
+the margin calculator and the instrument list. No API gives order history beyond today or a P&L report
+([`api/GROWW_API_ORDERS.md`](api/GROWW_API_ORDERS.md)). Results and open checks:
+[`GROWW_PAID_PLAN_CHECKS.md`](GROWW_PAID_PLAN_CHECKS.md).
 
 - **Strengths:**
   - **TOTP login is fully automatic** (`GROWW_TOTP_SECRET`), like Dhan's and INDmoney's ✅.
   - The existing portfolio and F&O dashboards use it, including commodity positions.
   - Its past closes were identical to Kite's ✅.
-  - The SDK has option-chain and Greeks calls 📄, and GTT/OCO smart orders (stop-loss and target that can last past a day) 📄.
+  - NSE option chain and Greeks ✅ 2026-10-18, and GTT/OCO smart orders (stop-loss and target that can last past a day) 📄.
+  - Batched LTP works for MCX too (`MCX_<symbol>`, 50 per call) ✅ 2026-10-18.
 - **Weaknesses:**
   - 50 instruments per LTP/OHLC call ✅.
-  - Daily candles have `open = None`, so **you can't compute gaps from Groww candles** ✅.
+  - Daily candles have `open = None`, so **you can't compute gaps from Groww candles** ✅ (still so 2026-10-18).
+  - **No MCX candles, MCX option chain or MCX Greeks** ✅ 2026-10-18. `get_quote`'s `market_cap` is `None` ✅.
+  - A position's `net_price` is not the open quantity's cost after a partial exit; derive it from the fills and
+    `realised_pnl` ✅ 2026-10-18 ([`api/GROWW_API_PORTFOLIO.md`](api/GROWW_API_PORTFOLIO.md)).
   - Rate limits: 10 market-data calls per second (300 a minute), 10 orders per second, 150 tokens a day 📄
     (about 0.4 s per candle call measured).
   - Units differ from the docs ✅ 2026-10-17: MCX tick sizes in the instrument list are in paise, commodity margins

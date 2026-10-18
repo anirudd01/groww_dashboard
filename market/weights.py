@@ -55,7 +55,7 @@ class WeightSet:
     universe: str = ""
     path: str = ""
     #: Populated when the weights could not be loaded. The UI shows this
-    #: verbatim rather than silently degrading to equal weighting.
+    #: verbatim rather than silently degrading to plain-average sectors.
     error: str = ""
 
     @property
@@ -102,7 +102,7 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
 def load_weights(
     path: Optional[str] = None, basis: str = BASIS_FREE_FLOAT
 ) -> WeightSet:
-    """Read the stored weights. Never raises - a bad set means equal weighting.
+    """Read the stored weights. Never raises - a bad set means plain-average sectors, flagged.
 
     A weight is only accepted if it is a positive, finite number. Anything else
     (null, zero, negative, a string) is dropped with a log line, so a partially

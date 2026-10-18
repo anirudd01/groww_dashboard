@@ -145,6 +145,17 @@ def main():
           f"{len(rows)} holdings, {len(mtf)} MTF positions; compare the symbols: "
           f"{sorted({h.get('trading_symbol') for h in rows} & {p.get('trading_symbol') for p in mtf})}")
 
+    from groww_api.position_processor import open_entry_price
+
+    fields = ("quantity", "credit_quantity", "credit_price", "debit_quantity", "debit_price",
+              "carry_forward_credit_quantity", "carry_forward_credit_price", "carry_forward_debit_quantity",
+              "carry_forward_debit_price", "net_carry_forward_quantity", "net_carry_forward_price",
+              "net_price", "realised_pnl")
+    for p in (positions or {}).get("positions", []):
+        if p.get("quantity"):
+            check(f"9. open cost of {p.get('trading_symbol')} (compare entry and P&L with the Groww app)",
+                  f"open_entry_price {open_entry_price(p):.2f}; " + short({k: p.get(k) for k in fields}, 600))
+
     if args.socket:
         print(f"\n== Live socket, {args.socket} s ==")
         from growwapi import GrowwFeed

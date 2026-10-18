@@ -35,11 +35,15 @@ def tile_key(sector: str) -> str:
     return f"{TILE_KEY_PREFIX}_{slug}"
 
 
-def tile_label(sector: SectorMarketData) -> str:
-    """Two-line button label: sector name above its percentage change."""
-    if sector.change_pct is None:
-        return f"**{sector.sector}**\n\nno data"
-    return f"**{sector.sector}**\n\n{sector.change_pct:+.2f}%"
+def tile_label(sector: SectorMarketData, detail: Optional[str] = None) -> str:
+    """Button label: sector name above its percentage change.
+
+    ``detail`` is an optional smaller third line - the tile's weight in its
+    index and its impact - so size is visible whatever order is picked.
+    """
+    change = "no data" if sector.change_pct is None else f"{sector.change_pct:+.2f}%"
+    label = f"**{sector.sector}**\n\n{change}"
+    return f"{label}\n\n{detail}" if detail else label
 
 
 def build_tile_css(
@@ -73,6 +77,10 @@ def build_tile_css(
         div[class*="{TILE_KEY_PREFIX}_"] button p {{
             margin: 0;
             font-size: 0.95rem;
+        }}
+        div[class*="{TILE_KEY_PREFIX}_"] button p:nth-of-type(3) {{
+            font-size: 0.75rem;
+            opacity: 0.85;
         }}
         """
     ]
@@ -108,11 +116,13 @@ def render_sector_tiles(
     min_colour_scale_pct: float = MIN_SCALE_PCT,
     height_px: int = 96,
     tooltip: Optional[Callable[[SectorMarketData], str]] = None,
+    detail: Optional[Callable[[SectorMarketData], str]] = None,
 ) -> Optional[str]:
     """Draw the clickable heatmap. Returns the sector clicked, if any.
 
-    ``sectors`` is rendered in the order given, so the caller controls whether
-    tiles are ranked by performance or held in a stable alphabetical layout.
+    ``sectors`` is rendered in the order given, so the caller controls the
+    order (``market/sector_impact.order_sectors``). ``detail`` adds a small
+    third line to every tile (weight and impact); tiles grow to fit it.
 
     ``tooltip`` overrides the hover text. The index board passes its own,
     because "1/1 priced, 1 advancing" would be noise on a tile that *is* a
@@ -121,6 +131,8 @@ def render_sector_tiles(
     if not sectors:
         return None
 
+    if detail is not None:
+        height_px += 18
     st.markdown(
         build_tile_css(sectors, min_colour_scale_pct, height_px),
         unsafe_allow_html=True,
@@ -135,7 +147,7 @@ def render_sector_tiles(
                 # container(key=...) is what gives us the st-key-* CSS hook.
                 with st.container(key=tile_key(sector.sector)):
                     if st.button(
-                        tile_label(sector),
+                        tile_label(sector, detail(sector) if detail else None),
                         key=f"{tile_key(sector.sector)}_btn",
                         width="stretch",
                         help=(tooltip or default_tooltip)(sector),

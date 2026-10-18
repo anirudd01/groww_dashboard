@@ -46,9 +46,19 @@ page names only CASH and FNO, but COMMODITY works, observed). Two live MCX rows 
 | `credit_quantity` / `credit_price` | What was **bought** (GOLD: 500 bought, 400 sold, net +100) |
 | `debit_quantity` / `debit_price` | What was **sold** |
 | `carry_forward_*` | The same, for quantity brought in from earlier days |
-| `net_price` | Average price of the open quantity, rupees |
+| `net_price` | Average price of the side that opened the position (GOLD: all 500 bought, 148240.8; CRUDEOIL, closed: the sell price). **Not the cost of the open quantity** after a partial exit, see below |
 | `realised_pnl` | Rupees. CRUDEOIL: 500 × (9168.4 − 9111.0) = 28,700, so P&L is quantity × price change, with no lot multiplier |
 | `product` | `NRML`, `MIS`, `CNC`, `MTF` |
+
+**The open quantity's cost is not in a position; derive it.** GOLD above: `realised_pnl` 59,400 is FIFO
+(the 400 sold matched the first 400 bought), so the 100 still held cost 148,400, not `net_price`'s
+148,240.8. Using `net_price` showed −24,080 at a price of 148,000 instead of −40,000, and realised plus
+unrealised no longer matched the money in and out (19,400). `open_entry_price` in
+[`groww_api/position_processor.py`](../../groww_api/position_processor.py) computes
+(bought − sold + `realised_pnl`) ÷ `quantity`, counting `carry_forward_*` fills too, which works for longs
+and shorts and equals `net_price` when nothing was closed. **Unverified for carry-forward positions:**
+whether `carry_forward_*_price` is the original price or the previous day's settlement price, and whether
+`realised_pnl` covers earlier days ([GROWW_PAID_PLAN_CHECKS.md](../GROWW_PAID_PLAN_CHECKS.md), check 9).
 
 **Not in a position:** expiry, strike, lot size, tick size, last price or Greeks. The F&O dashboard takes
 the contract facts from the instrument list ([GROWW_API_INSTRUMENTS.md](GROWW_API_INSTRUMENTS.md)), prices

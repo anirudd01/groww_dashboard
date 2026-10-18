@@ -3,19 +3,17 @@
 Pure functions only - no Groww API calls, no Streamlit, no Plotly. This is the
 layer the tests exercise.
 
-Two aggregation methods are available, both explicit about what they mean:
+A sector's percentage change is **market-cap weighted**: the mean of its
+constituents' changes weighted by each one's (free-float) market capitalisation,
+normalised *within the sector*. The number answers "how did this sector's big
+names do". It is a cap-weighted basket of our own constituents - it is **not**
+an attempt to reproduce an NSE sector index, whose constituent list is wider
+than the Nifty 50 members we track.
 
-``equal_weight``
-    Unweighted mean of the constituent percentage changes. Every stock counts
-    the same, so the number answers "how did the average stock in this sector
-    do". This is the default.
-
-``market_cap``
-    Mean weighted by each constituent's market capitalisation, normalised
-    *within the sector*. The number answers "how did this sector's big names
-    do". It is a cap-weighted basket of our own constituents - it is **not**
-    an attempt to reproduce an NSE sector index, whose constituent list is
-    wider than the Nifty 50 members we track.
+A sector with no usable weight at all falls back to the plain mean of its
+constituents and is flagged (``fell_back_to_equal_weight``), so the UI never
+presents an unweighted number as weighted. (An "Equal weighted / Market-cap
+weighted" switch existed until 2026-10-18; it was removed at the user's request.)
 
 Weights come from a file generated offline (see ``market/weights.py``), never
 from a live scrape, so a weighting run is reproducible and the dashboard has
@@ -23,12 +21,9 @@ no extra network dependency.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from market.models import SectorMarketData, StockMarketData
-
-EQUAL_WEIGHT = "equal_weight"
-MARKET_CAP = "market_cap"
 
 
 def compute_change_pct(
@@ -50,14 +45,6 @@ def compute_change_pct(
     if previous_close == 0 or ltp <= 0 or previous_close < 0:
         return None
     return ((ltp - previous_close) / previous_close) * 100.0
-
-
-def equal_weight_change_pct(changes: Sequence[float]) -> Optional[float]:
-    """Unweighted mean of the supplied percentage changes."""
-    usable = [c for c in changes if c is not None]
-    if not usable:
-        return None
-    return sum(usable) / len(usable)
 
 
 def weighted_change_pct(
@@ -83,45 +70,6 @@ def weighted_change_pct(
     return sum(change * weight for change, weight in usable) / total_weight
 
 
-# Each strategy takes the constituent percentage changes alongside their
-# weights (``None`` where a weight is unknown) and returns the sector's
-# percentage change, or ``None`` when it cannot be computed honestly.
-# Adding "index_weight" later means adding one entry here; the UI is untouched.
-AggregationStrategy = Callable[
-    [Sequence[float], Sequence[Optional[float]]], Optional[float]
-]
-
-
-def _equal_weight_strategy(
-    changes: Sequence[float], weights: Sequence[Optional[float]]
-) -> Optional[float]:
-    """Equal weighting ignores the weights by definition."""
-    return equal_weight_change_pct(changes)
-
-
-AGGREGATION_STRATEGIES: Dict[str, AggregationStrategy] = {
-    EQUAL_WEIGHT: _equal_weight_strategy,
-    MARKET_CAP: weighted_change_pct,
-}
-
-#: Human-readable labels for the UI, so the screen always states which
-#: definition produced the number on it.
-AGGREGATION_LABELS: Dict[str, str] = {
-    EQUAL_WEIGHT: "Equal weighted",
-    MARKET_CAP: "Market-cap weighted",
-}
-
-
-def get_aggregation_strategy(method: str = EQUAL_WEIGHT) -> AggregationStrategy:
-    try:
-        return AGGREGATION_STRATEGIES[method]
-    except KeyError:
-        raise KeyError(
-            f"Unknown aggregation method {method!r}. "
-            f"Available: {', '.join(sorted(AGGREGATION_STRATEGIES))}"
-        ) from None
-
-
 def _mean(values: Sequence[Optional[float]]) -> Optional[float]:
     usable = [v for v in values if v is not None]
     return sum(usable) / len(usable) if usable else None
@@ -129,21 +77,22 @@ def _mean(values: Sequence[Optional[float]]) -> Optional[float]:
 
 def aggregate_sectors(
     stocks: Iterable[StockMarketData],
-    method: str = EQUAL_WEIGHT,
     weights: Optional[Dict[str, float]] = None,
 ) -> List[SectorMarketData]:
-    """Collapse constituent-level data into one row per sector.
+    """Collapse constituent-level data into one row per sector, market-cap weighted.
 
     Constituents without a usable percentage change are counted but excluded
     from the average, so one missing instrument does not distort its sector.
 
     ``weights`` maps symbol to a positive weight (market capitalisation, in
-    any consistent unit - only ratios within a sector matter). When a weighted
-    method is requested and a sector has no usable weight at all, the sector
-    falls back to an equal-weighted mean and is flagged, so the UI can say so
-    rather than presenting an unweighted number as weighted.
+    any consistent unit - only ratios within a sector matter). A constituent
+    without a weight is left out of the weighted mean (``weight_coverage``
+    says how much of the sector was weighted). When a sector has no usable
+    weight at all it falls back to the plain mean of its constituents and is
+    flagged, so the UI can say so rather than presenting an unweighted number
+    as weighted. The index board passes no weights: each of its tiles is one
+    index, whose own change is the tile's change.
     """
-    strategy = get_aggregation_strategy(method)
     weights = weights or {}
 
     grouped: Dict[str, List[StockMarketData]] = {}
@@ -156,17 +105,15 @@ def aggregate_sectors(
         changes = [m.change_pct for m in priced]
         member_weights = [weights.get(m.symbol) for m in priced]
 
-        change_pct = strategy(changes, member_weights)
+        change_pct = weighted_change_pct(changes, member_weights)
         fell_back = False
-        if change_pct is None and changes and method != EQUAL_WEIGHT:
-            # The weighted method could not be applied here; be explicit.
-            change_pct = equal_weight_change_pct(changes)
+        if change_pct is None and changes:
+            # No usable weight in this sector; say so rather than pretend.
+            change_pct = _mean(changes)
             fell_back = change_pct is not None
 
         weighted_members = sum(1 for w in member_weights if w is not None and w > 0)
-        coverage = 1.0
-        if method != EQUAL_WEIGHT and priced:
-            coverage = weighted_members / len(priced)
+        coverage = weighted_members / len(priced) if priced else 1.0
 
         ranges = [
             m.range_position_pct
@@ -183,7 +130,6 @@ def aggregate_sectors(
                 positive_count=sum(1 for c in changes if c > 0),
                 negative_count=sum(1 for c in changes if c < 0),
                 unchanged_count=sum(1 for c in changes if c == 0),
-                aggregation_method=method,
                 weight_coverage=coverage,
                 fell_back_to_equal_weight=fell_back,
                 avg_range_position_pct=_mean(ranges),
@@ -203,13 +149,6 @@ def rank_sectors(sectors: Iterable[SectorMarketData]) -> List[SectorMarketData]:
     return sorted(
         sectors, key=lambda s: (-_sort_key(s.change_pct), s.sector)
     )
-
-
-def sort_sectors_alphabetically(
-    sectors: Iterable[SectorMarketData],
-) -> List[SectorMarketData]:
-    """Deterministic ordering that never moves a tile between refreshes."""
-    return sorted(sectors, key=lambda s: s.sector)
 
 
 def rank_constituents(stocks: Iterable[StockMarketData]) -> List[StockMarketData]:

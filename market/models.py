@@ -97,20 +97,38 @@ class SectorMarketData:
     positive_count: int = 0
     negative_count: int = 0
     unchanged_count: int = 0
-    aggregation_method: str = "equal_weight"
     #: Share of this sector's priced constituents that carried a usable weight,
-    #: 0.0-1.0. Always 1.0 for equal weighting. Below 1.0 it means the
-    #: cap-weighted number was computed from only part of the sector.
+    #: 0.0-1.0. Below 1.0 it means the market-cap weighted number was computed
+    #: from only part of the sector.
     weight_coverage: float = 1.0
-    #: True when a weighted method was requested but no constituent had a
-    #: weight, so this sector silently reverted to an equal-weighted mean.
-    #: Surfaced in the UI - a weighted number that is secretly unweighted
-    #: would be a lie.
+    #: True when no priced constituent had a weight, so this sector's % is the
+    #: plain (equal-weighted) mean of its constituents instead of market-cap
+    #: weighted. Surfaced in the UI - a weighted number that is secretly
+    #: unweighted would be a lie.
     fell_back_to_equal_weight: bool = False
     #: Mean position within the day's range across constituents that report one.
     avg_range_position_pct: Optional[float] = None
     #: How many constituents supplied a usable day range.
     range_count: int = 0
+
+    # Size in the index and impact on it, filled by ``market/sector_impact.py``
+    # from the stored free-float weights. ``None`` means no weight was usable -
+    # never zero.
+    #: Free-float market cap of the members we hold a weight for, in rupees.
+    free_float_cap: Optional[float] = None
+    #: Share of the parent index, 0-100 (sector board only; indices overlap).
+    index_share_pct: Optional[float] = None
+    #: Market-cap weighted % change - what moves the index, whatever the tile shows.
+    cap_weighted_change_pct: Optional[float] = None
+    #: Rupee change in free-float market value today. Drives "biggest impact".
+    impact_value: Optional[float] = None
+    #: Contribution to the parent index's move, in % of the index (sector board).
+    index_impact_pct: Optional[float] = None
+    #: The same in index points, when the index's previous close is known.
+    index_impact_points: Optional[float] = None
+    #: Members with a usable weight, out of ``member_total``.
+    weighted_members: int = 0
+    member_total: int = 0
 
     @property
     def advancing_pct(self) -> Optional[float]:
@@ -164,6 +182,11 @@ class MarketSnapshot:
     stocks: List[StockMarketData]
     status: FeedStatus
     taken_at: datetime
+    #: The universe's own index (NIFTY for the Nifty 50 board), carried on the
+    #: same feed but never a constituent: it is not in ``stocks`` and counts in
+    #: no sector, breadth or "priced" figure. ``None`` when the board has no
+    #: index of its own or the active broker does not serve it.
+    index: Optional[StockMarketData] = None
 
     def for_sector(self, sector: str) -> List[StockMarketData]:
         return [s for s in self.stocks if s.sector == sector]

@@ -11,12 +11,13 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 from market.providers.registry import DEFAULT_PROVIDER_ORDER
-from market.sector_aggregation import EQUAL_WEIGHT, MARKET_CAP
+from market.sector_impact import (  # noqa: F401  (re-exported for the dashboards)
+    ORDER_BY_IMPACT,
+    ORDER_BY_PERFORMANCE,
+    ORDER_BY_SIZE,
+    ORDERS,
+)
 from market.universe import DEFAULT_UNIVERSE_KEY
-
-# Sector tile ordering strategies (see docs/SECTOR_HEATMAP.md).
-ORDER_BY_PERFORMANCE = "performance"
-ORDER_ALPHABETICAL = "alphabetical"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -51,6 +52,13 @@ def _env_choice(name: str, default: str, allowed) -> str:
     return default
 
 
+def _warn_removed_setting(name: str, why: str) -> None:
+    """A setting that no longer exists: log that it is ignored, never crash."""
+    raw = (os.getenv(name, "") or "").strip()
+    if raw:
+        logging.getLogger(__name__).warning("Ignoring %s=%r - %s.", name, raw, why)
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = (os.getenv(name, "") or "").strip().lower()
     if not raw:
@@ -71,11 +79,9 @@ class HeatmapConfig:
     # --- universe -------------------------------------------------------
     universe_key: str = DEFAULT_UNIVERSE_KEY
 
-    # --- aggregation ----------------------------------------------------
-    # How a sector's percentage change is computed from its constituents.
-    # "equal_weight" (default) treats every stock alike; "market_cap" weights
-    # by the stored weights below. Both are selectable in the UI.
-    aggregation_method: str = EQUAL_WEIGHT
+    # --- weights --------------------------------------------------------
+    # A sector's % is always market-cap weighted by the stored weights below
+    # (a sector with no weight falls back to a plain mean and says so).
     # Weights are read from the database at startup and never fetched live.
     # Generate them with scripts/dhan.py --master. None is the shared
     # data/market.db; a path points at another database (PULSE_STATE_DB does too).
@@ -83,7 +89,8 @@ class HeatmapConfig:
 
     # --- UI -------------------------------------------------------------
     ui_refresh_seconds: float = 1.0
-    sector_order: str = ORDER_BY_PERFORMANCE
+    #: Tile order: impact (default), size or performance - see market/sector_impact.py.
+    sector_order: str = ORDER_BY_IMPACT
     #: Tiles per row in the clickable heatmap grid.
     heatmap_columns: int = 4
     #: Show the leaders/laggards tables beneath the heatmap.
@@ -142,9 +149,11 @@ class HeatmapConfig:
 
     @classmethod
     def from_env(cls) -> "HeatmapConfig":
-        order = (os.getenv("PULSE_HEATMAP_SECTOR_ORDER", "") or ORDER_BY_PERFORMANCE).strip().lower()
-        if order not in (ORDER_BY_PERFORMANCE, ORDER_ALPHABETICAL):
-            order = ORDER_BY_PERFORMANCE
+        _warn_removed_setting(
+            "PULSE_HEATMAP_AGGREGATION",
+            "sector % is always market-cap weighted since 2026-10-18",
+        )
+        order = _env_choice("PULSE_HEATMAP_SECTOR_ORDER", ORDER_BY_IMPACT, ORDERS)
         raw_providers = (os.getenv("PULSE_MARKET_PROVIDERS", "") or "").strip()
         providers = tuple(
             part.strip().lower() for part in raw_providers.split(",") if part.strip()
@@ -155,9 +164,6 @@ class HeatmapConfig:
             ui_refresh_seconds=_env_float("PULSE_HEATMAP_UI_REFRESH_SECONDS", 1.0),
             sector_order=order,
             heatmap_columns=max(1, _env_int("PULSE_HEATMAP_COLUMNS", 4)),
-            aggregation_method=_env_choice(
-                "PULSE_HEATMAP_AGGREGATION", EQUAL_WEIGHT, (EQUAL_WEIGHT, MARKET_CAP)
-            ),
             weights_path=os.getenv("PULSE_HEATMAP_WEIGHTS_DB", "") or None,
             show_highlight_tables=_env_bool("PULSE_HEATMAP_HIGHLIGHT_TABLES", True),
             highlight_table_limit=max(0, _env_int("PULSE_HEATMAP_HIGHLIGHT_LIMIT", 0)),

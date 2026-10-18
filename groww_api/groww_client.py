@@ -20,6 +20,8 @@ except ImportError:
 
 # Shared with the FnO dashboard - single implementation lives in utils/formatting.py
 from utils.formatting import format_inr, format_inr_full
+from groww_api.api_calls import batched_ltp
+from groww_api.position_processor import open_entry_price
 
 logger = logging.getLogger(__name__)
 
@@ -261,10 +263,7 @@ class GrowwClient:
         return [p for p in positions if str(p.get("segment", "CASH")).upper() == "CASH"]
 
     def get_ltp(self, symbols: List[str]) -> Dict[str, float]:
-        """
-        Fetch LTP for a list of trading symbols.
-        Groww SDK takes exchange_trading_symbols as single string or tuple of strings e.g. ("NSE_RELIANCE", "NSE_INFY")
-        """
+        """LTP for NSE CASH trading symbols; symbols Groww cannot price are left out."""
         if self.mock_mode:
             mock_prices = {
                 "RELIANCE": 3020.50,
@@ -282,27 +281,7 @@ class GrowwClient:
         if not symbols:
             return {}
 
-        from growwapi import GrowwAPI
-        # Format symbols as NSE_<SYMBOL>
-        formatted_symbols = tuple(f"NSE_{s.strip()}" if not s.startswith("NSE_") else s.strip() for s in symbols)
-
-        try:
-            # get_ltp supports up to 50 instruments per batch
-            result = {}
-            for i in range(0, len(formatted_symbols), 50):
-                batch = formatted_symbols[i:i+50]
-                resp = self.client.get_ltp(
-                    segment=GrowwAPI.SEGMENT_CASH,
-                    exchange_trading_symbols=batch if len(batch) > 1 else batch[0]
-                )
-                if isinstance(resp, dict):
-                    for k, v in resp.items():
-                        clean_sym = k.replace("NSE_", "").replace("BSE_", "")
-                        result[clean_sym] = float(v)
-            return result
-        except Exception as e:
-            logger.warning("Error fetching live LTP: %s", e)
-            return {}
+        return batched_ltp(self.client, "NSE", "CASH", symbols)
 
     def get_processed_portfolio(self) -> Dict[str, Any]:
         """
@@ -412,7 +391,7 @@ class GrowwClient:
                 continue
 
             sym = pos.get("trading_symbol", "UNKNOWN")
-            buy_price = float(pos.get("net_price", 0.0) or pos.get("net_carry_forward_price", 0.0) or pos.get("credit_price", 0.0))
+            buy_price = open_entry_price(pos)
             ltp = float(ltp_map.get(sym, buy_price))
 
             pos_cost = pos_qty * buy_price

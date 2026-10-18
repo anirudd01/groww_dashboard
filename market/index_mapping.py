@@ -78,6 +78,14 @@ BENCHMARK_INDICES: Tuple[IndexDefinition, ...] = (
 
 ALL_INDICES: Tuple[IndexDefinition, ...] = SECTORAL_INDICES + BENCHMARK_INDICES
 
+#: Equity universe key -> its own index (an ``INDEX``-segment symbol, as on the index
+#: board). The equity board subscribes it on its own feed, apart from the constituents
+#: (``MarketSnapshot.index``), to turn an impact in % of the index into index points.
+UNIVERSE_INDEX_SYMBOLS: Dict[str, str] = {
+    "NIFTY50": "NIFTY",
+    "NIFTYNEXT50": "NIFTYNXT50",
+}
+
 
 def index_by_symbol() -> Dict[str, IndexDefinition]:
     return {definition.symbol: definition for definition in ALL_INDICES}

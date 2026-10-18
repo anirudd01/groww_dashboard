@@ -4,20 +4,22 @@
     F&O:      Nifty 50 Movers | All F&O Movers | F&O Heatmap | Dhan Movers
     Insights: Breadth | Overnight vs Intraday | Rotation | Gap Fills | Gap Streaks
     MCX:      MCX Futures
+    Journal:  Trade Journal (Dhan)
     Tools:    Dhan API Explorer
 
 Every page is a direct link (ui/navbar.py): no dropdown to open first, no
 "more" menu. The Insights pages read only the stored history
 (data/fno_daily_closes.csv, and data/market.db for Gap Fills).
 
-Visualisation only - it places no orders and generates no signals.
+Visualisation only - it places no orders and generates no signals. The Journal page reads your
+Dhan fills and ledger (account statements), never orders.
 
     streamlit run pulse_dashboard.py
 """
 
 import streamlit as st
 
-from apps import dhan_api_explorer, dhan_movers_dashboard
+from apps import dhan_api_explorer, dhan_journal_dashboard, dhan_movers_dashboard
 from apps import fno_breadth_dashboard as breadth
 from apps import fno_gap_fills_dashboard as gap_fills
 from apps import fno_gap_streaks_dashboard as gap_streaks
@@ -68,6 +70,10 @@ def nav_spec():
         ("MCX", [
             (st.Page(mcx.page_mcx_futures, title="MCX Commodity Futures", icon=":material/oil_barrel:",
                      url_path="mcx-futures"), "MCX Futures"),
+        ]),
+        ("Journal", [
+            (st.Page(dhan_journal_dashboard.page_dhan_journal, title="Trade Journal", icon=":material/menu_book:",
+                     url_path="trade-journal"), "Trade Journal"),
         ]),
         ("Tools", [
             (st.Page(dhan_api_explorer.page_dhan_api_explorer, title="Dhan API Explorer", icon=":material/api:",

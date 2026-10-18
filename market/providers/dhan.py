@@ -88,6 +88,12 @@ def segment_code(segment: str) -> str:
     return SEGMENT_CODES.get((segment or SEGMENT_CASH).upper(), NSE_EQ)
 
 
+#: Dhan exchange segment -> the numeric code in a feed packet's header (Annexure:
+#: Exchange Segment). Security ids are unique only within a segment - index 13 is
+#: Nifty 50, equity 13 is ABB - so a feed carrying both is matched on the pair.
+FEED_SEGMENT_NUMBERS = {IDX_I: 0, NSE_EQ: 1, MCX_COMM: 5}
+
+
 def instrument_code(segment: str) -> str:
     """Dhan instrument type for a universe segment, defaulting to equity."""
     return INSTRUMENT_CODES.get((segment or SEGMENT_CASH).upper(), "EQUITY")
@@ -243,12 +249,22 @@ class DhanFeedHandle(FeedHandle):
         self._token = access_token
         self._client_id = client_id
         self._refs = list(refs)
-        self._by_id: Dict[int, str] = {}
+        # (header segment number, security id) -> symbol, plus a bare-id
+        # lookup for ids that appear in only one segment of this feed.
+        self._by_key: Dict[Tuple[Optional[int], int], str] = {}
+        by_id: Dict[int, List[str]] = {}
         for ref in self._refs:
             try:
-                self._by_id[int(ref.provider_id)] = ref.symbol
+                security_id = int(ref.provider_id)
             except (TypeError, ValueError):
                 logger.warning("Dhan: bad security id %r for %s", ref.provider_id, ref.symbol)
+                continue
+            number = FEED_SEGMENT_NUMBERS.get(segment_code(ref.segment))
+            self._by_key[(number, security_id)] = ref.symbol
+            by_id.setdefault(security_id, []).append(ref.symbol)
+        self._by_id: Dict[int, str] = {
+            security_id: symbols[0] for security_id, symbols in by_id.items() if len(symbols) == 1
+        }
 
         self._lock = threading.Lock()
         self._prices: Dict[str, float] = {}
@@ -330,7 +346,7 @@ class DhanFeedHandle(FeedHandle):
             self._alive = True
             self._ready.set()
             logger.info(
-                "Dhan feed connected - subscribed to %d instruments", len(self._by_id)
+                "Dhan feed connected - subscribed to %d instruments", len(self._by_key)
             )
             while not self._stop.is_set():
                 try:
@@ -376,7 +392,7 @@ class DhanFeedHandle(FeedHandle):
         bars: Dict[str, DayBar] = {}
 
         while offset + 8 <= size:
-            code, length, _segment, security_id = struct.unpack_from(
+            code, length, segment, security_id = struct.unpack_from(
                 "<BHBi", data, offset
             )
 
@@ -395,7 +411,7 @@ class DhanFeedHandle(FeedHandle):
                 if step == 0:
                     break
 
-            symbol = self._by_id.get(security_id)
+            symbol = self._by_key.get((segment, security_id)) or self._by_id.get(security_id)
             if symbol is not None:
                 if code == RESPONSE_TICKER and offset + 16 <= size:
                     ltp, _ltt = struct.unpack_from("<fi", data, offset + 8)
@@ -718,62 +734,61 @@ class DhanProvider(MarketDataProvider):
             )
         return resolved, missing
 
-    def _post_marketfeed(self, endpoint: str, refs: List[InstrumentRef]) -> dict:
-        """Batched quote call, grouped by exchange segment.
+    def _post_marketfeed(self, endpoint: str, refs: List[InstrumentRef]) -> Dict[str, dict]:
+        """Batched quote call. Returns ``{symbol: entry}``.
 
-        Returns ``{security_id: entry}`` merged across segments. Ids are
-        unique within a segment but *not* across them (index id 13 and an
-        equity id 13 can both exist), so callers must only pass refs from one
-        universe - which they do, since each board has its own service.
+        Every exchange segment goes in the same request body
+        (``{"NSE_EQ": [...], "IDX_I": [13]}``), so a board that also carries
+        its own index costs no extra throttled call. Entries are matched back
+        on ``(segment, security id)``: ids are unique within a segment but
+        *not* across them (index id 13 is Nifty 50, equity id 13 is ABB).
         """
-        by_segment: Dict[str, List[int]] = {}
+        wanted: Dict[Tuple[str, str], str] = {}
         for ref in refs:
             try:
-                by_segment.setdefault(segment_code(ref.segment), []).append(
-                    int(ref.provider_id)
-                )
+                wanted[(segment_code(ref.segment), str(int(ref.provider_id)))] = ref.symbol
             except (TypeError, ValueError):
                 continue
-        if not by_segment:
-            return {}
 
-        merged: dict = {}
-        for code, ids in by_segment.items():
-            for i in range(0, len(ids), REST_BATCH):
-                chunk = ids[i : i + REST_BATCH]
-                payload, error = {}, None
-                # One retry: a 805 usually just means we were a little quick.
-                for attempt in range(2):
-                    self._throttle_quotes()
-                    resp = requests.post(
-                        f"{REST_BASE}/marketfeed/{endpoint}",
-                        headers=self._headers(),
-                        json={code: chunk},
-                        timeout=self._timeout,
-                    )
-                    payload = self._json(resp)
-                    error = self._error_of(payload)
-                    if error is None or error[0] != RATE_LIMITED:
-                        break
-                    if attempt == 0:
-                        logger.debug("Dhan %s rate limited - retrying", endpoint)
-                        time.sleep(MIN_QUOTE_INTERVAL)
-                if error:
-                    logger.warning("Dhan %s error: %s %s", endpoint, *error)
-                    continue
-                section = (payload.get("data") or {}).get(code) or {}
-                merged.update(section)
-        return merged
-
-    def _by_symbol(
-        self, refs: List[InstrumentRef], raw: dict, extract
-    ) -> Dict[str, float]:
-        by_id = {str(r.provider_id): r.symbol for r in refs}
-        out: Dict[str, float] = {}
-        for security_id, entry in (raw or {}).items():
-            symbol = by_id.get(str(security_id))
-            if symbol is None:
+        keys = list(wanted)
+        out: Dict[str, dict] = {}
+        for i in range(0, len(keys), REST_BATCH):
+            body: Dict[str, List[int]] = {}
+            for code, security_id in keys[i : i + REST_BATCH]:
+                body.setdefault(code, []).append(int(security_id))
+            payload, error = {}, None
+            # One retry: a 805 usually just means we were a little quick.
+            for attempt in range(2):
+                self._throttle_quotes()
+                resp = requests.post(
+                    f"{REST_BASE}/marketfeed/{endpoint}",
+                    headers=self._headers(),
+                    json=body,
+                    timeout=self._timeout,
+                )
+                payload = self._json(resp)
+                error = self._error_of(payload)
+                if error is None or error[0] != RATE_LIMITED:
+                    break
+                if attempt == 0:
+                    logger.debug("Dhan %s rate limited - retrying", endpoint)
+                    time.sleep(MIN_QUOTE_INTERVAL)
+            if error:
+                logger.warning("Dhan %s error: %s %s", endpoint, *error)
                 continue
+            data = payload.get("data") or {}
+            for code in body:
+                for security_id, entry in (data.get(code) or {}).items():
+                    symbol = wanted.get((code, str(security_id)))
+                    if symbol is not None and isinstance(entry, dict):
+                        out[symbol] = entry
+        return out
+
+    @staticmethod
+    def _by_symbol(entries: Dict[str, dict], extract) -> Dict[str, float]:
+        """``{symbol: positive float}`` pulled out of ``{symbol: entry}``; bad values are dropped."""
+        out: Dict[str, float] = {}
+        for symbol, entry in (entries or {}).items():
             try:
                 value = extract(entry)
             except (TypeError, ValueError, AttributeError):
@@ -791,9 +806,8 @@ class DhanProvider(MarketDataProvider):
         base class. Anything non-positive is treated as missing, and the feed's
         explicit previous-close packet fills the gaps.
         """
-        raw = self._post_marketfeed("ohlc", refs)
         closes = self._by_symbol(
-            refs, raw, lambda e: (e.get("ohlc") or {}).get("close")
+            self._post_marketfeed("ohlc", refs), lambda e: (e.get("ohlc") or {}).get("close")
         )
         logger.info("Dhan resolved previous close for %d/%d", len(closes), len(refs))
         return closes
@@ -895,8 +909,7 @@ class DhanProvider(MarketDataProvider):
         return closes
 
     def get_ltp_snapshot(self, refs: List[InstrumentRef]) -> Dict[str, float]:
-        raw = self._post_marketfeed("ltp", refs)
-        return self._by_symbol(refs, raw, lambda e: e.get("last_price"))
+        return self._by_symbol(self._post_marketfeed("ltp", refs), lambda e: e.get("last_price"))
 
     def get_day_bars(self, refs: List[InstrumentRef]) -> Dict[str, DayBar]:
         """Today's open/high/low from the same OHLC endpoint.
@@ -909,14 +922,8 @@ class DhanProvider(MarketDataProvider):
         every value to a positive float - the right guard for a price, the
         wrong one for a nested block.
         """
-        raw = self._post_marketfeed("ohlc", refs)
-        by_id = {str(r.provider_id): r.symbol for r in refs}
-
         bars: Dict[str, DayBar] = {}
-        for security_id, entry in (raw or {}).items():
-            symbol = by_id.get(str(security_id))
-            if symbol is None or not isinstance(entry, dict):
-                continue
+        for symbol, entry in self._post_marketfeed("ohlc", refs).items():
             ohlc = entry.get("ohlc")
             if not isinstance(ohlc, dict):
                 continue
@@ -936,11 +943,7 @@ class DhanProvider(MarketDataProvider):
         time cannot be read, are left out.
         """
         times: Dict[str, datetime] = {}
-        by_id = {str(r.provider_id): r.symbol for r in refs}
-        for security_id, entry in (self._post_marketfeed("quote", refs) or {}).items():
-            symbol = by_id.get(str(security_id))
-            if symbol is None or not isinstance(entry, dict):
-                continue
+        for symbol, entry in self._post_marketfeed("quote", refs).items():
             try:
                 times[symbol] = datetime.strptime(
                     str(entry.get("last_trade_time")), "%d/%m/%Y %H:%M:%S"
@@ -956,13 +959,7 @@ class DhanProvider(MarketDataProvider):
         Note ``ohlc.close`` is the *previous* session's close here, and for MCX it stays so
         after the session ends (seen 2026-10-03, a Saturday).
         """
-        by_id = {str(r.provider_id): r.symbol for r in refs}
-        quotes: Dict[str, dict] = {}
-        for security_id, entry in (self._post_marketfeed("quote", refs) or {}).items():
-            symbol = by_id.get(str(security_id))
-            if symbol is not None and isinstance(entry, dict):
-                quotes[symbol] = entry
-        return quotes
+        return self._post_marketfeed("quote", refs)
 
     def get_candles(
         self, ref: InstrumentRef, start: datetime, end: datetime, interval: Optional[int] = None

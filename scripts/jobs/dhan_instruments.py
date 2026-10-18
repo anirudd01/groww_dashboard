@@ -51,6 +51,7 @@ from typing import Dict, Iterable, Set
 import requests
 
 from market import reference_store, state_store
+from market.index_constituents import index_member_symbols
 from market.instruments import DHAN_SET
 from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX
 from market.universe import tracked_symbols
@@ -187,6 +188,11 @@ def run(args, text: str) -> int:
     """Resolve every tracked symbol in ``text`` (Dhan's master CSV, see ``download``) and store the ids."""
     wanted, universes = tracked_symbols(args.db)
     log_universes(universes)
+    # The weights job needs ids for the index board's constituents too (index_members).
+    members = index_member_symbols(args.db)
+    if members:
+        wanted.setdefault(SEGMENT_CASH, set()).update(members)
+        logger.info("  %-20s %3d symbols (CASH, for the index board's weights)", "index members", len(members))
     total = sum(len(symbols) for symbols in wanted.values())
     if not total:
         logger.error("No universes have constituents stored - nothing to do.")

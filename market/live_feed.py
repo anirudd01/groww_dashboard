@@ -22,6 +22,17 @@ Price sources, in order of preference:
 
 Reference data (previous close, instrument ids) always comes from REST and is
 fetched once at startup, never per tick.
+
+The universe's own index
+------------------------
+An equity board also carries its own index (NIFTY for the Nifty 50 board) as
+one extra instrument on the same connection and the same REST calls, so the
+board can turn a sector's impact into index points. It is kept apart from the
+constituents - ``MarketSnapshot.index``, never ``stocks`` - so it counts in no
+sector, breadth, "priced" or data-gap figure. Its previous close follows the
+same rule as the stocks' (OHLC in session, daily candles outside it). A broker
+that does not serve the index leaves it ``None`` and the board shows impact in
+% of the index instead.
 """
 
 import logging
@@ -38,6 +49,7 @@ from market.market_hours import (
     is_market_open,
     session_state,
 )
+from market.index_mapping import UNIVERSE_INDEX_SYMBOLS
 from market.models import (
     PREV_CLOSE_DAILY_CANDLE,
     PREV_CLOSE_OHLC,
@@ -54,7 +66,7 @@ from market.models import (
     MarketSnapshot,
     StockMarketData,
 )
-from market.providers.base import InstrumentRef, MarketDataProvider
+from market.providers.base import SEGMENT_INDEX, InstrumentRef, MarketDataProvider
 from market.providers.registry import build_providers
 from market.universe import Universe
 
@@ -93,6 +105,16 @@ class LiveMarketDataService:
             state=STATUS_INITIALISING,
             requested_count=len(universe),
         )
+        # The universe's own index, subscribed alongside the constituents but
+        # never one of them (see the module docstring). Only live once the
+        # active provider resolves it: ``_index_ref`` is None otherwise.
+        index_symbol = None if universe.is_index_board else UNIVERSE_INDEX_SYMBOLS.get(universe.key)
+        self._index: Optional[StockMarketData] = (
+            StockMarketData(symbol=index_symbol, sector="", segment=SEGMENT_INDEX)
+            if index_symbol and index_symbol not in self._stocks
+            else None
+        )
+        self._index_ref: Optional[InstrumentRef] = None
 
         self._provider: Optional[MarketDataProvider] = None
         self._refs: List[InstrumentRef] = []
@@ -162,12 +184,27 @@ class LiveMarketDataService:
         """Thread-safe point-in-time copy of the whole market state."""
         with self._lock:
             stocks = [copy(s) for s in self._stocks.values()]
+            index = copy(self._index) if self._index_ref is not None else None
             status = copy(self._status)
             status.missing_previous_close = list(status.missing_previous_close)
             status.unresolved_symbols = list(status.unresolved_symbols)
             status.priced_count = sum(1 for s in stocks if s.has_live_price)
         status.state = self._derive_state(status)
-        return MarketSnapshot(stocks=stocks, status=status, taken_at=datetime.now())
+        return MarketSnapshot(
+            stocks=stocks, status=status, taken_at=datetime.now(), index=index
+        )
+
+    @property
+    def _feed_refs(self) -> List[InstrumentRef]:
+        """What the feed and REST calls ask for: the constituents, then the index if served."""
+        return self._refs + ([self._index_ref] if self._index_ref is not None else [])
+
+    def _entry(self, symbol: str) -> Optional[StockMarketData]:
+        """The state a symbol's data belongs to - a constituent, or the index. Hold the lock."""
+        stock = self._stocks.get(symbol)
+        if stock is None and self._index_ref is not None and symbol == self._index.symbol:
+            return self._index
+        return stock
 
     def _derive_state(self, status: FeedStatus) -> str:
         """Translate raw feed bookkeeping into what the UI should display."""
@@ -393,8 +430,37 @@ class LiveMarketDataService:
             self._status.unresolved_symbols = list(missing)
             self._status.subscribed_count = 0
         self._refs = refs
+        index_ref = self._resolve_index(provider)
+        with self._lock:
+            self._index_ref = index_ref
+            if index_ref is not None:
+                self._index.exchange_token = index_ref.provider_id
 
-        self._fetch_previous_close(provider, refs)
+        self._fetch_previous_close(provider, self._feed_refs)
+
+    def _resolve_index(self, provider: MarketDataProvider) -> Optional[InstrumentRef]:
+        """The universe's own index on this provider, or None when it has none to offer.
+
+        Resolved from the same stored instrument ids as the index board, so no
+        extra download. A provider without index support (Groww) reports it as
+        missing; that costs the board its points, never its constituents.
+        """
+        if self._index is None:
+            return None
+        symbol = self._index.symbol
+        try:
+            resolved, _ = provider.resolve_instruments([symbol], segment=SEGMENT_INDEX)
+        except Exception as e:
+            logger.info("%s could not resolve the %s index: %s", provider.label, symbol, e)
+            return None
+        ref = resolved.get(symbol)
+        if ref is None:
+            logger.info(
+                "%s does not serve the %s index - sector impact stays in %% of the index",
+                provider.label,
+                symbol,
+            )
+        return ref
 
     def _fetch_previous_close(
         self, provider: MarketDataProvider, refs: List[InstrumentRef]
@@ -420,16 +486,19 @@ class LiveMarketDataService:
         missing = []
         with self._lock:
             for ref in refs:
-                stock = self._stocks.get(ref.symbol)
-                if stock is None:
+                entry = self._entry(ref.symbol)
+                if entry is None:
                     continue
                 close = closes.get(ref.symbol)
                 if close and close > 0:
-                    stock.previous_close = close
-                elif stock.previous_close is None:
+                    entry.previous_close = close
+                elif entry.previous_close is None and entry is not self._index:
+                    # The index is not a constituent: without its close the
+                    # board loses its points and says so, not a data gap.
                     missing.append(ref.symbol)
             self._status.missing_previous_close = missing
-            self._status.previous_close_source = source if closes else ""
+            stock_closes = any(symbol in self._stocks for symbol in closes)
+            self._status.previous_close_source = source if stock_closes else ""
         self._prev_close_fetched_at = time.monotonic()
         if missing:
             logger.warning(
@@ -486,7 +555,7 @@ class LiveMarketDataService:
             return
 
         try:
-            self._fetch_previous_close(self._provider, self._refs)
+            self._fetch_previous_close(self._provider, self._feed_refs)
         except Exception as e:
             logger.warning("Previous-close refresh failed: %s", e)
             self._prev_close_fetched_at = time.monotonic()
@@ -561,9 +630,10 @@ class LiveMarketDataService:
                 with self._lock:
                     self._status.subscribed_count = len(self._refs)
                 logger.info(
-                    "%s feed subscribed to %d instruments",
+                    "%s feed subscribed to %d instruments%s",
                     self._provider.label,
                     len(self._refs),
+                    " plus the index" if self._index_ref is not None else "",
                 )
                 # Connected, but not yet delivering. _recovery_attempts is
                 # cleared by the first real tick, not here, so a socket that
@@ -591,7 +661,7 @@ class LiveMarketDataService:
         logger.info("Connecting to the %s live feed ...", self._provider.label)
         self._connect_thread = threading.Thread(
             target=self._connect_worker,
-            args=(self._provider, list(self._refs)),
+            args=(self._provider, self._feed_refs),
             name=f"live-feed-connect-{self.universe.key}",
             daemon=True,
         )
@@ -694,8 +764,9 @@ class LiveMarketDataService:
     def _poll_rest(self) -> bool:
         if self._provider is None or not self._refs:
             return False
+        refs = self._feed_refs
         try:
-            prices = self._provider.get_ltp_snapshot(self._refs)
+            prices = self._provider.get_ltp_snapshot(refs)
         except Exception as e:
             logger.warning("REST price poll failed: %s", e)
             return False
@@ -705,7 +776,7 @@ class LiveMarketDataService:
         # prices we just fetched.
         if self._day_bars_supported:
             try:
-                self._apply_day_bars(self._provider.get_day_bars(self._refs))
+                self._apply_day_bars(self._provider.get_day_bars(refs))
             except Exception as e:
                 logger.debug("REST day-bar poll failed (non-fatal): %s", e)
 
@@ -719,7 +790,7 @@ class LiveMarketDataService:
         applied = 0
         with self._lock:
             for symbol, price in prices.items():
-                stock = self._stocks.get(symbol)
+                stock = self._entry(symbol)
                 if stock is None or not price or price <= 0:
                     continue
                 stock.ltp = float(price)
@@ -743,7 +814,7 @@ class LiveMarketDataService:
             return
         with self._lock:
             for symbol, bar in bars.items():
-                stock = self._stocks.get(symbol)
+                stock = self._entry(symbol)
                 if stock is None or bar is None:
                     continue
                 if bar.open:
@@ -762,7 +833,7 @@ class LiveMarketDataService:
         filled = []
         with self._lock:
             for symbol, close in closes.items():
-                stock = self._stocks.get(symbol)
+                stock = self._entry(symbol)
                 if stock is None or not close or close <= 0:
                     continue
                 if stock.previous_close is None:

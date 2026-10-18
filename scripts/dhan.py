@@ -4,6 +4,7 @@
     python scripts/dhan.py --dry-run          # fetch and show the movers, write nothing
     python scripts/dhan.py --master           # refresh the reference data first, then the movers
     python scripts/dhan.py --master-only      # only the reference data
+    python scripts/dhan.py --journal          # only the trade journal: your fills and ledger
 
 Jobs, in the order they run:
 
@@ -12,6 +13,7 @@ Jobs, in the order they run:
              MCX futures contracts   -> mcx_futures         (jobs/mcx_futures.py)
              free-float weights      -> index_weights       (jobs/index_weights.py)
   movers     gainers/losers close    -> dhan_movers, dhan_movers_breadth  (jobs/dhan_movers.py)
+  --journal  your fills and ledger   -> dhan_fills, dhan_ledger           (jobs/dhan_journal.py)
 
 Dhan's instrument master (35 MB) is downloaded once and read by both the instrument ids and
 the MCX futures. Run the movers once a day after 16:00 IST (or any time later - one run stores
@@ -20,7 +22,8 @@ or when a symbol stops resolving. The weights and the movers need the Dhan crede
 ``.env``; the instrument master and NSE's lists are public.
 
 A failing job is reported and the next one still runs. Exit code: 0 all ok, 2 something
-partly done, 1 a job failed. Read-only: no orders, no account data.
+partly done, 1 a job failed. Read-only: no orders. Only ``--journal`` reads account data (your
+trade history and ledger); run it after the close, or use the Journal page's "Sync now".
 """
 
 import argparse
@@ -30,7 +33,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from jobs import common  # noqa: E402  (sets up the import path)
-from jobs import dhan_movers  # noqa: E402
+from jobs import dhan_journal, dhan_movers  # noqa: E402
 
 
 def parse_args(argv=None):
@@ -42,7 +45,12 @@ def parse_args(argv=None):
     parser.add_argument("--keep-raw", action="store_true", help="--master: also save Dhan's unedited CSV under data/instruments/")
     parser.add_argument("--use-cached", action="store_true", help="--master: reuse today's saved CSV instead of downloading")
     dhan_movers.add_arguments(parser)
+    dhan_journal.add_arguments(parser)
     args = parser.parse_args(argv)
+    if args.journal and (args.master or args.master_only):
+        parser.error("--journal runs on its own; run --master separately")
+    if args.since and not args.journal:
+        parser.error("--since needs --journal")
     dhan_movers.check_arguments(args, parser)
     args.db = None
     return args
@@ -73,6 +81,8 @@ def master_jobs(args):
 def main(argv=None) -> int:
     args = parse_args(argv)
     common.setup(args.verbose)
+    if args.journal:
+        return common.run_jobs([("Dhan trade journal", lambda: dhan_journal.run(args))])
     plan = master_jobs(args) if args.master or args.master_only else []
     if not args.master_only:
         plan.append(("Dhan movers close", lambda: dhan_movers.run(args)))

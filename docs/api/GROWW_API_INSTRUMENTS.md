@@ -37,8 +37,8 @@ BSE 12,823. By type: CE 63,690, PE 63,702, EQ 12,794, FUT 984, IDX 31.
 | `internal_trading_symbol`, `is_intraday` | | In the file, not in Groww's docs |
 
 **There is no price data at all**: no previous close, open, high, low, 52-week range or market cap.
-Market cap and the 52-week high/low are fields of `get_quote` (one instrument per call, paid data plan;
-[GROWW_API_LIVE_DATA.md](GROWW_API_LIVE_DATA.md)).
+The 52-week high/low are fields of `get_quote` (one instrument per call, paid data plan). So is
+`market_cap` on paper, but it comes back `None` (2026-10-18; [GROWW_API_LIVE_DATA.md](GROWW_API_LIVE_DATA.md)).
 
 ## Things to get right (verified 2026-10-17)
 

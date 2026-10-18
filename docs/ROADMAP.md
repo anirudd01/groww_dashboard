@@ -20,7 +20,7 @@ The live board and the drill-down.
 | Screen 1 | Clickable sector tiles, coloured by percentage change |
 | Screen 2 | Constituent table, sorted by live change, colour graded |
 | Previous close | From each broker's OHLC endpoint — never inferred from a tick |
-| Aggregation | Equal-weighted mean of constituent percentage changes |
+| Aggregation | Equal-weighted mean of constituent percentage changes (Phase 1; market-cap weighted only since 2026-10-18, see Phase 2) |
 
 ## Phase 2 — complete
 
@@ -28,11 +28,12 @@ Breadth and weighting.
 
 | | |
 |---|---|
-| Market-cap weighting | Free-float cap weights from the `index_weights` set in `data/market.db`, switchable in the sidebar against equal weighting |
+| Market-cap weighting | Free-float cap weights from the `index_weights` set in `data/market.db`. The only sector % method since 2026-10-18: the sidebar's Equal / Market-cap switch was removed at the user's request, with its code, config and tests; a sector with no weighted member still falls back to a plain mean and says so |
 | Weights pipeline | `scripts/dhan.py --master` (Dhan `companyinfo`: market cap x (1 - promoter holding)) — run manually, stores `index_weights`, never called at runtime |
 | Breadth | Advancing/declining counts, sectors up vs down, average day-range position |
 | Day range | Open/high/low/volume from Dhan quote packets, with the OHLC endpoint as the REST fallback |
 | Leaders / laggards | Two tables under the heatmap: each advancing sector with its best stock, each declining sector with its worst |
+| Tile weight and order | Every tile shows its weight in the index and its impact on it; tiles ordered by biggest impact (default), largest sector or biggest move, on all four boards (`market/sector_impact.py`). Replaced the alphabetical order (2026-10-18) |
 
 ## Phase 3 — complete
 
@@ -201,6 +202,16 @@ Everything the project stores locally is in the shared `data/market.db`; `.env` 
 | Shared code | `intraday_store.connect(extra_schema=, timeout=)`, `connect_readonly()` and `store_stamp()` are the one way in; the state, reference and Dhan movers modules and `gap_fills` all use them |
 | Safety | `tests/__init__.py` points `PULSE_STATE_DB` at a throwaway file, so no test touches the real database. Tests that check the stored data open it read-only, or copy the closes out of it into a temporary one |
 | Consequence | A fresh checkout has an empty database and runs the fetch scripts (and `kite_login.py`) once. The file holds live tokens, the Dhan history and the confirmed moves: back it up, never share it |
+
+## Trade journal (Dhan) — built (2026-10-18)
+
+- `market/dhan_journal.py`, `scripts/dhan.py --journal` and the **Trade Journal** page: Dhan's trade history and
+  ledger into `data/market.db`, round trips after charges, statistics, daily P&L against a loss limit, splits by contract, side, product and time.
+- Checked against the ledger: NSE F&O to Rs 1.51, MCX to Rs 5.46 ([`DHAN_JOURNAL.md`](DHAN_JOURNAL.md)).
+- Next candidates:
+  - the morning protective-order job, dry run first;
+  - checking what the F&O ledger line does for options, the first time one is traded;
+  - an import of Groww's Excel exports, if Groww trades should join the journal.
 
 ## Planned
 

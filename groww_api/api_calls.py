@@ -8,6 +8,46 @@ from groww_api.client import GrowwAPIClient
 logger = logging.getLogger(__name__)
 
 
+def batched_ltp(session, exchange: str, segment: str, symbols: List[str]) -> Dict[str, float]:
+    """LTP by trading symbol via the SDK ``session.get_ltp``, 50 ``EXCHANGE_SYMBOL`` keys per call.
+
+    Symbols without a positive price are left out, so the caller treats them as unpriced
+    rather than worth zero. One unknown symbol makes Groww refuse the whole batch ("Invalid
+    trading symbol"), so that batch is retried one symbol at a time. Any other failure (no
+    data plan, an outage) fails every call the same way and stops the fetch.
+    """
+    prefix = f"{exchange}_"
+    keys = [s.strip() if s.strip().startswith(prefix) else prefix + s.strip() for s in symbols]
+
+    def fetch(batch):
+        return session.get_ltp(
+            segment=segment,
+            exchange_trading_symbols=batch if len(batch) > 1 else batch[0],
+            timeout=10,
+        ) or {}
+
+    result: Dict[str, float] = {}
+    for i in range(0, len(keys), 50):
+        batch = tuple(keys[i : i + 50])
+        try:
+            resp = fetch(batch)
+        except Exception as e:
+            if len(batch) == 1 or "invalid trading symbol" not in str(e).lower():
+                logger.warning("%s %s LTP failed, so those symbols are unpriced: %s", exchange, segment, e)
+                break
+            resp = {}
+            for key in batch:
+                try:
+                    resp.update(fetch((key,)))
+                except Exception as e:
+                    logger.warning("No LTP for %s: %s", key, e)
+        for key, value in resp.items():
+            if value and float(value) > 0:
+                result[key[len(prefix):] if key.startswith(prefix) else key] = float(value)
+    logger.info("Fetched LTP for %d/%d %s %s symbols", len(result), len(symbols), exchange, segment)
+    return result
+
+
 class GrowwAPIService:
     """
     Wraps all API calls to Groww Trading API.
@@ -100,81 +140,20 @@ class GrowwAPIService:
         )
 
     def get_ltp_for_nse_fno(self, symbols: List[str]) -> Dict[str, float]:
-        """
-        Fetch LTP for NSE FnO contracts.
-        Uses get_ltp() API with NSE_ prefix and FNO segment.
-        """
-        if not symbols:
-            return {}
-
-        result = {}
-        try:
-            from growwapi import GrowwAPI
-
-            # Format symbols with NSE_ prefix for the API
-            formatted_symbols = []
-            for s in symbols:
-                formatted_s = s.strip()
-                if not formatted_s.startswith("NSE_"):
-                    formatted_s = f"NSE_{formatted_s}"
-                formatted_symbols.append(formatted_s)
-
-            # Batch the calls (50 symbols max per call)
-            for i in range(0, len(formatted_symbols), 50):
-                batch = tuple(formatted_symbols[i : i + 50])
-
-                try:
-                    logger.debug(f"Fetching LTP for {len(batch)} NSE FnO symbols...")
-                    resp = self.client.session.get_ltp(
-                        segment=GrowwAPI.SEGMENT_FNO,
-                        exchange_trading_symbols=batch if len(batch) > 1 else batch[0],
-                    )
-
-                    if isinstance(resp, dict):
-                        for k, v in resp.items():
-                            symbol_key = k.replace("NSE_", "") if k.startswith("NSE_") else k
-                            result[symbol_key] = float(v) if v else 0.0
-
-                except Exception as e:
-                    logger.warning(f"Failed to fetch NSE FnO LTP batch: {e}")
-                    continue
-
-            logger.info(f"Fetched LTP for {len(result)}/{len(symbols)} NSE FnO positions")
-
-        except Exception as e:
-            logger.warning(f"NSE FnO LTP fetch error: {e}")
-
-        return result
-
-    def get_ltp_for_mcx(self, symbols: List[str]) -> Dict[str, float]:
-        """
-        Fetch LTP for MCX commodity contracts, one ``get_quote`` call each.
-
-        Groww's docs name only CASH and FNO for the batched ``get_ltp``, so MCX stays on the
-        per-contract quote until a batched COMMODITY call has been seen to work (that needs the
-        paid data plan; see docs/api/GROWW_API_LIVE_DATA.md). Stops at the first failure: without
-        the plan every call is refused the same way.
-        """
-        result: Dict[str, float] = {}
+        """LTP for NSE F&O contracts, keyed by trading symbol."""
         from growwapi import GrowwAPI
 
-        for symbol in symbols:
-            try:
-                quote = self.client.session.get_quote(
-                    exchange=GrowwAPI.EXCHANGE_MCX,
-                    segment=GrowwAPI.SEGMENT_COMMODITY,
-                    trading_symbol=symbol.strip(),
-                    timeout=10,
-                )
-            except Exception as e:
-                logger.warning("MCX quote failed for %s, so MCX positions are unpriced: %s", symbol, e)
-                break
-            ltp = self._extract_ltp_from_quote(quote)
-            if ltp and ltp > 0:
-                result[symbol] = ltp
+        return batched_ltp(self.client.session, GrowwAPI.EXCHANGE_NSE, GrowwAPI.SEGMENT_FNO, symbols)
 
-        logger.info("Fetched LTP for %d/%d MCX positions", len(result), len(symbols))
-        return result
+    def get_ltp_for_mcx(self, symbols: List[str]) -> Dict[str, float]:
+        """LTP for MCX contracts, keyed by trading symbol.
+
+        Batched ``get_ltp`` with ``MCX_`` keys and segment COMMODITY works on the paid data plan
+        (seen 2026-10-18), although Groww's docs only show CASH and FNO examples.
+        """
+        from growwapi import GrowwAPI
+
+        return batched_ltp(self.client.session, GrowwAPI.EXCHANGE_MCX, GrowwAPI.SEGMENT_COMMODITY, symbols)
 
     def get_greeks(self, exchange: str, underlying: str, trading_symbol: str, expiry: str,
                    timeout: float = 10) -> Dict[str, Any]:
@@ -204,26 +183,6 @@ class GrowwAPIService:
         if "error" in outcome:
             raise outcome["error"]
         return (outcome.get("resp") or {}).get("greeks") or {}
-
-    def _extract_ltp_from_quote(self, quote) -> Optional[float]:
-        """
-        Extract LTP value from get_quote() response.
-        Groww documents the field as ``last_price``; the others are kept as harmless fallbacks.
-        """
-        if not quote:
-            return None
-
-        if isinstance(quote, (int, float)):
-            return float(quote)
-
-        if isinstance(quote, dict):
-            for field in ["last_price", "ltp", "lastPrice", "price", "LTP"]:
-                if field in quote:
-                    val = quote[field]
-                    if val and val > 0:
-                        return float(val)
-
-        return None
 
     # ------------------------------------------------------------------
     # NSE CASH (equity) helpers - used by the live sector heatmap
