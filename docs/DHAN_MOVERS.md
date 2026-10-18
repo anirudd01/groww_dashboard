@@ -40,11 +40,16 @@ open; off after the close), and "Refresh now", which also reconnects to Dhan.
 ## What the endpoint does (checked live 2026-10-02, after the close)
 
 The request is `{exchangeSegment, instrument[], category, limit, universe | expiry}`; the schema
-is in [`api/dhan-openapi-2026-10-01.json`](api/dhan-openapi-2026-10-01.json).
+is in [`api/dhan-openapi-2026-10-01.json`](api/dhan-openapi-2026-10-01.json), and since the Dhan
+docs export of 2026-10-09 also in the published docs (Market Analytics → Market Movers, plus Annexure
+tables; request parameters only, no response schema).
 
 - **Stocks**: `NSE_EQ` / `EQUITY`, category `PRICE_GAINERS` or `PRICE_LOSERS`, and a `universe`.
 - **Derivatives**: `NSE_FNO` with `FUTSTK`, `FUTIDX`, `OPTSTK` or `OPTIDX`; categories
   `TOP_VOLUME`, `OI_GAINERS`, `OI_LOSERS`, and `HIGHEST_OI` (options only).
+- The published docs also list the segments `NSE_COMM` and `MCX_COMM` with `FUTCOM` (commodity
+  futures) and `OPTFUT` (options on commodity futures), and say every `instrument` in one request
+  must be from one group (options, futures or equity). Not tried here.
 - **`limit` is 1 to 100, and that is a hard cap.** `limit=101` is rejected (HTTP 400), and an
   `offset` or `page` field is silently ignored: asking for page 2 returns the same 100 rows. The
   request schema has no paging field. So a universe with more than 100 gainers or losers (Nifty 500,
@@ -68,7 +73,7 @@ is in [`api/dhan-openapi-2026-10-01.json`](api/dhan-openapi-2026-10-01.json).
 
 ### Universes
 
-The request schema lists **58** `universe` values. Tried each one on 2026-10-02:
+The Swagger request schema lists **58** `universe` values. Tried each one on 2026-10-02:
 
 | Result | Count | Which |
 |---|---|---|
@@ -84,6 +89,12 @@ are simply not listed (`FINNIFTY`, `NIFTY_MIDCAP`, `NIFTY_SMALLCAP_50`, `NIFTY_M
 `NIFTY_MIDCAP_150`, `NIFTY_SMALLCAP_250`, `NIFTY_MICROCAP_250`, `NIFTY_MNC`,
 `NIFTY_SERVICE_SECTOR`, `NIFTY_CUNSUMPTION`). The 25 BSE ones would need the code to send
 `exchangeSegment: BSE_EQ` for them, which it deliberately does not.
+
+The Dhan docs export of 2026-10-09 publishes a shorter list: **33** values, NSE only (no `SENSEX`
+or `BSE_*`). It spells three differently from the ones tested above: `NIFTY_MIDCAP_50` (tested:
+`NIFTY_MID_CAP_50`), `NIFTY_SERVICES_SECTOR` (tested: `NIFTY_SERVICE_SECTOR`) and
+`NIFTY_CONSUMPTION` (tested: `NIFTY_CUNSUMPTION`). Which spelling the server accepts now has not
+been re-checked; none of the three is in `UNIVERSES`. The other 30 match.
 
 A universe is a list of **stocks**. There is no index level (the Nifty Bank value, its open or
 close) in this endpoint. Those come from the quote endpoint, see below.
@@ -213,8 +224,9 @@ what the live heat map reads.
 - **Not a full option chain.** An options ranking holds at most 100 contracts, so a strike missing
   from the OI chart is outside the ranking, not zero. The page says so, and its call/put totals
   and ratio cover only the contracts shown.
-- **Not in Dhan's published docs.** The endpoint is in its Swagger spec only, so it may change.
-  See [`API_ENDPOINT_AUDIT.md`](API_ENDPOINT_AUDIT.md).
+- **Not in Dhan's release notes.** The endpoint was in the Swagger spec only until the 2026-10-09
+  docs export added it (request parameters, no response schema), and no release note announces it,
+  so it may change. See [`API_ENDPOINT_AUDIT.md`](API_ENDPOINT_AUDIT.md).
 
 ## Code
 

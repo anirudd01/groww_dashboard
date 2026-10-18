@@ -96,15 +96,16 @@ Scores run from 1 (poor) to 5 (best), for the uses in this repo.
   - Data API plan active on this account since 2026-10-18 (valid to 2026-11-19) ✅.
   - The public instrument master needs no login ✅.
   - It's the default live provider for the heatmap.
-  - It has a sandbox (`sandbox.dhan.co`) for orders, portfolio, funds and historical candles, but not live quotes or the socket 📄.
+  - It has a sandbox (`sandbox.dhan.co`) for orders, portfolio, funds and historical candles, but not live quotes or the socket 📄. Its token comes from Dhan Cloud (`cloud.dhanhq.co`, formerly the developer portal `developer.dhanhq.co`) 📄.
 - **Weaknesses:**
   - **The access token lasts 24 hours.** The *API key and secret* last 12 months, but a login made with them needs a browser and still produces a 24-hour token. The TOTP route below makes a new 24-hour token with no browser.
   - Headless login needs TOTP. The **Setup TOTP** option couldn't be clicked on 2026-09-25, but TOTP was set up and verified working on 2026-09-27. See [Dhan token generation](#dhan-token-generation-tested-2026-09-27).
   - `GET /v2/RenewToken` claims to extend a *still-valid* token by 24 hours 📄. That would allow a daily renew cron without TOTP, but it hasn't been tested.
-  - The vendor docs contradict themselves: the two rate-limit tables swap the 7,000 and 100,000 daily limits.
+  - Daily limits: since the 2026-10-09 docs export both rate-limit tables agree on **Order APIs 100,000 a day and Data APIs 7,000 a day** (5 req/s) 📄. Earlier exports swapped the two, and the v2.2 release note still says 1,00,000 daily Data API requests, so treat 7,000 as the safe figure. Option chain: 1 request per 3 s *and* at most 10 unique underlyings per 8 s 📄.
   - Quotes are limited to 1 req/s per client id ✅. Daily candles are one symbol per call ✅.
 - **1-minute history** ✅ 2026-09-27, [log](PROVIDER_COMPARISON_LOG.md):
-  - **At most 90 days per call** (91 returns `400`), about 1 s per call.
+  - **At most 90 days per call** (91 returns `400`), about 1 s per call. Documented since the 2026-10-09 export 📄.
+  - Intervals are 1, 5, 15, **25** and 60 minutes; the 2026-10-09 export replaced 30 with 25 📄.
   - Same bar times as Kite (09:15–15:14).
   - Against Kite: opens match on 61% of bars, closes on 70%, volumes on only 12%.
   - Its first bar opened at the official open on 25 of 30 stock-days (Kite: 30/30).

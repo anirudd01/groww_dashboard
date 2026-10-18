@@ -135,7 +135,7 @@ pulse_tester/
 │   ├── constants.py               # Segments, exchanges, month maps
 │   └── __init__.py
 │
-├── strategies/                   # Standalone Groww Cloud exit strategy scripts
+├── strategies/                   # Standalone order scripts: Groww Cloud exit strategies, Dhan gold band (dhan_gold_band_strategy.py)
 │   ├── groww_cloud_equity_15pct_exit_strategy.py
 │   └── groww_cloud_commodity_15pct_exit_strategy.py
 │
@@ -174,6 +174,7 @@ pulse_tester/
 │   ├── SECTOR_HEATMAP.md          # Sector heatmap design notes
 │   ├── FNO_MOVERS.md              # F&O movers: provider comparison, storage choice
 │   ├── DHAN_JOURNAL.md            # Trade journal: Dhan statement APIs, round trips, daily P&L, checks against the ledger
+│   ├── DHAN_GOLD_STRATEGY.md      # strategies/dhan_gold_band_strategy.py: MCX GOLD ±50 band orders, lot sizing, no stop loss
 │   ├── DHAN_MOVERS.md             # Dhan Movers page: what marketmovers returns, quirks, limits
 │   ├── DHAN_API_EXPLORER.md       # Raw marketmovers explorer; why it cannot replace NSE's constituent lists
 │   ├── MCX_FUTURES.md             # MCX Futures page: provider choice, Dhan/Kite/INDmoney fallback, contract list, quirks
@@ -414,8 +415,10 @@ Reference for the Dhan Movers page and `scripts/dhan.py`. Full detail is in
 **Scope: NSE only. BSE universes are out of scope.** Nothing here is meant to use the BSE segment
 or any BSE universe (`SENSEX` and the `BSE_*` ones). Do not add them unless that changes.
 
-Dhan's `/v2/data/marketmovers` takes a `universe`, the list of stocks to rank. Its schema lists 58;
-each was tried on 2026-10-02 (a Dhan token and the Data API plan are needed):
+Dhan's `/v2/data/marketmovers` takes a `universe`, the list of stocks to rank. Its Swagger schema lists 58;
+each was tried on 2026-10-02 (a Dhan token and the Data API plan are needed). Dhan's published docs
+(export of 2026-10-09) list only the 33 NSE ones, and spell three of them differently
+(`NIFTY_MIDCAP_50`, `NIFTY_SERVICES_SECTOR`, `NIFTY_CONSUMPTION`); see [`docs/DHAN_MOVERS.md`](docs/DHAN_MOVERS.md#universes):
 
 | Result | Count | Which |
 |---|---|---|

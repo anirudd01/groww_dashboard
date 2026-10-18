@@ -87,8 +87,8 @@ The F&O pages use **Kite only**. They ignore the heatmap pages' provider setting
 
 ## Is there a gainers/losers API?
 
-**Only Dhan has one**, found in its Swagger spec on 2026-10-01 (it is not in the vendor
-docs export or release notes): `POST /v2/data/marketmovers`, with `PRICE_GAINERS` /
+**Only Dhan has one**, found in its Swagger spec on 2026-10-01 (then not in the vendor
+docs export; the 2026-10-09 export documents it, the release notes still do not): `POST /v2/data/marketmovers`, with `PRICE_GAINERS` /
 `PRICE_LOSERS` over a universe such as `FNO_STOCKS` or `NIFTY_50`. Tried live: 0.4 s,
 correct-looking. See [`API_ENDPOINT_AUDIT.md`](API_ENDPOINT_AUDIT.md); the "Dhan Movers" page ([`DHAN_MOVERS.md`](DHAN_MOVERS.md)) is built on it. It ranks *today against the
 previous close* only, so it could serve the "By day" card for today, but not the multi-day

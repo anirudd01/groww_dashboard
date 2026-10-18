@@ -506,7 +506,7 @@ No broker's instrument master or quote feed carries them: Dhan's detailed
 scrip master (32 columns) and Groww's instrument master (21 columns) both carry
 ISIN, lot size, margins and circuit limits, but **no market capitalisation and no
 share count**. Dhan's Data API does have them, per stock: `POST
-/v2/data/companyinfo` (in the 2026-10-01 Swagger spec, not the public docs)
+/v2/data/companyinfo` (found in the 2026-10-01 Swagger spec; in the public docs since the 2026-10-09 export)
 returns `MARKET_CAP` (Rs crore) in its `CO` section and `PROMOTER_HOLDING` (%) in
 `SHP`, in about 0.4 s a call.
 

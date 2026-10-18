@@ -1,8 +1,9 @@
 """Dhan market movers: request building and parsing for ``POST /v2/data/marketmovers``.
 
 Dhan ranks instruments server-side, so one call returns the top N of a whole universe.
-The endpoint is in Dhan's Swagger spec but not its docs (docs/API_ENDPOINT_AUDIT.md). What
-it does, checked live on 2026-10-02:
+The endpoint is in Dhan's Swagger spec and, since 2026-10-09, its docs (Market Analytics); the
+documented enums match ``KINDS``, ``CATEGORIES`` and ``UNIVERSES`` below. What it does, checked
+live on 2026-10-02:
 
 * **Stocks** (``NSE_EQ``/``EQUITY``): ``PRICE_GAINERS`` or ``PRICE_LOSERS`` within a
   ``universe`` (F&O stocks, Nifty 50, a sector index, ...). ``limit`` is 1-100.

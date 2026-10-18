@@ -72,10 +72,10 @@ SEGMENT_CODES = {
 }
 
 #: Universe segment -> Dhan ``instrument`` type, which the historical-candle
-#: endpoint requires alongside the exchange segment. Dhan's documented table
-#: for that endpoint lists neither IDX_I nor INDEX, but both are what the
-#: instrument master uses for index rows; if Dhan rejects them the call simply
-#: returns nothing and the index board keeps whatever previous close it had.
+#: endpoint requires alongside the exchange segment. The docs list IDX_I among
+#: that endpoint's segments and INDEX in the Instrument annexure (and in the
+#: Swagger enum); if Dhan rejects them the call simply returns nothing and the
+#: index board keeps whatever previous close it had.
 INSTRUMENT_CODES = {
     SEGMENT_CASH: "EQUITY",
     SEGMENT_INDEX: "INDEX",
@@ -173,6 +173,11 @@ MIN_HISTORY_INTERVAL = 0.25
 #: Only the last two sessions are used; the rest is slack for weekends and
 #: holiday clusters, which no amount of Diwali can stretch past this.
 HISTORY_LOOKBACK_DAYS = 20
+
+#: Minute intervals ``/charts/intraday`` accepts (Dhan docs 2026-10-09: 1, 5, 15, 25, 60 - not 30).
+INTRADAY_INTERVALS = (1, 5, 15, 25, 60)
+#: Dhan serves at most this many days of minute candles in one ``/charts/intraday`` call.
+INTRADAY_MAX_DAYS = 90
 
 #: Give up on the whole universe after this many consecutive symbols yield
 #: nothing. One empty response is a thin instrument; five in a row is a
@@ -970,10 +975,19 @@ class DhanProvider(MarketDataProvider):
         ``/charts/historical`` for daily candles. Dhan returns parallel arrays: ``open``,
         ``high``, ``low``, ``close``, ``volume``, ``timestamp`` (epoch seconds) and
         ``open_interest``. ``end`` is exclusive.
+
+        Raises ``ValueError`` for a minute interval Dhan does not serve (there is no 30).
+        An intraday window longer than Dhan's per-call maximum is cut to its most recent
+        ``INTRADAY_MAX_DAYS``.
         """
         if interval is None:
             window = {"fromDate": start.date().isoformat(), "toDate": end.date().isoformat(), "oi": True}
             return self._post_historical(ref, window)
+        if interval not in INTRADAY_INTERVALS:
+            raise ValueError(
+                f"Dhan has no {interval}-minute candles (use {', '.join(map(str, INTRADAY_INTERVALS))})"
+            )
+        start = max(start, end - timedelta(days=INTRADAY_MAX_DAYS))
         window = {
             "interval": str(interval),
             "fromDate": start.strftime("%Y-%m-%d %H:%M:%S"),
@@ -985,7 +999,7 @@ class DhanProvider(MarketDataProvider):
     def market_movers(self, body: dict) -> dict:
         """``POST /data/marketmovers``: Dhan's own ranking of gainers, losers, volume and OI.
 
-        Not in Dhan's published docs; found in its Swagger spec (docs/API_ENDPOINT_AUDIT.md).
+        Documented since Dhan's 2026-10-09 docs (Market Analytics); first found in its Swagger spec.
         Returns the decoded body and raises ``DhanDataError`` (a ``RuntimeError``) carrying Dhan's
         code and message when the call fails. Goes through the shared quote throttle: the rate limit is per client
         id, and Dhan does not say which bucket this endpoint falls in.
