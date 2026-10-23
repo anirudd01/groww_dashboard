@@ -35,7 +35,7 @@ import io
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from market import intraday_store, reference_store, state_store
@@ -51,6 +51,12 @@ CONFIRM_SCRIPT = "scripts/confirm_fno_move.py"
 UPDATE_SCRIPT = "scripts/kite.py history"
 
 CLOSE_COLUMNS = ("date", "symbol", "open", "high", "low", "close", "volume")
+
+#: Calendar days of history the in-memory pages load (``load_closes(since=dashboard_since())``).
+#: ``daily_bars`` holds years (the drawdown page reads it with SQL), but these pages hold every row
+#: they read as Python dicts, and their longest window is 100 trading days. 400 days (~270 trading
+#: days) also covers their "All" views; reading 5 years would make every one of them ~5x slower.
+DASHBOARD_LOOKBACK_DAYS = 400
 
 
 # -- universe ----------------------------------------------------------------
@@ -112,6 +118,19 @@ def build_universe(nfo_csv: str, nse_csv: str) -> Tuple[Dict[str, str], List[str
     tokens = {name: equities[name] for name in underlyings if name in equities}
     unmatched = sorted(underlyings - set(tokens))
     return tokens, unmatched
+
+
+def extra_history_tokens(nse_csv: str, fno_tokens: Dict[str, str],
+                         members: Iterable[str]) -> Tuple[Dict[str, str], List[str]]:
+    """Index members with no F&O contract, to store daily bars for: ``({symbol: token}, not found)``.
+
+    The drawdown page covers the Nifty 100, and a few of its members (new listings, demerged
+    halves) have no futures. They get daily bars like any F&O stock, but stay out of
+    ``fno_universe``, so the F&O pages never list them.
+    """
+    equities = nse_equity_tokens(nse_csv)
+    wanted = sorted(set(members) - set(fno_tokens))
+    return {s: equities[s] for s in wanted if s in equities}, [s for s in wanted if s not in equities]
 
 
 def save_universe(tokens: Dict[str, str], unmatched: List[str], path: Optional[str] = None) -> None:
@@ -177,11 +196,17 @@ def closes_stamp(path: Optional[str] = None) -> float:
     return intraday_store.store_stamp(path or state_store.db_path())
 
 
-def load_closes(path: Optional[str] = None) -> Dict[Tuple[str, str], dict]:
-    """``{(date, symbol): row}`` of every stored daily bar. No database -> empty.
+def dashboard_since(today: Optional[date] = None) -> str:
+    """First day the in-memory pages load: ``DASHBOARD_LOOKBACK_DAYS`` before ``today``."""
+    return ((today or date.today()) - timedelta(days=DASHBOARD_LOOKBACK_DAYS)).isoformat()
+
+
+def load_closes(path: Optional[str] = None, since: Optional[str] = None) -> Dict[Tuple[str, str], dict]:
+    """``{(date, symbol): row}`` of the stored daily bars from ``since`` on (all of them if None).
 
     A row is ``{date, symbol, open, high, low, close, volume}`` with every value as text, the shape the
     callers have always had. ``path`` is a database file, for tests; the default is the shared one.
+    Pages pass ``since=dashboard_since()``: the table holds years, and these rows all sit in memory.
     """
     rows: Dict[Tuple[str, str], dict] = {}
     conn = intraday_store.connect_readonly(path or state_store.db_path())
@@ -189,7 +214,8 @@ def load_closes(path: Optional[str] = None) -> Dict[Tuple[str, str], dict]:
         return rows
     try:
         for day, symbol, *figures in conn.execute(
-                "SELECT date, symbol, open, high, low, close, volume FROM daily_bars ORDER BY date, symbol"):
+                "SELECT date, symbol, open, high, low, close, volume FROM daily_bars WHERE date >= ? "
+                "ORDER BY date, symbol", (since or "",)):
             if day and symbol and _number(figures[3]):
                 rows[(day, symbol)] = {"date": day, "symbol": symbol,
                                        **{name: str(value) for name, value in zip(CLOSE_COLUMNS[2:], figures)}}
@@ -522,11 +548,19 @@ def suspected_corporate_actions(
                 continue
             if confirmed and (move.symbol, move.date) in confirmed:
                 continue
-            ratio = move.previous_close / move.close
-            nearest = min(SPLIT_RATIOS, key=lambda candidate: abs(ratio / candidate - 1))
-            if abs(ratio / nearest - 1) <= SPLIT_TOLERANCE:
-                found.append(CorporateAction(move.symbol, move.date, move.previous_close, move.close, nearest))
+            ratio = split_ratio(move.previous_close, move.close)
+            if ratio:
+                found.append(CorporateAction(move.symbol, move.date, move.previous_close, move.close, ratio))
     return sorted(found, key=lambda a: (a.date, a.symbol), reverse=True)
+
+
+def split_ratio(previous_close: float, close: float) -> Optional[float]:
+    """The split or bonus ratio a one-day fall matches, or None (a fall under ``MIN_SPLIT_DROP_PCT``)."""
+    if not previous_close or not close or close > previous_close * (1 - MIN_SPLIT_DROP_PCT / 100):
+        return None
+    ratio = previous_close / close
+    nearest = min(SPLIT_RATIOS, key=lambda candidate: abs(ratio / candidate - 1))
+    return nearest if abs(ratio / nearest - 1) <= SPLIT_TOLERANCE else None
 
 
 def drop_suspected_moves(moves: List[Move], actions: List[CorporateAction]) -> List[Move]:

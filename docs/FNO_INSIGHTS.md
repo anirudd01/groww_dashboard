@@ -62,8 +62,9 @@ For each stored day:
 | New highs / lows | Stocks closing above / below **every close** of the previous 20 (or 50) trading days. Closes, not intraday highs, as the file stores closes |
 | Breadth label | % above the 50-day: **Broad strength** ≥ 60%, **Broad weakness** ≤ 40%, otherwise **Mixed** |
 
-The averages are computed on the full history. **Show (1M / 3M / All)** only sets
-how much the charts display. The 50-day measure needs 50 stored days, so it starts
+The averages are computed on the loaded history: the last 400 calendar days (the table holds 5 years since
+2026-10-23, but these pages read only that window; see [FNO_MOVERS.md](FNO_MOVERS.md#where-the-closes-are-stored)).
+**Show (1M / 3M / All)** only sets how much the charts display, and "All" is those 400 days. The 50-day measure needs 50 stored days, so it starts
 in late May.
 
 *On 2026-10-01 (all F&O):* only 10% of stocks were above their 50-day average and

@@ -12,6 +12,7 @@ from market.fno_movers import (
     UPDATE_SCRIPT,
     closes_available,
     closes_stamp,
+    dashboard_since,
     load_closes,
     load_confirmed_moves,
     load_universe,
@@ -28,7 +29,7 @@ STALE_AFTER_DAYS = 4
 @st.cache_data(ttl="10m", show_spinner=False)
 def _panels(stamp: float, hide_suspected: bool):
     """The panels, rebuilt when ``stamp`` (when the database last changed) moves on."""
-    rows = load_closes()
+    rows = load_closes(since=dashboard_since())
     actions = suspected_corporate_actions(rows, load_confirmed_moves())
     pairs = [(a.symbol, a.date) for a in actions] if hide_suspected else []
     return {

@@ -36,7 +36,7 @@ INDmoney's docs are wrong in several places (see its section), so treat its 📄
 | **End-of-day opens and closes for many stocks** (cron → store) | **INDmoney** | Kite | Groww (its daily candles have no `open`) | INDmoney matched Kite on 6,717 of 6,720 stock-days and was 7–8× faster ✅ 2026-09-25, [log](PROVIDER_COMPARISON_LOG.md) |
 | **Today's snapshot for up to 1,000 stocks in one call** | Kite, Dhan, INDmoney (all 1,000 per call) | — | Groww (50 per call) | ✅ 2026-09-25, [`FNO_MOVERS.md`](FNO_MOVERS.md) |
 | **1-minute history** (backfill of intraday bars) | **Kite** | Dhan (90 days per call) | INDmoney | Dhan: 90 days per call, but its prices differ from Kite's on 20–40% of bars and its volume on 88% ✅. Kite: 60 days per call and one call per stock. Its bars reproduce the official daily open, high and low ✅. Groww: 30 days per call, and its opens differ from Kite's on half the bars ✅. INDmoney: 7 days per call, volumes that don't match anyone, and invented flat bars after 15:15 ✅. 2026-09-27, [log](PROVIDER_COMPARISON_LOG.md), store in [`INTRADAY_HISTORY.md`](INTRADAY_HISTORY.md) |
-| **Historical backfill** (months or years of daily candles) | **Kite** (its history is corporate-action adjusted ✅) | Dhan | — | Kite: any range, 3 req/s, continuous futures ✅. Dhan: 5 years intraday 📄. INDmoney: 5 symbols per call, but one call covers at most 1 year of daily data 📄 |
+| **Historical backfill** (months or years of daily candles) | **Kite** (its history is corporate-action adjusted ✅) | Dhan | — | Kite: up to 2000 days per call (5 years in one call per stock; 7 years returns 400) ✅ 2026-10-23, 3 req/s, continuous futures ✅. Kite adjusts for splits, bonuses and large dividends, not demergers; Dhan's candles are the raw traded prices ✅ 2026-10-23, see [DROP_FROM_HIGH.md](DROP_FROM_HIGH.md#checked-against-dhan-2026-10-23). Dhan: 5 years intraday 📄. INDmoney: 5 symbols per call, but one call covers at most 1 year of daily data 📄 |
 | **Option chain / Greeks** | **Dhan** or **Groww** | INDmoney | Kite | Dhan, Groww and INDmoney all return a chain with Greeks 📄. Groww's work for NSE ✅ 2026-10-18 but **not for MCX** (no chain, `get_greeks` errors) ✅. Kite has no chain API; you'd assemble it from quotes and calculate Greeks yourself 📄 |
 | **MCX commodities** | **Dhan** (Kite as fallback) | Groww (positions and prices; no MCX candles ✅ 2026-10-18) | **INDmoney** | Dhan and Kite returned identical MCX prices, OHLC and OI ✅ 2026-10-03. Dhan leads because it needs no morning login and keeps volume after the close; the MCX Futures page falls back to Kite. See [MCX on Dhan and Kite](#mcx-on-dhan-and-kite-tested-2026-10-03). INDmoney now prices MCX on REST, identical to Kite, but has no candles, no last-trade time and 19 of 28 commodities ✅ 2026-10-17, see [MCX on INDmoney](#mcx-on-indmoney-retested-2026-10-17) |
 | **Portfolio / positions** | **Groww** (the existing dashboards use it) | Kite, Dhan | INDmoney for F&O | Groww's positions, holdings and margins work on its free API plan ✅ 2026-10-17; with the paid data plan F&O and MCX positions are priced, MCX in batches of 50 ✅ 2026-10-18. This account's INDmoney profile says F&O is not activated ✅ |
@@ -72,7 +72,7 @@ Scores run from 1 (poor) to 5 (best), for the uses in this repo.
   - The most mature API, v3 for years ✅.
   - Clean, consistent docs.
   - 1,000 instruments per LTP/OHLC call ✅.
-  - Daily candles for any range ✅.
+  - Daily candles up to 2000 days per call: 5 years of a stock in one request ✅ 2026-10-23.
   - A binary socket that went live in about 4 s ✅.
   - Covers NSE, BSE and MCX.
   - Public instrument dump that needs no login ✅.
@@ -81,6 +81,7 @@ Scores run from 1 (poor) to 5 (best), for the uses in this repo.
   - No option-chain endpoint.
   - Quotes are limited to 1 req/s, candles to 3 req/s and one instrument per call ✅.
   - 1-minute candles: **at most 60 days per call** (a 61-day window returns `400`) ✅ 2026-09-27. No sub-minute history.
+  - Daily history is **adjusted for large dividends** as well as splits and bonuses, so an old high reads lower than the price that traded (INFY's 3 Feb 2026 high: Kite 1691.4, Dhan 1728.0; ITC −4.7%). 45 of 50 Nifty 50 stocks were unaffected over 52 weeks ✅ 2026-10-23. Demergers are **not** adjusted (VEDL, 30 Apr 2026).
 - **Gotchas:**
   - `instrument_token` is **not** the NSE token (RELIANCE is `738561` on Kite and `2885` on NSE) ✅.
   - During market hours, `ohlc.close` is the **previous** close ✅. What it means after 15:30 hasn't been verified.

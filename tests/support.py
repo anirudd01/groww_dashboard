@@ -90,9 +90,10 @@ class seeded_fno:
         self._patch = mock.patch.dict(os.environ, {"PULSE_STATE_DB": os.path.join(self.tmp.name, "state.db")})
 
     def start(self):
-        from market.fno_movers import load_closes, save_closes, save_universe
+        from market.fno_movers import dashboard_since, load_closes, save_closes, save_universe
 
-        rows = load_closes(REAL_DB)  # read before the environment is redirected
+        # Read before the environment is redirected. The pages' own window: the table holds 5 years.
+        rows = load_closes(REAL_DB, since=dashboard_since())
         self._patch.start()
         save_closes(rows)
         save_universe({symbol: "1" for symbol in sorted({symbol for _, symbol in rows})}, [])

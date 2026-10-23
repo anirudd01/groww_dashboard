@@ -18,6 +18,12 @@ The tile label is NSE's ``Industry`` (its macro-economic sector), with two chang
   single move in the index. Nifty Bank's own list decides, so this needs no
   hand-kept list either.
 
+Sectors beyond the universes
+----------------------------
+The drawdown page labels every F&O stock, not just the Nifty 100. The same ``--master`` run stores
+``SECTORS_SECTION``: symbol -> tile label, from NSE's Nifty 500 list (``SECTOR_FILE``, already
+downloaded for the board's weights) plus the universes' own members, with the same labelling.
+
 Index member lists
 ------------------
 The NSE Sectoral Indices board sizes each index tile by its free-float market cap,
@@ -76,6 +82,10 @@ INDEX_MEMBER_FILES: Dict[str, str] = {
 #: The section of the stored set holding those lists.
 MEMBERS_SECTION = "index_members"
 
+#: Symbol -> sector label for every stock in ``SECTOR_FILE`` and the universes.
+SECTORS_SECTION = "sectors"
+SECTOR_FILE = INDEX_MEMBER_FILES["NIFTY 500"]
+
 SECTOR_BANKS = "Banks"
 FINANCIAL_SERVICES = "Financial Services"
 
@@ -116,16 +126,20 @@ def sector_label(industry: str, is_bank: bool = False) -> str:
 
 
 def build_document(lists: Dict[str, List[dict]], bank_symbols: Iterable[str], generated_at: str,
-                   members: Optional[Dict[str, Iterable[str]]] = None) -> dict:
+                   members: Optional[Dict[str, Iterable[str]]] = None,
+                   sector_rows: Optional[List[dict]] = None) -> dict:
     """The set to store: each index's constituents with their sector label.
 
     ``members`` is index tile symbol -> constituent symbols (``INDEX_MEMBER_FILES``).
+    ``sector_rows`` is ``SECTOR_FILE`` parsed; with the universes' rows it makes ``SECTORS_SECTION``.
     """
     banks = set(bank_symbols)
     indices = {}
     for key, rows in lists.items():
         indices[key] = {row["symbol"]: {**row, "sector": sector_label(row["industry"], row["symbol"] in banks)}
                         for row in rows}
+    sectors = {row["symbol"]: sector_label(row["industry"], row["symbol"] in banks) for row in sector_rows or []}
+    sectors.update({symbol: row["sector"] for rows in indices.values() for symbol, row in rows.items()})
     return {
         "generated_at": generated_at,
         "source": "niftyindices.com constituent CSVs (NSE Indices Ltd)",
@@ -134,11 +148,12 @@ def build_document(lists: Dict[str, List[dict]], bank_symbols: Iterable[str], ge
         "counts": {key: len(rows) for key, rows in lists.items()},
         "indices": indices,
         MEMBERS_SECTION: {symbol: sorted(set(rows)) for symbol, rows in (members or {}).items()},
+        SECTORS_SECTION: dict(sorted(sectors.items())),
     }
 
 
 def save(document: dict, path: Optional[str] = None) -> int:
-    return reference_store.save_document(CONSTITUENTS_SET, document, sections=(MEMBERS_SECTION,),
+    return reference_store.save_document(CONSTITUENTS_SET, document, sections=(MEMBERS_SECTION, SECTORS_SECTION),
                                          nested=("indices",), path=path)
 
 
@@ -151,6 +166,12 @@ def load_index_members(path: Optional[str] = None) -> Dict[str, List[str]]:
     """Index tile symbol -> its constituent symbols, as stored. Empty when none are."""
     stored = (load(path) or {}).get(MEMBERS_SECTION) or {}
     return {symbol: list(rows) for symbol, rows in stored.items() if isinstance(rows, list)}
+
+
+def load_sectors(path: Optional[str] = None) -> Dict[str, str]:
+    """Symbol -> sector label (``SECTORS_SECTION``). Empty before a ``--master`` run has stored it."""
+    stored = (load(path) or {}).get(SECTORS_SECTION) or {}
+    return {symbol: label for symbol, label in stored.items() if isinstance(label, str) and label}
 
 
 def index_member_symbols(path: Optional[str] = None) -> List[str]:

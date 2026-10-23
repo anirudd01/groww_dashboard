@@ -16,6 +16,31 @@ python scripts/compare_heatmap_startup.py --out results.json       # heatmap col
 
 ---
 
+## 2026-10-23: Kite daily range limit, and Kite vs Dhan 52-week highs
+
+Question 1: how far back does one Kite day-candle call go? RELIANCE, to 2026-10-23:
+
+| From | Result |
+|---|---|
+| 2021-10-20 (5 years) | `200`, 1,243 candles, the first already adjusted for the 2024 1:1 bonus (1307.2) |
+| 2019-06-01 (~7.4 years) | `400` "interval exceeds max limit: 2000 days" |
+
+So 5 years is still one request per stock. `scripts/kite.py history --full --history-days 1830` then
+stored 217 stocks × 1,243 days (2021-10-19 .. 2026-10-22) in 138 s with no failures.
+
+Question 2: do our 52-week highs (max of Kite's daily `high`) match the brokers'?
+
+- **Dhan `companyinfo` `FIFTY_TWO_WEEK_HIGH`/`LOW`** for RELIANCE, HDFCBANK, INFY, TCS, ITC and BHARTIARTL. The low matched on all 6, and the high on 4. INFY (Dhan 1728 vs 1691.4) and ITC (426.4 vs 406.55) didn't, and Kite's quote showed neither high was set today.
+- **Dhan `/charts/historical`** for those two shows the **same days** at Dhan's prices: INFY 1728.0 on 2026-02-03, ITC 426.4 on 2025-10-31. Kite's candles for those days are lower, so Kite has adjusted them, presumably for dividends paid since. The 22 Oct rows before and after the `--full` re-fetch were identical for both, so the adjustment was already in place when first fetched.
+- **All 50 Nifty 50 stocks**, 52-week drop from Dhan's candles vs from `daily_bars`: **45 identical.** The 5 that differ are ITC −3.0 pts, ULTRACEMCO −1.7, INFY −1.4, TECHM −0.5 and HINDUNILVR −0.2 (the raw drop is the deeper one). The median was −22.4% on both. The last close was identical on all 50.
+
+Conclusion: Kite's daily history is adjusted for splits, bonuses and large dividends, while Dhan's is the raw
+traded price, the basis of NSE's and the screeners' 52-week high. Demergers are adjusted by neither (VEDL,
+2026-04-30, −32.9% in one day after the re-fetch). Recorded in [`PROVIDER_GUIDE.md`](PROVIDER_GUIDE.md) and
+[`DROP_FROM_HIGH.md`](DROP_FROM_HIGH.md).
+
+---
+
 ## 2026-10-01: does the 1-minute comparison script line bars up by time?
 
 Question: `scripts/compare_intraday_providers.py` compared bars by minute label, or

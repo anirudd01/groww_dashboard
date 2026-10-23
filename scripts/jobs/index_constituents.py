@@ -84,7 +84,13 @@ def run(db: Optional[str] = None) -> int:
         if symbol in stored_members:
             members[symbol] = stored_members[symbol]
             logger.warning("  %-18s keeping the stored list (%d stocks)", symbol, len(members[symbol]))
-    document = ic.build_document(lists, banks, datetime.now(timezone.utc).isoformat(), members)
+    document = ic.build_document(lists, banks, datetime.now(timezone.utc).isoformat(), members,
+                                 fetched.get(ic.SECTOR_FILE))
+    if ic.SECTOR_FILE not in fetched:
+        # Keep the stored labels for the stocks outside the universes until the list downloads again.
+        document[ic.SECTORS_SECTION] = {**ic.load_sectors(db), **document[ic.SECTORS_SECTION]}
+    logger.info("  %d stocks with a sector label (%s and the universes)", len(document[ic.SECTORS_SECTION]),
+                ic.SECTOR_FILE)
     previous = (ic.load(db) or {}).get("indices") or {}
     for key, members in document["indices"].items():
         before = set(previous.get(key) or ())

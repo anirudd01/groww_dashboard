@@ -3,20 +3,24 @@
 Gold band strategy - MCX GOLD futures on Dhan
 ==========================================
 
-    python strategies/dhan_gold_band_strategy.py --long  --dry-run   # -b: BUY LTP-50, target LTP+50, SL entry-50
-    python strategies/dhan_gold_band_strategy.py --short --dry-run   # -s: SELL LTP+50, target LTP-50, SL entry+50
+    python strategies/dhan_gold_band_strategy.py --long  --dry-run   # -b: BUY bid-100, target bid+100, SL entry-100
+    python strategies/dhan_gold_band_strategy.py --short --dry-run   # -s: SELL ask+100, target ask-100, SL entry+100
+    python strategies/dhan_gold_band_strategy.py -b --symbol GOLD    # the 1 kg contract instead of gold mini
     python strategies/dhan_gold_band_strategy.py -b                  # asks you to type "yes" first
 
 What it does (docs/DHAN_GOLD_STRATEGY.md has the details and the risks):
-  1. Resolves the contract (default GOLD expiring 2026-12, i.e. "GOLD DEC FUT") from the stored
-     ``mcx_futures`` set, with lot and tick size from the raw Dhan instrument master.
-  2. Refuses to run if a position in that contract is open (on either side) or a super order on it
-     is still pending - it never adds to, closes or reverses an existing trade.
-  3. Reads the LTP, the available balance (/fundlimit) and the margin for one lot at the entry
+  1. Resolves the contract (default: the nearest live GOLDM future; --month picks another) from the
+     stored ``mcx_futures`` set, with lot and tick size from the raw Dhan instrument master. Stops if
+     it expires within 2 days.
+  2. Refuses to run if an MCX position is open or a super order on the contract is still pending -
+     it never adds to, closes or reverses an existing trade.
+  3. Prices from the order book, not the LTP (thin MCX books trade 30+ points off the last price):
+     a long from the best bid, a short from the best ask.
+  4. Reads the available balance (/fundlimit) and the margin for one lot at the entry
      price (/margincalculator); lots = floor(available / margin per lot), re-checked for that many.
      Refuses if that is less than one lot.
-  4. Prints the plan and asks for "yes" (skip with --yes; --dry-run stops here and places nothing).
-  5. Places ONE Dhan Super Order: LIMIT entry, target and stop loss together, product MARGIN
+  5. Prints the plan and asks for "yes" (skip with --yes; --dry-run stops here and places nothing).
+  6. Places ONE Dhan Super Order: LIMIT entry, target and stop loss together, product MARGIN
      (carry forward). Dhan holds the target and stop-loss legs; the script does not wait or poll.
 
 Exit codes: 0 placed (or dry run), 1 refused or failed, 2 bad arguments.
@@ -36,10 +40,11 @@ from market import dhan_orders as do  # noqa: E402
 from market import mcx_futures  # noqa: E402
 from market.market_hours import now_ist  # noqa: E402
 
-DEFAULT_SYMBOL = "GOLD"
-DEFAULT_MONTH = "2026-12"
-DEFAULT_OFFSET = 50.0
-DEFAULT_STOP = 50.0
+DEFAULT_SYMBOL = "GOLDM"
+DEFAULT_OFFSET = 100.0
+DEFAULT_STOP = 100.0
+#: A contract expiring this many days from today, or fewer, is not traded.
+AVOID_EXPIRY_DAYS = 2
 
 EXIT_OK, EXIT_FAIL, EXIT_USAGE = 0, 1, 2
 
@@ -61,21 +66,23 @@ def positive_float(value: str) -> float:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="MCX GOLD band trade on Dhan: one Super Order with a LIMIT entry offset from the LTP, "
-                    "a target on the other side and a stop loss beyond the entry.")
+        description="MCX gold band trade on Dhan: one Super Order with a LIMIT entry offset from the best "
+                    "bid (long) or ask (short), a target on the other side and a stop loss beyond the entry.")
     side = parser.add_mutually_exclusive_group(required=True)
     side.add_argument("--long", "-b", action="store_true",
-                      help="BUY at LTP - offset, target LTP + offset, stop loss entry - stop")
+                      help="BUY at best bid - offset, target bid + offset, stop loss entry - stop")
     side.add_argument("--short", "-s", action="store_true",
-                      help="SELL at LTP + offset, target LTP - offset, stop loss entry + stop")
+                      help="SELL at best ask + offset, target ask - offset, stop loss entry + stop")
     parser.add_argument("--offset", type=positive_float, default=DEFAULT_OFFSET,
-                        help=f"entry and target: points either side of the LTP (default {DEFAULT_OFFSET:g})")
+                        help=f"entry and target: points either side of the best bid/ask (default {DEFAULT_OFFSET:g})")
     parser.add_argument("--stop-loss", type=positive_float, default=DEFAULT_STOP,
                         help=f"stop loss: points beyond the entry price (default {DEFAULT_STOP:g})")
     parser.add_argument("--lots", type=int, help="lots to trade (capped at what the margin allows; default: the maximum)")
-    parser.add_argument("--symbol", default=DEFAULT_SYMBOL, help=f"MCX commodity (default {DEFAULT_SYMBOL})")
-    parser.add_argument("--month", type=month_arg, default=month_arg(DEFAULT_MONTH), metavar="YYYY-MM",
-                        help=f"contract expiry month (default {DEFAULT_MONTH})")
+    parser.add_argument("--symbol", default=DEFAULT_SYMBOL,
+                        help=f"MCX commodity: GOLDM (gold mini) or GOLD (default {DEFAULT_SYMBOL})")
+    parser.add_argument("--month", type=month_arg, default=(None, None), metavar="YYYY-MM",
+                        help=f"contract expiry month (default: the nearest live contract; either way, one "
+                             f"expiring within {AVOID_EXPIRY_DAYS} days is refused)")
     parser.add_argument("--yes", "-y", action="store_true", help="place without asking for confirmation")
     parser.add_argument("--dry-run", action="store_true", help="run every check and print the order; place nothing")
     return parser
@@ -175,20 +182,23 @@ def run_trade(args, trading, contract, now, ask, out) -> int:
         out("Nothing placed.")
         return EXIT_FAIL
 
-    ltp = trading.ltp(do.MCX_COMM, contract.security_id)
-    plan = do.band_prices(side, ltp, args.offset, args.stop_loss, contract.tick)
+    touch = trading.touch(do.MCX_COMM, contract.security_id)
+    reference = do.reference_price(side, touch)
+    plan = do.band_prices(side, reference, args.offset, args.stop_loss, contract.tick)
     lots, per_lot, available = size_position(trading, contract, side, plan.entry, args.lots, out)
     quantity = lots * contract.lot_size
     sign, other = ("-", "+") if side == do.BUY else ("+", "-")
+    ref_name = "bid" if side == do.BUY else "ask"
 
     out("")
     out("=" * 64)
     out(f" {'LONG' if side == do.BUY else 'SHORT'} {contract.name}  (security id {contract.security_id}, "
         f"expiry {contract.expiry})")
     out("=" * 64)
-    out(f"  LTP              {_price(ltp)}")
-    out(f"  Entry            {side} LIMIT @ {_price(plan.entry)}   (LTP {sign} {args.offset:g})")
-    out(f"  Target           {plan.exit_side} @ {_price(plan.target)}   (LTP {other} {args.offset:g})")
+    bid_text, ask_text = (_price(p) if p else "-" for p in (touch.bid, touch.ask))
+    out(f"  Best bid / ask   {bid_text} / {ask_text}   (last traded {_price(touch.last) if touch.last else '-'})")
+    out(f"  Entry            {side} LIMIT @ {_price(plan.entry)}   ({ref_name} {sign} {args.offset:g})")
+    out(f"  Target           {plan.exit_side} @ {_price(plan.target)}   ({ref_name} {other} {args.offset:g})")
     out(f"  Stop loss        {plan.exit_side} @ {_price(plan.stop_loss)}   (entry {sign} {args.stop_loss:g}, not trailing)")
     out(f"  Lots             {lots}  (quantity {quantity}; lot size {contract.lot_size}, tick {contract.tick.normalize()})")
     out(f"  Margin per lot   {_money(per_lot)}")
@@ -223,8 +233,13 @@ def main(argv=None, trading=None, resolve=None, now=None, ask=input, out=print) 
         if trading is None:
             trading = do.DhanTrading()
         year, month = args.month
-        contract = (resolve or do.resolve_contract)(args.symbol, year, month, now.date())
+        contract = (resolve or do.resolve_contract)(args.symbol, year, month, now.date(),
+                                                    avoid_within_days=AVOID_EXPIRY_DAYS)
         return run_trade(args, trading, contract, now, ask, out)
+    except do.NearExpiry as exc:
+        out(f"WARNING: {exc}")
+        out("Nothing placed.")
+        return EXIT_FAIL
     except do.DhanOrderError as exc:
         out(f"FAILED - {exc}")
         return EXIT_FAIL

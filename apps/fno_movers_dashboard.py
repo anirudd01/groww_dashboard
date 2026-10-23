@@ -38,6 +38,7 @@ from market.fno_movers import (
     closes_available,
     closes_stamp,
     daily_changes,
+    dashboard_since,
     drop_suspected_moves,
     drop_suspected_periods,
     live_moves,
@@ -71,7 +72,7 @@ LIVE_TTL_SECONDS = 30
 @st.cache_data(ttl="10m", show_spinner=False)
 def load_history(stamp: float):
     """Stored closes + per-day moves. ``stamp`` busts the cache when the database changes."""
-    rows = load_closes()
+    rows = load_closes(since=dashboard_since())
     return rows, daily_changes(rows), suspected_corporate_actions(rows, load_confirmed_moves())
 
 

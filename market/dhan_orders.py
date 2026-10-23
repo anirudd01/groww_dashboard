@@ -3,8 +3,9 @@
 Used by ``strategies/dhan_gold_band_strategy.py`` (docs/DHAN_GOLD_STRATEGY.md). Endpoints, all on
 ``https://api.dhan.co/v2`` and described in ``docs/dhan-api-docs.md`` (2026-10-09 export):
 
-  POST /marketfeed/ltp           last price (Data API plan; 1 request/second)
-  GET  /fundlimit                available balance (``availabelBalance`` - Dhan's spelling)
+  POST /marketfeed/quote         market depth: best bid (``depth.buy[0]``) and ask (``depth.sell[0]``)
+                                 (Data API plan; 1 request/second)
+  GET  /fundlimit               available balance (``availabelBalance`` - Dhan's spelling)
   POST /margincalculator         margin for one order (contract, side, quantity, product, price)
   GET  /positions                open positions (a trade is refused while one is open)
   GET  /super/orders             today's super orders (a trade is refused while one is unfinished)
@@ -67,6 +68,10 @@ class DhanOrderError(RuntimeError):
         super().__init__(f"{what}: {detail}")
 
 
+class NearExpiry(ValueError):
+    """The chosen contract expires too soon to trade."""
+
+
 # -- contract ----------------------------------------------------------------
 
 
@@ -80,17 +85,37 @@ class TradableContract:
     tick: Decimal  # rupees
 
 
-def pick_contract(contracts: Iterable[mcx_futures.Contract], commodity: str, year: int, month: int,
-                  today: Optional[date] = None) -> mcx_futures.Contract:
-    """The ``commodity`` future expiring in ``year``-``month``. Raises ValueError naming the alternatives."""
+def pick_contract(contracts: Iterable[mcx_futures.Contract], commodity: str, year: Optional[int],
+                  month: Optional[int], today: Optional[date] = None,
+                  avoid_within_days: Optional[int] = None) -> mcx_futures.Contract:
+    """The ``commodity`` future expiring in ``year``-``month``, or the nearest one when ``month`` is None.
+
+    Raises ValueError naming the alternatives, and NearExpiry (naming the next contract) when the
+    pick expires ``avoid_within_days`` days or fewer after ``today``.
+    """
     commodity = commodity.strip().upper()
     same = [c for c in contracts if c.commodity == commodity]
     if today is not None:
         same = mcx_futures.live_contracts(same, today)
-    match = [c for c in same if c.expiry.year == year and c.expiry.month == month]
+    same.sort(key=lambda c: c.expiry)
+    if month is None:
+        if not same:
+            raise ValueError(f"No live {commodity} future in the stored mcx_futures set")
+        match = same[:1]
+    else:
+        match = [c for c in same if c.expiry.year == year and c.expiry.month == month]
     if len(match) == 1:
-        return match[0]
-    listed = ", ".join(f"{c.name} ({c.expiry})" for c in sorted(same, key=lambda c: c.expiry)) or "none"
+        picked = match[0]
+        days_left = (picked.expiry - today).days if today is not None else None
+        if avoid_within_days is not None and days_left is not None and days_left <= avoid_within_days:
+            later = [c for c in same if c.expiry > picked.expiry]
+            hint = (f"Next: {later[0].name} (expires {later[0].expiry}); run with --month "
+                    f"{later[0].expiry:%Y-%m}." if later else f"No later {commodity} contract is stored.")
+            raise NearExpiry(f"{picked.name} expires on {picked.expiry}, {days_left} day(s) from today. Contracts "
+                             f"within {avoid_within_days} days of expiry are not traded (higher margins, "
+                             f"delivery). {hint}")
+        return picked
+    listed = ", ".join(f"{c.name} ({c.expiry})" for c in same) or "none"
     if not match:
         raise ValueError(f"No {commodity} future expiring {year}-{month:02d}. Live {commodity} futures: {listed}")
     raise ValueError(f"Several {commodity} futures expire {year}-{month:02d}: {listed}")
@@ -140,13 +165,14 @@ def tradable(contract: mcx_futures.Contract, row: Optional[Dict[str, str]]) -> T
                             int(lot), tick_in_rupees(row.get("TICK_SIZE", "")))
 
 
-def resolve_contract(commodity: str, year: int, month: int, today: date,
-                     db_path: Optional[str] = None, master_path: Optional[str] = None) -> TradableContract:
+def resolve_contract(commodity: str, year: Optional[int], month: Optional[int], today: date,
+                     db_path: Optional[str] = None, master_path: Optional[str] = None,
+                     avoid_within_days: Optional[int] = None) -> TradableContract:
     """Security id from the stored ``mcx_futures`` set; lot and tick size from the raw master CSV."""
     contracts, _, error = mcx_futures.load_contracts(db_path)
     if error:
         raise ValueError(error)
-    contract = pick_contract(contracts, commodity, year, month, today)
+    contract = pick_contract(contracts, commodity, year, month, today, avoid_within_days)
     master_path = master_path or latest_raw_master()
     if not master_path:
         raise ValueError(f"No raw Dhan instrument master under data/instruments/ (lot and tick size); "
@@ -164,9 +190,30 @@ def round_to_tick(price, tick: Decimal, up: bool) -> float:
 
 
 @dataclass(frozen=True)
+class Touch:
+    """Top of the order book. ``bid``/``ask`` are None when that side of the book is empty."""
+    bid: Optional[float]
+    ask: Optional[float]
+    last: Optional[float]
+
+
+def reference_price(side: str, touch: Touch) -> float:
+    """The price a band is measured from: the best bid for a long, the best ask for a short.
+
+    Not the LTP: MCX contracts trade thinly and the last trade can be 30+ points away from the
+    book, so a band off the LTP can land on the wrong side of the touch and fill at once.
+    """
+    price, name = (touch.bid, "bid") if side == BUY else (touch.ask, "ask")
+    if not price or price <= 0:
+        raise DhanOrderError("Dhan market depth", "", f"no {name} in the order book - nothing to price the "
+                             f"{'long' if side == BUY else 'short'} from")
+    return float(price)
+
+
+@dataclass(frozen=True)
 class BandPlan:
     side: str  # entry side: BUY (long) or SELL (short)
-    ltp: float
+    reference: float  # best bid (long) or best ask (short)
     entry: float
     target: float
     stop_loss: float
@@ -176,23 +223,23 @@ class BandPlan:
         return SELL if self.side == BUY else BUY
 
 
-def band_prices(side: str, ltp: float, offset: float, stop: float, tick: Decimal) -> BandPlan:
-    """Entry and target a band of ``offset`` either side of ``ltp``; stop loss ``stop`` beyond the entry.
+def band_prices(side: str, reference: float, offset: float, stop: float, tick: Decimal) -> BandPlan:
+    """Entry and target ``offset`` either side of ``reference``; stop loss ``stop`` beyond the entry.
 
-    Long: BUY at LTP - offset (rounded down), target SELL at LTP + offset (rounded up),
-    stop loss at entry - stop (rounded down).
-    Short: SELL at LTP + offset (rounded up), target BUY at LTP - offset (rounded down),
-    stop loss at entry + stop (rounded up).
+    Long (reference = best bid): BUY at bid - offset (rounded down), target SELL at bid + offset
+    (rounded up), stop loss at entry - stop (rounded down).
+    Short (reference = best ask): SELL at ask + offset (rounded up), target BUY at ask - offset
+    (rounded down), stop loss at entry + stop (rounded up).
     Rounding away keeps every leg at least its distance from the price it is measured from.
     """
     if offset <= 0 or stop <= 0:
         raise ValueError("offset and stop loss must be positive")
-    low = round_to_tick(ltp - offset, tick, up=False)
-    high = round_to_tick(ltp + offset, tick, up=True)
+    low = round_to_tick(reference - offset, tick, up=False)
+    high = round_to_tick(reference + offset, tick, up=True)
     if side == BUY:
-        plan = BandPlan(BUY, ltp, low, high, round_to_tick(low - stop, tick, up=False))
+        plan = BandPlan(BUY, reference, low, high, round_to_tick(low - stop, tick, up=False))
     elif side == SELL:
-        plan = BandPlan(SELL, ltp, high, low, round_to_tick(high + stop, tick, up=True))
+        plan = BandPlan(SELL, reference, high, low, round_to_tick(high + stop, tick, up=True))
     else:
         raise ValueError(f"side must be BUY or SELL, not {side!r}")
     if min(plan.entry, plan.target, plan.stop_loss) <= 0:
@@ -321,13 +368,19 @@ class DhanTrading:
         raise DhanOrderError(f"Dhan {method} {path}", "", "no answer after retries")
 
     # read-only
-    def ltp(self, segment: str, security_id: str) -> float:
-        payload = self._call("POST", "/marketfeed/ltp", {segment: [int(security_id)]})
+    def touch(self, segment: str, security_id: str) -> Touch:
+        """Best bid and ask from the 5-level depth of POST /marketfeed/quote."""
+        payload = self._call("POST", "/marketfeed/quote", {segment: [int(security_id)]})
         entry = ((payload.get("data") or {}).get(segment) or {}).get(str(security_id)) or {}
-        price = entry.get("last_price")
-        if not price or float(price) <= 0:
-            raise DhanOrderError("Dhan last price", "", f"no last price for {segment} {security_id}")
-        return float(price)
+        depth = entry.get("depth") or {}
+
+        def best(levels) -> Optional[float]:
+            prices = [float(level.get("price") or 0) for level in levels or [] if isinstance(level, dict)]
+            prices = [p for p in prices if p > 0]
+            return prices[0] if prices else None
+
+        last = entry.get("last_price")
+        return Touch(best(depth.get("buy")), best(depth.get("sell")), float(last) if last else None)
 
     def available_balance(self) -> float:
         payload = self._call("GET", "/fundlimit")

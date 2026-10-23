@@ -76,7 +76,7 @@ From Python: `pandas.read_sql(query, market.intraday_store.connect())`.
   - Two days are very different. On **31 Aug 2026** the average stock's minute bars held only 74% of the day's volume, and some held as little as 22% (ASTRAL, LAURUSLABS, RELIANCE). On **18 Sep** the average was 78%.
   - On those days most of the volume traded after 15:15, which fits index-rebalancing trades in the closing session.
   - So **use `daily_bars.volume` for a day's volume**, not the sum of its minute bars.
-- **One daily history.** `scripts/kite.py history` writes this same `daily_bars` table from the same Kite daily candles, so the two scripts agree on every day they share.
+- **One daily history.** `scripts/kite.py history` writes this same `daily_bars` table from the same Kite daily candles, so the two scripts agree on every day they share. That script reaches back further: since 2026-10-23 `daily_bars` holds 5 years (from 19 Oct 2021) for the [Drop from High](DROP_FROM_HIGH.md) page, while `minute_bars` still starts on 30 Jul 2026.
 - **Adjustment for corporate actions.** Kite adjusts past prices after a split or large dividend, which is why `--full` exists. A day stored before an ex-date keeps its raw price until you re-fetch it.
 
 ## Not covered

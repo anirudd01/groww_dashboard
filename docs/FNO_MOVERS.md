@@ -39,7 +39,8 @@ and the close 3, 5, 10, 20, 30, 50 or 100 **trading days** earlier in the stored
 weekends and holidays need no calendar. A stock missing a row on either end day
 is left out. 30D, 50D and 100D need that many stored days: backfill with
 `python scripts/kite.py history --full --history-days 200` (about 135 trading days, ~2 minutes;
-the 2026-10-01 backfill stored 2026-03-16 onward). Without enough history the page says so. Each table also shows up days (days that closed above the day
+the 2026-10-01 backfill stored 2026-03-16 onward; since 2026-10-23 the table holds 5 years for the
+[Drop from High](DROP_FROM_HIGH.md) page). Without enough history the page says so. Each table also shows up days (days that closed above the day
 before) and a trend sparkline of the closes.
 
 ## Suspected splits and bonuses
@@ -128,7 +129,14 @@ then needs none for past days.
 In the `daily_bars` table of the shared SQLite database `data/market.db`: one row per stock per day (symbol,
 date, open, high, low, close, volume). The 1-minute backfill ([`INTRADAY_HISTORY.md`](INTRADAY_HISTORY.md))
 fills the same table from the same Kite daily candles, so there is one daily history, and both scripts upsert, so
-the days they share agree. A year of about 210 stocks is roughly 50,000 rows and loads in milliseconds.
+the days they share agree. A year of about 210 stocks is roughly 50,000 rows.
+
+Since 2026-10-23 the table holds 5 years (about 257,000 rows), for the [Drop from High](DROP_FROM_HIGH.md) page,
+which reads it with SQL. This page and the other in-memory pages (F&O Heatmap, the Insights pages) load only
+the last 400 calendar days: `load_closes(since=dashboard_since())`, `DASHBOARD_LOOKBACK_DAYS` in
+`market/fno_movers.py`. Their longest window is 100 trading days, and loading all 5 years took 1.0 s against
+0.3 s for 400 days. The table also holds the Nifty 100 members without futures (TATACAP, TMCV, VAML); every
+F&O page filters by `fno_universe`, so they never appear here.
 
 The table stores **closes, not rankings**. Tables for any number of days, a weekly or monthly change, or a
 different universe are all derived at read time, so none of them needs new storage. The dashboard's download

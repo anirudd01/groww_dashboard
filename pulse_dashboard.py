@@ -2,14 +2,14 @@
 
     Sectors:  Nifty 50 Sectors | Sectoral Indices | Treemap: Sectors | Treemap: Indices
     F&O:      Nifty 50 Movers | All F&O Movers | F&O Heatmap | Dhan Movers
-    Insights: Breadth | Overnight vs Intraday | Rotation | Gap Fills | Gap Streaks
+    Insights: Breadth | Overnight vs Intraday | Rotation | Gap Fills | Gap Streaks | Drop from High
     MCX:      MCX Futures
     Journal:  Trade Journal (Dhan)
     Tools:    Dhan API Explorer
 
 Every page is a direct link (ui/navbar.py): no dropdown to open first, no
 "more" menu. The Insights pages read only the stored history
-(data/fno_daily_closes.csv, and data/market.db for Gap Fills).
+(the daily and minute bars in data/market.db).
 
 Visualisation only - it places no orders and generates no signals. The Journal page reads your
 Dhan fills and ledger (account statements), never orders.
@@ -20,6 +20,7 @@ Dhan fills and ledger (account statements), never orders.
 import streamlit as st
 
 from apps import dhan_api_explorer, dhan_journal_dashboard, dhan_movers_dashboard
+from apps import drawdown_dashboard as drawdown
 from apps import fno_breadth_dashboard as breadth
 from apps import fno_gap_fills_dashboard as gap_fills
 from apps import fno_gap_streaks_dashboard as gap_streaks
@@ -66,6 +67,8 @@ def nav_spec():
                      url_path="gap-fills"), "Gap Fills"),
             (st.Page(gap_streaks.main, title="Gap Streaks", icon=":material/keyboard_double_arrow_up:",
                      url_path="gap-streaks"), "Gap Streaks"),
+            (st.Page(drawdown.main, title="Drop from High", icon=":material/trending_down:",
+                     url_path="drop-from-high"), "Drop from High"),
         ]),
         ("MCX", [
             (st.Page(mcx.page_mcx_futures, title="MCX Commodity Futures", icon=":material/oil_barrel:",

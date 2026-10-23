@@ -213,6 +213,17 @@ Everything the project stores locally is in the shared `data/market.db`; `.env` 
   - checking what the F&O ledger line does for options, the first time one is traded;
   - an import of Groww's Excel exports, if Groww trades should join the journal.
 
+## Drop from High — built (2026-10-23)
+
+- `market/drawdown.py`, `ui/drawdown_treemap.py`, `apps/drawdown_dashboard.py`: each stock's drop from its high over 52 weeks, YTD, 2 or 5 years or since a date, as a treemap (stock tiles, optional sector boxes) for the Nifty 50 / 100 / Next 50 / all F&O, with a drop-range filter. All in SQLite, one row per stock. See [`DROP_FROM_HIGH.md`](DROP_FROM_HIGH.md).
+- `daily_bars` backfilled to 5 years, plus the Nifty 100 names without futures. The in-memory F&O pages now load only the last 400 days.
+- NSE sector labels for every Nifty 500 stock (`sectors` section of `index_constituents`).
+- Next candidates:
+  - a raw-price option (Dhan daily candles stored beside Kite's), so ITC, INFY and other large-dividend payers match the screeners' 52-week high;
+  - the Nifty 50 index's own drop from its high (store index daily bars);
+  - today's live price in place of the last stored close during the session;
+  - drop from high against days since the high, as a scatter.
+
 ## Planned
 
 ### Phase 5 — intraday time dimension
