@@ -3,6 +3,9 @@
     python scripts/debug/capture_auctions.py            # waits for the next window, records it, exits
     python scripts/debug/capture_auctions.py --now 120  # record 120 s straight away (a smoke test)
 
+Runs on Railway: inside the dashboards service, started by the ``auction-capture`` cron service through
+``scripts/job_trigger.py`` (POST /capture) at 08:55 and 14:55 IST on weekdays. Also runs locally by hand.
+
 Windows (IST, trading days): 08:59-09:16 around the pre-open call auction (orders 09:00-09:08,
 the price is discovered at about 09:08, trading starts 09:15), and 15:14-15:32 around the close.
 Started outside both, it waits for the next one today; after 15:32 it exits.
@@ -16,8 +19,8 @@ Every 15 s, one pass records, for 10 liquid stocks and the Nifty index:
   start; reading them costs nothing).
 
 That is 4 REST calls per 15 s, about 280 for a whole window. Each pass is one JSON line in
-``data/captures/auction-<date>-<open|close>.jsonl``; progress and errors go to the ``.log`` file
-beside it. Questions it answers: docs/PLAN_PRE_MARKET.md.
+``data/captures/auction-<date>-<open|close>.jsonl`` (on the server's volume) and, as a ``PASS {...}``
+line, to the log; progress and errors go to the ``.log`` file beside it. Questions it answers: docs/PLAN_PRE_MARKET.md.
 """
 
 import argparse
@@ -202,8 +205,11 @@ def main(argv=None) -> int:
         with open(stem + ".jsonl", "a", encoding="utf-8") as out:
             while now_ist() < end:
                 began = time.monotonic()
-                out.write(json.dumps(brokers.sample(), default=str) + "\n")
+                line = json.dumps(brokers.sample(), default=str)
+                out.write(line + "\n")
                 out.flush()
+                # Also to the log: on Railway the container log is the easy way to read it back.
+                logger.info("PASS %s", line)
                 passes += 1
                 time.sleep(max(0.0, EVERY_S - (time.monotonic() - began)))
     finally:

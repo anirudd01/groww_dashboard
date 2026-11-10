@@ -39,7 +39,9 @@ COPY_FILES = ["pulse_dashboard.py", "requirements.txt",
               # The unattended daily jobs and their trigger (deploy/railway/start.sh). Named one by one:
               # scripts/ also holds the personal insight scripts, which must never ship.
               "scripts/daily.py", "scripts/job_trigger.py", "scripts/jobs/__init__.py", "scripts/jobs/common.py",
-              "scripts/jobs/dhan_daily.py", "scripts/jobs/groww_intraday.py", "scripts/jobs/dhan_movers.py"]
+              "scripts/jobs/dhan_daily.py", "scripts/jobs/groww_intraday.py", "scripts/jobs/dhan_movers.py",
+              # The auction recorder (docs/PLAN_PRE_MARKET.md), started through the trigger's /capture.
+              "scripts/debug/capture_auctions.py"]
 COPY_DIRS = ["apps", "market", "ui", "utils", "groww_api"]
 EXCLUDE = {
     "apps/dhan_journal_dashboard.py",

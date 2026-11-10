@@ -61,6 +61,14 @@ touches the insight pages. Ask before committing; nothing from the 2026-11-07 se
     checks a minute apart all say NSE did not trade; a failed job is re-run at most twice, 10 minutes apart.
   - Still to do on Railway (needs approval): cut the cron's trigger attempts from 6 to 3, then deploy.
 - **Planned, not built:** pre-open prices from 09:08 (`docs/PLAN_PRE_MARKET.md`).
+- **Deployed 2026-11-10 evening:** the changes above, and the daily-jobs cron cut to 3 trigger attempts 20 s apart.
+- **Auction capture on Railway (2026-11-10):** cron service `auction-capture` (id
+  `dc775e7c-bcda-44f3-bfaa-afc575047163`, alpine, `25 3,9 * * 1-5` = 08:55 / 14:55 IST, restart NEVER, same
+  `JOB_TRIGGER_SECRET` reference) POSTs `/capture` on the trigger, which runs `scripts/debug/capture_auctions.py`
+  with its own runner (never blocks the daily jobs). It records 08:59-09:16 and 15:14-15:32 every 15 s to
+  `/app/data/captures/*.jsonl` and, as `[capture] ... PASS {...}` lines, to the dashboards container log - read
+  them with GraphQL `deploymentLogs(filter: "PASS")` on the current dashboards deployment. Checked end to end at
+  night ("Both windows are over", exit 0). Remove the service once enough mornings are recorded.
 
 ## Where things stood on 2026-11-07
 
