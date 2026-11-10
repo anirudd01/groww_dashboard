@@ -41,6 +41,7 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
+from utils.public_mode import allow_refresh
 from market import dhan_movers as dm
 from market import dhan_movers_store as store
 from market import intraday_store
@@ -548,7 +549,8 @@ def main() -> None:
         if view != VIEW_HISTORY:
             auto = st.toggle("Auto-refresh", value=True, key="dhan_auto",
                              help=f"Every {REFRESH_SECONDS} s while the market is open.")
-            if st.button("Refresh now", icon=":material/refresh:", key="dhan_refresh"):
+            if st.button("Refresh now", icon=":material/refresh:", key="dhan_refresh") \
+                    and allow_refresh("dhan_movers"):
                 ranking.clear()
                 last_session.clear()
                 dhan_provider.clear()

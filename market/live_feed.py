@@ -42,6 +42,7 @@ from copy import copy
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from market import exchange_status
 from market.config import HeatmapConfig
 from market.market_hours import (
     SESSION_OPEN,
@@ -81,10 +82,26 @@ class LiveMarketDataService:
         universe: Universe,
         config: Optional[HeatmapConfig] = None,
         providers: Optional[List[MarketDataProvider]] = None,
+        market_status: Optional["exchange_status.ExchangeStatus"] = None,
     ):
         self.universe = universe
         self.config = config or HeatmapConfig()
         self._providers = providers
+        # "Is NSE trading today?" - asked of the broker, shared by every board
+        # in the process unless a test hands in its own.
+        self._market_status = market_status
+        # When a viewer last asked for a snapshot; the dashboard stops a feed
+        # nobody has looked at for a while (see idle_seconds), and the next
+        # snapshot starts it again (stop_for_idle).
+        self._last_viewed = time.monotonic()
+        self._idle_stopped = False
+        # The last prices the websocket handed over, to tell new prices from
+        # a buffer re-read: Dhan's and Kite's feeds return every price they
+        # hold on every read, so "the drain returned prices" is no proof that
+        # anything traded. Only a change counts (see _last_fresh_at).
+        self._last_drained: Dict[str, float] = {}
+        self._last_fresh_at: Optional[float] = None
+        self._drain_was_fresh = False
 
         self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
@@ -177,11 +194,73 @@ class LiveMarketDataService:
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
+    @property
+    def idle_seconds(self) -> float:
+        """Seconds since a viewer last asked for a snapshot (or since the service was built)."""
+        return time.monotonic() - self._last_viewed
+
+    @property
+    def is_idle_stopped(self) -> bool:
+        return self._idle_stopped
+
+    def stop_for_idle(self) -> None:
+        """Stop because nobody is watching. The next ``snapshot()`` starts the feed again.
+
+        The service object stays where it is: an open page keeps a reference
+        to it (Streamlit fragments close over it), so a tab that wakes up after
+        an hour asks this same object and gets a running feed back.
+        """
+        self._idle_stopped = True
+        self.stop(timeout=1.0)
+
+    def _wake_if_idle_stopped(self) -> None:
+        # Only once the old worker has finished: start() would otherwise see
+        # it still alive and return, and the flag would be lost.
+        if self._idle_stopped and not self.is_running:
+            self._idle_stopped = False
+            logger.info("A viewer is back - restarting the live feed for %s", self.universe.label)
+            self.start()
+
+    # ------------------------------------------------------------------
+    # Is the market actually trading?
+    # ------------------------------------------------------------------
+    def _status_cache(self) -> "exchange_status.ExchangeStatus":
+        if self._market_status is None:
+            self._market_status = exchange_status.shared()
+        return self._market_status
+
+    def _nse_shut_today(self) -> bool:
+        """True only once the broker has said NSE has not traded today (never asks; see below)."""
+        return self._status_cache().peek(exchange_status.NSE) is False
+
+    def _session_open(self) -> bool:
+        """In session hours *and* not known to be a non-trading day.
+
+        "Not known" counts as open: before 09:16 nobody can tell, and a failed
+        check must not silence a real session. The reconnect cap is what keeps
+        that case cheap.
+        """
+        return session_state() == SESSION_OPEN and not self._nse_shut_today()
+
+    def _check_market_status(self) -> None:
+        """Worker thread only: ask the broker whether NSE is trading, at most every 5 minutes.
+
+        Only while the session clock says open and no *new* price has arrived
+        for a minute - new prices already answer the question (``record_trade``).
+        """
+        if session_state() != SESSION_OPEN:
+            return
+        fresh = self._last_fresh_at is not None and time.monotonic() - self._last_fresh_at < 60
+        if not fresh:
+            self._status_cache().traded_today(exchange_status.NSE)
+
     # ------------------------------------------------------------------
     # Public read API (called from Streamlit)
     # ------------------------------------------------------------------
     def snapshot(self) -> MarketSnapshot:
         """Thread-safe point-in-time copy of the whole market state."""
+        self._last_viewed = time.monotonic()
+        self._wake_if_idle_stopped()
         with self._lock:
             stocks = [copy(s) for s in self._stocks.values()]
             index = copy(self._index) if self._index_ref is not None else None
@@ -213,7 +292,7 @@ class LiveMarketDataService:
         if status.source == SOURCE_NONE or status.last_tick_at is None:
             return STATUS_DISCONNECTED
 
-        market_open = is_market_open()
+        market_open = is_market_open() and not self._nse_shut_today()
         status.market_open = market_open
 
         age = status.seconds_since_tick
@@ -262,9 +341,14 @@ class LiveMarketDataService:
         # moment it passed that window.
         last_progress: Optional[float] = None
         next_rest_poll = 0.0
+        fast_polling: Optional[bool] = None
+        session_clock: Optional[bool] = None
 
         while not self._stop_event.is_set():
             now = time.monotonic()
+
+            # 0. Is NSE trading today? Cached for 5 minutes, asked from 09:16.
+            self._check_market_status()
 
             # 1. Has this broker's socket run out of chances? Decided before
             # the connect below, so a doomed attempt is never started against
@@ -297,6 +381,8 @@ class LiveMarketDataService:
                         )
                     self._ws_delivering = True
                     last_progress = time.monotonic()
+                    if self._drain_was_fresh and session_state() == SESSION_OPEN:
+                        self._status_cache().record_trade(exchange_status.NSE)
                     # Data is flowing again: whatever went wrong before is
                     # over, so the next hiccup gets a full set of retries.
                     self._recovery_attempts = 0
@@ -305,7 +391,7 @@ class LiveMarketDataService:
                     last_progress is not None
                     and (time.monotonic() - last_progress)
                     > self.config.feed_silence_seconds
-                    and session_state() == SESSION_OPEN
+                    and self._session_open()
                 ):
                     # Silent socket. Drop it and reconnect the *same* broker
                     # straight away - conceding the board to a fallback over
@@ -334,12 +420,35 @@ class LiveMarketDataService:
                 continue
 
             # 4. Fallback: batched REST polling, clearly labelled as such.
+            # Every few seconds while prices can move (pre-market and the
+            # session); every few minutes otherwise - after the close, at the
+            # weekend, or on a day the broker says NSE is not trading. A switch
+            # between the two polls at once, so 09:00 is not left waiting.
+            fast = (
+                session_state() in (SESSION_OPEN, SESSION_PRE_MARKET)
+                and not self._nse_shut_today()
+            )
+            clock = session_state()
+            in_hours = clock in (SESSION_OPEN, SESSION_PRE_MARKET)
+            if in_hours and session_clock is not None and not session_clock:
+                # A new trading day's clock: yesterday's (or a holiday's)
+                # failed reconnects say nothing about today, so the open gets
+                # the quick retries, not the 5-minute wait.
+                self._recovery_attempts = 0
+                self._next_connect_attempt = 0.0
+            session_clock = in_hours
+            if fast != fast_polling:
+                fast_polling, next_rest_poll = fast, now
             if (
                 self.config.rest_fallback_enabled
                 and not self._ws_delivering
                 and now >= next_rest_poll
             ):
-                next_rest_poll = now + self.config.rest_poll_seconds
+                next_rest_poll = now + (
+                    self.config.rest_poll_seconds
+                    if fast
+                    else self.config.closed_rest_poll_seconds
+                )
                 if self._poll_rest():
                     self._set_status(source=SOURCE_REST, detail=self._rest_detail())
                 else:
@@ -583,7 +692,7 @@ class LiveMarketDataService:
         return (
             self._feed is None
             and self._recovery_attempts >= self.config.feed_recovery_attempts
-            and session_state() == SESSION_OPEN
+            and self._session_open()
         )
 
     def _connect_backoff(self) -> float:
@@ -595,10 +704,16 @@ class LiveMarketDataService:
         Long once every broker in the chain has had its turn and none of them
         works: there is nothing left to race for, and with Groww in particular
         connection churn measurably makes the next handshake slower.
+
+        Slow after ``feed_slow_after_attempts`` tries with no price in between:
+        whatever is wrong is not a blip, so one attempt every few minutes is
+        plenty. The first real tick resets the count.
         """
         if self._recovery_attempts < self.config.feed_recovery_attempts:
             return self.config.feed_reconnect_seconds
-        return self.config.feed_retry_seconds
+        if self._recovery_attempts < self.config.feed_slow_after_attempts:
+            return self.config.feed_retry_seconds
+        return self.config.feed_slow_retry_seconds
 
     def _connect_feed(self) -> bool:
         """Kick off a websocket attempt without blocking the worker loop.
@@ -701,6 +816,7 @@ class LiveMarketDataService:
         so draining on a timer costs the same no matter how fast the exchange
         is publishing.
         """
+        self._drain_was_fresh = False
         feed = self._feed
         if feed is None:
             return False
@@ -738,6 +854,12 @@ class LiveMarketDataService:
             self._set_status(detail=f"Feed error: {e}")
             return False
 
+        # New prices, or the same buffer read again? (see _last_drained)
+        self._drain_was_fresh = bool(prices) and prices != self._last_drained
+        if prices:
+            self._last_drained = dict(prices)
+        if self._drain_was_fresh:
+            self._last_fresh_at = time.monotonic()
         return self._apply_prices(prices) if prices else False
 
     # ------------------------------------------------------------------

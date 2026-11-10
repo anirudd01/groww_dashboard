@@ -8,7 +8,7 @@ most once a day, and in practice changes meaningfully only when NSE
 reconstitutes an index.
 
 They are produced offline by ``scripts/dhan.py --master`` (and the
-INDmoney and Kite equivalents) and stored in the shared SQLite database by
+Kite equivalent) and stored in the shared SQLite database by
 ``market/reference_store.py``. The script is meant to be run manually - monthly,
 or whenever a symbol stops resolving.
 
@@ -40,10 +40,6 @@ logger = logging.getLogger(__name__)
 #: The stored set for each broker, because a security id is only meaningful to the broker that
 #: issued it.
 DHAN_SET = "dhan_instruments"
-#: INDmoney (INDstocks) ids. Cash-equity ids happen to equal Dhan's - both are
-#: the NSE token - but index ids are INDmoney's own (``40000001`` for Nifty 50
-#: where Dhan says ``13``), so the two sets are never interchangeable.
-INDMONEY_SET = "indmoney_instruments"
 #: Zerodha Kite ids. ``security_id`` is Kite's own ``instrument_token``
 #: (``738561`` for RELIANCE, not the NSE token ``2885``), and each row also
 #: carries the ``tradingsymbol`` Kite's REST quotes are keyed by.
@@ -51,7 +47,6 @@ KITE_SET = "kite_instruments"
 
 #: The script that regenerates each broker's set.
 DHAN_SCRIPT = "scripts/dhan.py --master"
-INDMONEY_SCRIPT = "scripts/indmoney.py --master"
 KITE_SCRIPT = "scripts/kite.py --master"
 
 #: Beyond this the loader warns that the ids are getting old. Not an error:
@@ -145,7 +140,7 @@ def load_instruments(
 ) -> InstrumentSet:
     """Read a broker's stored instrument ids. Never raises - callers check ``is_usable``.
 
-    ``name`` is the set (``DHAN_SET``, ``INDMONEY_SET`` or ``KITE_SET``) and ``script`` only
+    ``name`` is the set (``DHAN_SET`` or ``KITE_SET``) and ``script`` only
     changes which generator the error messages point at. ``path`` is a database file, for tests;
     the default is the shared one. A malformed segment or row is dropped with a log line rather
     than failing the whole set, so one bad entry costs one symbol.

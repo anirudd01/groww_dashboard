@@ -1,17 +1,17 @@
 """Small runtime state, kept in the shared SQLite store.
 
-The Dhan, INDmoney and Kite access tokens and this PC's clock offset are rows in the
+The Dhan and Kite access tokens and this PC's clock offset are rows in the
 ``runtime_state`` table of ``data/market.db``, the file ``market/intraday_store.py`` owns and every
 other history lives in.
 
   runtime_state  name -> a JSON object (the saved session, or the offset), and when it was written
   state_locks    a lease row per name, so two processes starting together mint one token
 
-Each name holds one document: ``dhan_session``, ``indmoney_session``, ``kite_session``,
+Each name holds one document: ``dhan_session``, ``kite_session``,
 ``clock_offset``. ``read`` never raises and never creates the database; ``write`` does.
 
 **The tokens are live credentials, and they are in a file you may back up.** All of them expire
-within a day (Kite at 06:00 IST, Dhan after 24 hours, INDmoney at 07:00), so a stale backup holds
+within a day (Kite at 06:00 IST, Dhan after 24 hours), so a stale backup holds
 nothing usable, but the file is not for sharing. It is git-ignored.
 
 ``PULSE_STATE_DB`` points all of this at another database file (the tests use it).
@@ -45,7 +45,7 @@ CONNECT_TRIES = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_state (
-    name       TEXT PRIMARY KEY,   -- dhan_session | indmoney_session | kite_session | clock_offset
+    name       TEXT PRIMARY KEY,   -- dhan_session | kite_session | clock_offset
     payload    TEXT NOT NULL,      -- one JSON object
     updated_at TEXT NOT NULL       -- IST ISO time it was last written
 ) WITHOUT ROWID;

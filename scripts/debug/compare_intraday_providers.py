@@ -1,4 +1,4 @@
-"""Compare 1-minute history across Kite, Groww, INDmoney and Dhan. Read-only.
+"""Compare 1-minute history across Kite, Groww and Dhan. Read-only.
 
     python scripts/debug/compare_intraday_providers.py [--end 2026-09-25] [--out results.json]
 
@@ -14,7 +14,10 @@ For five liquid stocks it measures, per broker:
   5. bars per day and the first/last bar time,
   6. label alignment: the bar-label shift (-2..+2 minutes) at which each broker
      agrees best with Kite. 0 means the same open-time labelling; anything else
-     means a mismatch is a time offset, not a price difference.
+     means a mismatch is a time offset, not a price difference,
+  7. how often a bar's open equals the previous bar's close (an open convention check),
+  8. Dhan's and Groww's daily candles against Kite's over ~30 days, field by field,
+     with the stock-days whose close differs (Kite adjusts history; the others don't).
 
 A broker whose token is missing or rejected is skipped with a note, so the
 script runs with whatever is logged in. Needs a Kite session (the reference).
@@ -71,7 +74,7 @@ KH = _kite.auth_headers()
 nse = list(csv.DictReader(io.StringIO(requests.get("https://api.kite.trade/instruments/NSE", timeout=60).text)))
 ref = {r["tradingsymbol"]: r for r in nse if r["segment"] == "NSE" and r["tradingsymbol"] in SYMS}
 KT = {s: ref[s]["instrument_token"] for s in SYMS}
-NT = {s: ref[s]["exchange_token"] for s in SYMS}  # NSE token = INDmoney / Dhan security id
+NT = {s: ref[s]["exchange_token"] for s in SYMS}  # NSE token = Dhan security id
 
 
 def key(dt):
@@ -94,27 +97,6 @@ def kite(syms, start, end):
         out[s] = {key(datetime.strptime(c[0], "%Y-%m-%dT%H:%M:%S%z")): tuple(c[1:6])
                   for c in (r.json().get("data") or {}).get("candles") or []} if r.ok else {}
     return status, out
-
-
-IH = {}  # filled by available() from the shared INDmoney session
-
-
-def indmoney(syms, start, end):
-    out = {s: {} for s in syms}
-    for k in range(0, len(syms), 5):
-        batch = syms[k:k + 5]
-        r = requests.get("https://api.indstocks.com/market/historical/1minute", headers=IH, timeout=60, params={
-            "scrip-codes": ",".join(f"NSE_{NT[s]}" for s in batch),
-            "start_time": int(start.timestamp() * 1000), "end_time": int(end.timestamp() * 1000)})
-        time.sleep(0.25)
-        if not r.ok:
-            return r.status_code, out
-        by_code = {f"NSE_{NT[s]}": s for s in batch}
-        for code, block in (r.json().get("data") or {}).items():
-            for c in (block or {}).get("candles") or []:
-                ts = c["ts"] / 1000 if c["ts"] > 1e11 else c["ts"]
-                out[by_code[code]][key(datetime.fromtimestamp(ts, IST))] = (c["o"], c["h"], c["l"], c["c"], c["v"])
-    return 200, out
 
 
 GROWW = None
@@ -167,17 +149,6 @@ def dhan(syms, start, end):
 def available():
     """Which brokers can be tested right now."""
     ok = {"kite": kite}
-    from market.providers.indmoney import IndMoneyProvider
-    ind_provider = IndMoneyProvider()
-    if not ind_provider.is_configured():
-        print("indmoney: skipped (set IND_MONEY_CLIENT_ID, IND_MONEY_MPIN and IND_MONEY_TOTP_SECRET in .env)")
-    else:
-        try:
-            ind_provider.connect()  # saved token, or a new one from TOTP
-            IH.update(ind_provider.auth_headers())
-            ok["indmoney"] = indmoney
-        except RuntimeError as e:
-            print("indmoney: skipped", str(e)[:160])
     global GROWW
     try:
         from groww_api.client import GrowwAPIClient
@@ -209,15 +180,14 @@ R = {"run_ist": datetime.now(IST).isoformat(timespec="seconds"), "end": END.isof
 P = available()
 print("testing:", ", ".join(P), "| window ends", END)
 
-# 1-2. widest window, seconds per call (RELIANCE only; INDmoney's call is the 5-stock batch)
+# 1-2. widest window, seconds per call (RELIANCE only)
 R["sweep"] = {}
 for name, fn in P.items():
     R["sweep"][name] = {}
     for w in WINDOWS:
         start = (END - timedelta(days=w)).replace(hour=9, minute=15)
-        syms = SYMS if name == "indmoney" else ["RELIANCE"]
         t0 = time.time()
-        status, out = fn(syms, start, END)
+        status, out = fn(["RELIANCE"], start, END)
         R["sweep"][name][w] = {"status": status, **summarise(out.get("RELIANCE", {})), "sec": round(time.time() - t0, 2)}
     print(name, {w: (v["status"], v["days"]) for w, v in R["sweep"][name].items()})
 
@@ -297,6 +267,82 @@ for name in P:
     R["shape"][name] = {"bars_per_day": dict(sorted(per_day.items())),
                         "first": min((t[11:] for t in b), default=None), "last": max((t[11:] for t in b), default=None)}
     print(name, "RELIANCE bars/day", list(per_day.values()), "first", R["shape"][name]["first"], "last", R["shape"][name]["last"])
+
+# 3c. is a broker's 1-minute open just the previous bar's close? (explains open-only mismatches)
+R["open_is_prev_close"] = {}
+for name in P:
+    hit = tot = 0
+    for s in SYMS:
+        o = {t: v for t, v in bars[name].get(s, {}).items() if in_session(t)}
+        for t, v in o.items():
+            prev = o.get(shifted(t, -1))
+            if prev is not None and t[11:] != SESSION_FIRST:
+                tot += 1
+                hit += abs(float(v[0] or 0) - float(prev[3] or 0)) < 0.001
+    R["open_is_prev_close"][name] = round(hit / tot * 100, 1) if tot else None
+print("open == previous bar's close (%):", R["open_is_prev_close"])
+
+
+# 6. daily candles vs Kite's, last ~30 calendar days (Kite adjusts history; Dhan is raw - see log 2026-10-23)
+def daily_dhan(s, a, b):
+    r = requests.post("https://api.dhan.co/v2/charts/historical", headers=DH, timeout=60,
+                      json={"securityId": NT[s], "exchangeSegment": "NSE_EQ", "instrument": "EQUITY",
+                            "expiryCode": 0, "oi": False, "fromDate": a.strftime("%Y-%m-%d"),
+                            "toDate": (b + timedelta(days=1)).strftime("%Y-%m-%d")})
+    time.sleep(0.25)
+    d = r.json() if r.ok else {}
+    return {datetime.fromtimestamp(t, IST).strftime("%Y-%m-%d"): (o, h, l, c, v) for t, o, h, l, c, v in
+            zip(d.get("timestamp", []), d.get("open", []), d.get("high", []), d.get("low", []),
+                d.get("close", []), d.get("volume", []))}
+
+
+def daily_groww(s, a, b):
+    body = GROWW.get_historical_candles("NSE", "CASH", f"NSE-{s}", a.strftime("%Y-%m-%d 09:00:00"),
+                                        b.strftime("%Y-%m-%d 16:00:00"), "1day", timeout=60)
+    time.sleep(0.4)
+    out = {}
+    for c in (body or {}).get("candles") or []:
+        dt = datetime.fromisoformat(str(c[0]))
+        out[(dt.replace(tzinfo=IST) if dt.tzinfo is None else dt).astimezone(IST).strftime("%Y-%m-%d")] = tuple(c[1:6])
+    return out
+
+
+dstart = END - timedelta(days=30)
+kd = {}
+for s in SYMS:
+    r = requests.get(f"https://api.kite.trade/instruments/historical/{KT[s]}/day", headers=KH, timeout=30,
+                     params={"from": dstart.strftime("%Y-%m-%d 00:00:00"), "to": END.strftime("%Y-%m-%d 23:59:59")})
+    kd[s] = {c[0][:10]: tuple(c[1:6]) for c in r.json()["data"]["candles"]}
+    time.sleep(0.35)
+R["daily_vs_kite"] = {}
+for name, fetch in (("dhan", daily_dhan), ("groww", daily_groww)):
+    if name not in P:
+        continue
+    n, eq, diffs, missing = 0, [0] * 5, [], 0
+    try:
+        other = {s: fetch(s, dstart, END) for s in SYMS}
+    except Exception as e:  # noqa: BLE001
+        R["daily_vs_kite"][name] = {"error": repr(e)[:200]}
+        print(name, "daily: failed", repr(e)[:200])
+        continue
+    for s in SYMS:
+        for d, k in kd[s].items():
+            o = other[s].get(d)
+            if o is None:
+                missing += 1
+                continue
+            n += 1
+            for i in range(5):
+                eq[i] += abs(float(k[i]) - float(o[i] or 0)) < (0.001 if i < 4 else 0.5)
+            if abs(float(k[3]) - float(o[3] or 0)) >= 0.001:
+                diffs.append(f"{s} {d} close kite {k[3]} vs {o[3]}")
+    R["daily_vs_kite"][name] = {"stock_days": n, "missing": missing,
+                                **{f: round(e / n * 100, 1) if n else None for f, e in zip("OHLCV", eq)},
+                                "close_diffs": diffs[:10],
+                                "close_diff_days_by_symbol": dict(Counter(x.split()[0] for x in diffs))}
+    print(name, "daily vs kite (% equal):", {k: v for k, v in R["daily_vs_kite"][name].items() if k != "close_diffs"})
+    for line in diffs[:10]:
+        print("   ", line)
 
 if ARGS.out:
     json.dump(R, open(ARGS.out, "w"), indent=1, default=str)

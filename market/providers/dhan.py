@@ -739,7 +739,9 @@ class DhanProvider(MarketDataProvider):
             )
         return resolved, missing
 
-    def _post_marketfeed(self, endpoint: str, refs: List[InstrumentRef]) -> Dict[str, dict]:
+    def _post_marketfeed(
+        self, endpoint: str, refs: List[InstrumentRef], strict: bool = False
+    ) -> Dict[str, dict]:
         """Batched quote call. Returns ``{symbol: entry}``.
 
         Every exchange segment goes in the same request body
@@ -747,6 +749,11 @@ class DhanProvider(MarketDataProvider):
         its own index costs no extra throttled call. Entries are matched back
         on ``(segment, security id)``: ids are unique within a segment but
         *not* across them (index id 13 is Nifty 50, equity id 13 is ABB).
+
+        ``strict`` raises ``DhanDataError`` on an error reply instead of
+        skipping that batch, for callers that must tell "Dhan failed" apart
+        from "Dhan has no prices" (on an exchange holiday the reply is a
+        success with empty data).
         """
         wanted: Dict[Tuple[str, str], str] = {}
         for ref in refs:
@@ -779,6 +786,8 @@ class DhanProvider(MarketDataProvider):
                     logger.debug("Dhan %s rate limited - retrying", endpoint)
                     time.sleep(MIN_QUOTE_INTERVAL)
             if error:
+                if strict:
+                    raise DhanDataError(*error)
                 logger.warning("Dhan %s error: %s %s", endpoint, *error)
                 continue
             data = payload.get("data") or {}
@@ -939,16 +948,18 @@ class DhanProvider(MarketDataProvider):
             )
         return bars
 
-    def get_last_trade_times(self, refs: List[InstrumentRef]) -> Dict[str, datetime]:
+    def get_last_trade_times(
+        self, refs: List[InstrumentRef], strict: bool = False
+    ) -> Dict[str, datetime]:
         """When each instrument last traded, from the quote endpoint's ``last_trade_time``.
 
         The only thing in Dhan's responses that dates the data: after the close, at the weekend
         or on a holiday every price is the last session's, and nothing else says which session.
         Dhan writes it as ``01/10/2026 15:59:03`` (IST). Instruments that never traded, or whose
-        time cannot be read, are left out.
+        time cannot be read, are left out. ``strict``: see ``_post_marketfeed``.
         """
         times: Dict[str, datetime] = {}
-        for symbol, entry in self._post_marketfeed("quote", refs).items():
+        for symbol, entry in self._post_marketfeed("quote", refs, strict=strict).items():
             try:
                 times[symbol] = datetime.strptime(
                     str(entry.get("last_trade_time")), "%d/%m/%Y %H:%M:%S"

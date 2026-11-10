@@ -51,6 +51,7 @@ from typing import Dict, Iterable, Set
 import requests
 
 from market import reference_store, state_store
+from market.fno_movers import load_universe
 from market.index_constituents import index_member_symbols
 from market.instruments import DHAN_SET
 from market.providers.base import SEGMENT_CASH, SEGMENT_INDEX
@@ -193,6 +194,11 @@ def run(args, text: str) -> int:
     if members:
         wanted.setdefault(SEGMENT_CASH, set()).update(members)
         logger.info("  %-20s %3d symbols (CASH, for the index board's weights)", "index members", len(members))
+    # The daily-candle job (jobs/dhan_daily.py) fetches every F&O stock from Dhan.
+    fno = load_universe(args.db).tokens
+    if fno:
+        wanted.setdefault(SEGMENT_CASH, set()).update(fno)
+        logger.info("  %-20s %3d symbols (CASH, for the daily candles)", "F&O stocks", len(fno))
     total = sum(len(symbols) for symbols in wanted.values())
     if not total:
         logger.error("No universes have constituents stored - nothing to do.")

@@ -23,7 +23,7 @@ Behaviour seen against the live API on 2026-09-27, and handled here:
   - A code taken with 5 s left in its window was rejected once, when the
     clock correction came from an HTTP ``Date`` header (1 s resolution). One
     rejection is retried in the next window with a freshly measured offset.
-  - Generating a token did **not** revoke the previous one (unlike INDmoney).
+  - Generating a token did **not** revoke the previous one.
   - This PC's clock runs ~21 s slow, so codes come from
     ``market.clock_offset.totp_code`` (NTP-corrected), never the raw clock.
 

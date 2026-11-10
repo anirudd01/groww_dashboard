@@ -9,10 +9,170 @@ Re-run:
 
 ```bash
 python scripts/kite_login.py                          # if today's Kite session is missing
-python scripts/compare_indmoney_kite.py --out results.json         # daily data
-python scripts/compare_intraday_providers.py --out results.json    # 1-minute data, all four brokers
-python scripts/compare_heatmap_startup.py --out results.json       # heatmap cold start, both boards
+python scripts/debug/compare_intraday_providers.py --out results.json    # 1-minute + daily, Kite, Groww and Dhan
+python scripts/debug/compare_heatmap_startup.py --out results.json       # heatmap cold start, both boards
 ```
+
+---
+
+## 2026-11-07: Kite vs Groww vs Dhan, 1-minute and daily, all three logged in
+
+Why: the 2026-09-27 Groww numbers predate the 2026-10-01 fix (session-only comparison, label
+alignment), Groww was never re-run with it, and daily candles had only been compared Kite vs Dhan.
+Question: can the daily jobs run unattended on Dhan and/or Groww instead of Kite, whose login is manual?
+
+Setup: `python scripts/debug/compare_intraday_providers.py --end 2026-11-06`, run twice on Sat
+2026-11-07 evening; both runs gave identical numbers. RELIANCE, TCS, HDFCBANK, INFY, SBIN. 1-minute:
+the 6 sessions to 2026-11-06, compared by minute label inside 09:15-15:14 only. Groww's pre-open
+(09:08 bar, volume only) and its 15:15-15:59 bars (closing auction session and after) are counted,
+never compared. Daily: the 22 sessions to 2026-11-06 (new part 6 of the script). Kite is the
+reference because its minute bars reproduce the official daily candle.
+
+**Widest 1-minute window per call:** Kite 60 days, Groww 30 days (31 → `GA001`), Dhan 90 days.
+Same as before.
+
+**1-minute bars, % equal to Kite (10,800 bars; Dhan 10,795):**
+
+| | O | H | L | C | V | Best label shift | Bars outside 09:15-15:14 |
+|---|---|---|---|---|---|---|---|
+| Groww | 55.9 | 89.8 | 89.9 | **92.7** | **99.8** | 0 | 312 (pre-open + CAS) |
+| Dhan | 48.2 | 67.3 | 67.0 | 58.6 | 12.9 | 0 | 0 |
+
+- Bars per day (RELIANCE): Kite and Dhan 360, 09:15-15:14 (Dhan once 359). Groww 363-373, 09:08-15:59.
+- Against the official daily candle (30 stock-days): first bar = official open Kite 30, Dhan 24,
+  Groww 0. Minute high reaches the day's high: Kite 25, Dhan 22, Groww 9. Low: Kite 30, Dhan 28, Groww 6.
+- How often a bar's open equals the previous bar's close: Kite 40.4%, Dhan 33.2%, Groww **0.0%**.
+  So Groww's opens are not a "previous close" convention; they are a different open price.
+
+**Daily candles, % equal to Kite (110 stock-days):**
+
+| | O | H | L | C | V |
+|---|---|---|---|---|---|
+| Dhan | 83.6 | 83.6 | 83.6 | 83.6 | **100** |
+| Groww | 0.0 | 40.0 | 23.6 | 83.6 | 47.3 |
+
+Every daily mismatch in O/H/L/C, for both, is **INFY on 18 days up to 2026-10-21**: Kite has
+adjusted those days for a corporate action (closes ~2.2% lower) and Dhan and Groww show the raw
+price, as the 2026-10-23 entry found. On the other four stocks Dhan's daily candle equals Kite's
+exactly, field for field. Groww's daily open never matches and its high, low and volume mostly
+don't: its daily candle is not the official one.
+
+**Findings**
+- **Dhan daily = Kite daily**, except that Kite adjusts history for corporate actions and Dhan
+  doesn't. Dhan can take over `daily_bars` unattended, if the adjusted-vs-raw basis is handled.
+- **Groww is the best unattended source of 1-minute bars**: volume equal on 99.8% of bars,
+  close on 92.7%, same labels as Kite. Its opens differ, and its first bar never opens at the
+  official open, so take a day's open from the daily candle, never from Groww's 09:15 bar. Its
+  pre-open and closing-session bars must be dropped (or stored separately) when writing `minute_bars`.
+- **Dhan's 1-minute bars got worse** than on 2026-09-27 (close 69.9% → 58.6%, volume 12.2% → 12.9%).
+  Don't use them for history.
+
+**Why they differ** (same evening: raw candles stored by `scripts/debug/capture_candles.py` in
+`data/provider_compare.db`, run `20261107T175417Z`, measured by `scripts/debug/analyze_candle_diffs.py`):
+
+- **Not a decimals or rounding issue.** No mismatch is under 1 paisa; outside INFY they are whole
+  ticks (5-50 paise, median 0.05-0.5).
+- **INFY is a corporate-action adjustment, in minute bars too.** Kite rescales all INFY prices before
+  2026-11-03 by about 0.978 (2.29%, ~Rs 26); Dhan and Groww keep raw prices (e.g. 2026-11-02 close
+  Kite 1135.0, Dhan/Groww 1161.0; from 2026-11-03 all three equal). That alone produced most "large"
+  mismatches in the headline table.
+- **Without INFY, Groww's 1-minute bars are nearly Kite's:** close 98.8-99.8%, high 95.6-97.0%, low
+  95.1-97.7%, volume 99.6-100% equal, misses of 5-50 paise. Labels line up exactly: volume is equal on
+  99.8% of bars at the same label and 0% at a one-minute shift either way. The open differences are
+  two **conventions**, not bad data (rechecked the same night):
+  - **09:15 bar - the pre-open price.** Kite's 09:15 open is the pre-open (call auction) price on 24/24
+    stock-days. Groww puts that price in a separate pre-open bar (09:08) and starts its 09:15 bar at
+    the first continuous trade, so its 09:15 open matched Kite's on 0/24. This is where the largest
+    open gaps are (TCS 2026-10-30: Kite 2495.20 = Groww's pre-open price, Groww 09:15 open 2507.20).
+    Example RELIANCE 2026-11-06: Groww 09:08 = 1295.00 = Kite's 09:15 open; Groww 09:15 opens 1295.60.
+  - **Later bars - Kite repeats the previous close.** In 99% (3,353/3,379) of the open mismatches after
+    09:15, Kite's open is its own previous minute's close; Groww's open is the minute's first trade and
+    never the previous close. Kite does this on ~40% of all bars. Because Kite's range then includes
+    that repeated price, about half of the high/low mismatches are Kite's high or low being its own
+    open (173/335 highs, 145/289 lows). The rest of the high/low gaps (~2% of bars) are small, 5-15 paise.
+  - Rebuilding Groww's bars "Kite-style" (open = previous close every minute) made the opens worse
+    (39% equal), so Kite doesn't repeat the close on every minute - only on some. Which minutes is not
+    worked out.
+- **Dhan's 1-minute bars: boundary trades land in the wrong minute, both ways, with no net delay**
+  (same checks as for Groww, rechecked the same night):
+  - **09:15 open = the official (pre-open) open on 24/24 stock-days**, like Kite.
+  - **Labels line up:** close equal to Kite's 62.5% at the same label, ~6% at a one-minute shift either way.
+  - **No delay.** If Dhan's minute started δ seconds late, its volume would be the true volume minus δ
+    seconds of this minute plus δ seconds of the next. Fitting that over 8,496 bars, with each day scaled to
+    the same total, gives δ = **-0.3 s** overall (per stock-day -1.5 to +2.3 s). An earlier reading here,
+    "a few seconds late", was wrong.
+  - **Trades at the boundary are filed in a neighbouring minute.**
+    - Each minute's volume error is strongly negatively correlated with the next minute's (**-0.50**):
+      what one minute gains, the next loses.
+    - Dhan is above Groww/Kite as often as below (3,732 vs 3,695 bars).
+    - The error is small, a median of **0.40% of the minute's volume** (about 115 shares), and it does not
+      build up: 128 shares per 5-minute block.
+    - The prices follow: where Dhan's close differs from Groww's, it equals the next minute's first trade on
+      38% of bars. Dhan's open is its own previous close on 24% of its open mismatches with Kite.
+  - **Why only 13.7% of volumes are exactly equal:** any trade moved across a boundary breaks exact
+    equality, though the bars are off by a fraction of a percent.
+- **Groww's daily candle:** `open` is always null. High, low, close and volume are built from *all* its
+  minute bars, including pre-open and 15:15-15:59 (closing auction session and after): high 30/30,
+  low 30/30, close 30/30, volume 30/30 (vs 24/30, 28/30, -, 0/30 using 09:15-15:14 only). Its volume
+  equals Kite's daily volume on 17/30.
+- **Dhan's daily candle equals Kite's** on every field apart from the INFY adjustment.
+- Groww's extra minute labels: 09:00-09:08 (volume only; 09:08 priced on half the days), 15:15, 15:28-15:29,
+  15:50-15:59.
+- None of this depends on an account setting: these are API responses, the same for any account.
+
+**Pairwise tables, 4 stocks (INFY left out: its gap is Kite's adjustment, above).** "Equal" is exact
+equality; the gaps are for the candles that differ. 1-minute: 8,640 bars in 09:15-15:14. Daily: 88 days.
+
+Groww vs Kite:
+
+| Field | 1-min equal | 1-min median gap | 1-min largest gap | Daily equal | Daily median gap |
+|---|---|---|---|---|---|
+| Open | 60.6% | Rs 0.10 (0.010%) | Rs 12.00 | no open in Groww's daily | - |
+| High | 96.1% | Rs 0.10 (0.010%) | Rs 9.40 | 48.9% | Rs 0.30 (0.025%) |
+| Low | 96.7% | Rs 0.15 (0.012%) | Rs 7.80 | 27.3% | Rs 0.30 (0.026%) |
+| Close | 99.3% | Rs 0.20 (0.016%) | Rs 1.30 | 100% | - |
+| Volume | 99.8% | 137 shares (0.50%) | 56,380 shares | 47.7% | 74,447 shares (0.82%) |
+
+Dhan vs Kite:
+
+| Field | 1-min equal | 1-min median gap | 1-min largest gap | Daily equal | Daily median gap |
+|---|---|---|---|---|---|
+| Open | 50.9% | Rs 0.15 (0.014%) | Rs 2.80 | 100% | - |
+| High | 72.3% | Rs 0.10 (0.008%) | Rs 2.30 | 100% | - |
+| Low | 71.2% | Rs 0.10 (0.008%) | Rs 2.60 | 100% | - |
+| Close | 62.5% | Rs 0.15 (0.014%) | Rs 2.90 | 100% | - |
+| Volume | 13.7% | 192 shares (0.63%) | 2,271,584 shares | 100% | - |
+
+Dhan vs Groww:
+
+| Field | 1-min equal | 1-min median gap | 1-min largest gap | Daily equal | Daily median gap |
+|---|---|---|---|---|---|
+| Open | 40.8% | Rs 0.15 (0.013%) | Rs 12.00 | no open in Groww's daily | - |
+| High | 70.0% | Rs 0.10 (0.008%) | Rs 9.40 | 48.9% | Rs 0.30 (0.025%) |
+| Low | 69.5% | Rs 0.10 (0.008%) | Rs 7.80 | 27.3% | Rs 0.30 (0.026%) |
+| Close | 62.7% | Rs 0.15 (0.014%) | Rs 2.90 | 100% | - |
+| Volume | 13.8% | 192 shares (0.63%) | 2,271,584 shares | 47.7% | 74,447 shares (0.82%) |
+
+The large single gaps sit at the first bars of the day: for Groww's open (Rs 12) it is the pre-open
+price, which Kite folds into its 09:15 bar and Groww keeps in its 09:08 bar (see above). Dhan's 2.27M
+shares is its 09:15 volume.
+Dhan vs Groww daily equals Groww vs Kite daily because Dhan's daily equals Kite's.
+
+**Agrees with** the 2026-09-27 Groww row once INFY is left out (close 99.3% then 99.2%, high/low ~96%).
+The headline table above is lower only because of INFY.
+
+**Which provider for which data** (also in [`PROVIDER_GUIDE.md`](PROVIDER_GUIDE.md)):
+
+| Data | Use | Not | Why |
+|---|---|---|---|
+| Daily candle (O/H/L/C/V) | **Dhan** (unattended) or Kite | Groww | Dhan = Kite exactly, raw prices. Groww has no open, and its high/low/volume include pre-open and closing-session trades |
+| Adjusted daily history | Kite | Dhan, Groww | Only Kite adjusts for corporate actions |
+| 1-minute close and volume | Kite, or **Groww** (unattended) | Dhan, where exact per-minute values matter | Groww close 99.3%, volume 99.8% equal to Kite. Dhan files boundary trades in the neighbouring minute (volume off by a median 0.4%, close equal 62.5%); fine for charts, not for exact minute data |
+| 1-minute open/high/low | Kite; Groww if its convention is fine | Dhan | Groww's open is the minute's first trade; Kite's sometimes repeats the previous close. For the day's official open from Groww, use its pre-open (09:08) bar, not its 09:15 bar. Groww high/low ~96% equal. Dhan's open 51%, high/low ~72% |
+| Pre-open and closing auction bars | Groww (only source) | - | Kite and Dhan send none |
+
+**Not covered:** stocks beyond these five; weeks with a split or bonus; Groww's pre-open and
+closing-session bars themselves (dropped, not checked).
 
 ---
 
@@ -46,8 +206,7 @@ traded price, the basis of NSE's and the screeners' 52-week high. Demergers are 
 Question: `scripts/compare_intraday_providers.py` compared bars by minute label, or
 just first to last? **By label** (a dict keyed `YYYY-MM-DD HH:MM`, intersected
 across brokers), never by position. But the comparison was not limited to the
-continuous session, so bars outside 09:15-15:14 (INDmoney's invented flat bars
-to 15:30) were counted as "only other". Fixed: the script now compares only
+continuous session, so bars outside 09:15-15:14 were counted as "only other". Fixed: the script now compares only
 09:15-15:14, counts the rest separately (`bars_outside_session`), and has a
 label-alignment check (shift the other broker's labels by -2..+2 minutes and
 see which agrees best with Kite).
@@ -58,17 +217,16 @@ Run 2026-10-01 for session ending 2026-09-30, five stocks, 7 days, vs Kite,
 | Broker | -2 | -1 | **0** | +1 | +2 | O / H / L / C equal at 0 |
 |---|---|---|---|---|---|---|
 | Dhan | 7.0 | 10.4 | **68.1** | 10.4 | 6.8 | 61.0 / 80.4 / 74.0 / 68.1 % |
-| INDmoney | 6.2 | 9.8 | **67.8** | 9.7 | 6.3 | 60.1 / 78.8 / 73.0 / 67.8 % |
 
-Both brokers label a bar by its **open** minute, the same as Kite, so there is no
-time offset. The 20-40% disagreement is a genuine price-source difference
-(e.g. RELIANCE 09:15 open: Kite and Dhan 1182.0, INDmoney 1184.2). Outside the
-session: Dhan 0 bars, INDmoney 405 (15:15-15:30, flat, volume 0), Kite 0.
+Dhan labels a bar by its **open** minute, the same as Kite, so there is no
+whole-minute offset. (Corrected 2026-11-07: the disagreement isn't a different price source. Trades at
+a minute boundary land in the neighbouring minute, both ways, with no net delay; see that entry.)
+Outside the session: Dhan 0 bars, Kite 0.
 Against the official daily candle (in-session bars only), the volume held is
-66-98% for Kite and Dhan, 45-96% for INDmoney: below 100% is expected because the
+66-98% for Kite and Dhan: below 100% is expected because the
 daily figure includes the 15:15-15:30 closing auction.
 
-## 2026-09-30: heatmap cold start, Dhan vs INDmoney vs Kite (Groww not measurable)
+## 2026-09-30: heatmap cold start, Dhan vs Kite (Groww not measurable)
 
 `scripts/compare_heatmap_startup.py`, in session (market OPEN), tokens already
 cached, brokers run one after another. Each stage is timed the way
@@ -76,36 +234,29 @@ cached, brokers run one after another. Each stage is timed the way
 runs of the index board and two of the Nifty 50 board; the figures were stable
 to about 0.1 s unless noted.
 
-| Stage | Dhan | INDmoney | Kite |
-|---|---|---|---|
-| connect (auth) | 0.7 | 0.7 | 0.7 |
-| resolve ids (local file) | 0.00 | 0.00 | 0.00 |
-| previous close (REST) | 1.05-1.16 | **0.34-0.42** | 1.03-1.08 |
-| REST price snapshot | 1.08-1.16 | **0.34-0.38** | 1.01-1.09 |
-| **Board ready from REST** | **2.9-3.0** | **1.4-1.5** | 2.8 |
-| Socket open | 0.2 | 0.2 | 0.15 |
-| First websocket tick after open | 0.25 | 0.25 | 0.25 |
-| Every instrument priced by socket | 0.25 | 1.0 (Nifty 50 only) | 0.25 |
+| Stage | Dhan | Kite |
+|---|---|---|
+| connect (auth) | 0.7 | 0.7 |
+| resolve ids (local file) | 0.00 | 0.00 |
+| previous close (REST) | 1.05-1.16 | 1.03-1.08 |
+| REST price snapshot | 1.08-1.16 | 1.01-1.09 |
+| **Board ready from REST** | **2.9-3.0** | 2.8 |
+| Socket open | 0.2 | 0.15 |
+| First websocket tick after open | 0.25 | 0.25 |
+| Every instrument priced by socket | 0.25 | 0.25 |
 
 (First-tick figures are quantised to the script's 0.25 s poll.)
 
-Priced, indices board (17): Dhan 17/17, Kite 17/17, **INDmoney 16/17 on every
-run** (Nifty Oil & Gas still not served, re-confirmed today). Nifty 50 board:
-50/50 on all three.
+Priced, indices board (17): Dhan 17/17, Kite 17/17. Nifty 50 board:
+50/50 on both.
 
 ### Findings
 
 - **The "about 3 seconds" on the index page is Dhan's two REST calls.** Each
   takes ~1.1 s because Dhan limits quote calls to 1/s, and Kite's
-  take about the same. INDmoney's take ~0.35 s each (5/s limit). The socket
-  itself is ready in 0.2 s on all three, so the wait is the REST calls, not the
+  take about the same. The socket
+  itself is ready in 0.2 s on both, so the wait is the REST calls, not the
   websocket.
-- **INDmoney is about twice as fast to a full board** (1.4-1.5 s vs 2.9-3.0 s),
-  at the price of one index on the index board.
-- **INDmoney's first REST price call sometimes returns a partial answer.** On
-  the first run it priced 3 of 17 indices, then 16 of 17 on later runs. This is
-  the known partial first response in `api/INDMONEY_API.md`; the service asks
-  again for what is missing.
 - **Dhan's socket failed once in five runs** (`timed out during opening
   handshake`, 10 s, index board). The service's reconnect logic covers this;
   it would show up as a longer amber REST phase.
@@ -117,17 +268,15 @@ run** (Nifty Oil & Gas still not served, re-confirmed today). Nifty 50 board:
 
 Streamlit's own overhead, a cold token mint (the script starts with tokens
 cached), after-hours behaviour (previous close then comes from daily candles,
-which the older notes put at ~5 s for INDmoney and ~13 s for Dhan for 50
+which the older notes put at ~13 s for Dhan for 50
 stocks), and the time before the page's first paint. Re-run after 15:30 to
 cover the after-hours path.
 
 ### Conclusion
 
 Keep Dhan as the default: it serves all 17 indices and its socket is as fast as
-the others. Its slower REST start is better fixed by starting the board early
-(see the roadmap item "Instant NSE Sectoral Indices page") than by switching
-brokers, which would cost the Oil & Gas tile. If the gap matters more than that
-tile, INDmoney is the faster choice for the index board.
+Kite's. Its slower REST start is better fixed by starting the board early
+(see the roadmap item "Instant NSE Sectoral Indices page").
 
 ---
 
@@ -135,7 +284,7 @@ tile, INDmoney is the faster choice for the index board.
 
 Adds Dhan to the entry below, whose Dhan column was left open. The setup was
 the same: `scripts/compare_intraday_providers.py`, five stocks, windows ending
-2026-09-25 15:30. Kite, Groww and INDmoney were re-measured in the same run,
+2026-09-25 15:30. Kite and Groww were re-measured in the same run,
 and every number matched the earlier run exactly.
 
 **Login.** A fresh `DHAN_ACCESS_TOKEN` was pasted, and TOTP token generation
@@ -159,17 +308,15 @@ was then tested:
 | Minute volume as % of the day's | 44–99% | 45–99% |
 
 **Findings.**
-- **Dhan's bar times agree with Kite's, but its prices and volumes don't.** It has the same session shape, including the 15:15 end, and totals the same daily volume. But its individual bars differ.
-- **Dhan and INDmoney disagree with Kite by almost exactly the same amounts.** INDmoney's O/H/L/C agreement with Kite was 60.9/81.5/75.8/70.6%. That suggests both aggregate bars differently from Kite, for example by where they cut each minute. They weren't compared with each other directly.
+- **Dhan has the same session shape as Kite,** including the 15:15 end, and totals the same daily volume. But its individual bars differ (cause found 2026-11-07: trades at a minute boundary land in the neighbouring minute, with no net delay).
 - **Kite is still the only broker whose minute bars reproduce the official daily open every time.**
 
-**Decision unchanged:** Kite for 1-minute history. Dhan is the option for
-depth beyond 60 days per call, and now for unattended jobs, since its TOTP
-login works.
+**Decision unchanged:** Kite for 1-minute history. (Superseded 2026-11-07: the unattended choice for
+1-minute bars is Groww, not Dhan; Dhan is the unattended choice for daily candles.)
 
 ---
 
-## 2026-09-27: 1-minute history, Kite vs Groww vs INDmoney (Dhan pending)
+## 2026-09-27: 1-minute history, Kite vs Groww (Dhan pending)
 
 **Question.** Which broker should supply 60 days of 1-minute bars for the 210
 F&O stocks, using the fewest requests and the least time, and is its data
@@ -182,24 +329,18 @@ right?
 - Endpoints:
   - Kite: `GET /instruments/historical/{token}/minute`
   - Groww: SDK `get_historical_candles(..., "1minute")`
-  - INDmoney: `GET /market/historical/1minute`
   - Dhan: `POST /v2/charts/intraday`
 - **Dhan was not tested.** The saved token had expired on 2026-09-26 (`DH-901`), and `.env` has no Dhan TOTP secret to make a new one.
-- The INDmoney token was minted from TOTP for this run. This PC's clock was 20 s behind INDmoney's server; the code was generated from server time.
 
 ### Widest window one call accepts
 
-| Window asked | Kite | Groww | INDmoney |
-|---|---|---|---|
-| 7 days | ✅ | ✅ | ✅ |
-| 30 days | ✅ | ✅ | only the last 7 days |
-| 31 days | ✅ | ❌ `GA001` | only the last 7 days |
-| 60 days | ✅ (44 sessions, 0.83 s) | ❌ | only the last 7 days |
-| 61 / 90 days | ❌ `400` | ❌ | only the last 7 days, still `200` |
-
-INDmoney always returns the 7 days before `end_time`, whatever window was
-asked for. That matches its docs' warning that a wider request "returns the
-maximum window, not an error".
+| Window asked | Kite | Groww |
+|---|---|---|
+| 7 days | ✅ | ✅ |
+| 30 days | ✅ | ✅ |
+| 31 days | ✅ | ❌ `GA001` |
+| 60 days | ✅ (44 sessions, 0.83 s) | ❌ |
+| 61 / 90 days | ❌ `400` | ❌ |
 
 ### Cost of 60 days × 210 stocks
 
@@ -207,7 +348,6 @@ maximum window, not an error".
 |---|---|---|---|---|
 | **Kite** | 1 | 60 | **210** | 355 s for the real backfill (it also fetched daily candles: 420 calls in all) |
 | Groww | 1 | 30 | 420 | ~0.5 s per call, ~4 min (not run) |
-| INDmoney | 5 | 7 | 378 (42 batches × 9 windows) | ~0.6 s per call, ~4 min (not run) |
 | Dhan | 1 | ? (docs say 5 years available) | ? | untested |
 
 ### Data quality: 5 stocks × the last 7 days
@@ -218,10 +358,6 @@ close (C) or volume (V) equals Kite's:
 | | Bars in common | O | H | L | C | V |
 |---|---|---|---|---|---|---|
 | Groww | 10,800 | 47.5% | 95.5% | 96.1% | 99.2% | **99.8%** |
-| INDmoney | 9,000 | 60.9% | 81.5% | 75.8% | 70.6% | **0.2%** |
-
-INDmoney's timestamps aren't simply shifted: moving them a minute either way
-made agreement worse (≈11–19%).
 
 **Against the official daily candle** (Kite `/day`: 25 stock-days on the first
 run, 30 on the re-run). Does the day's first minute bar open at the official
@@ -232,18 +368,15 @@ the day's volume do they hold?
 |---|---|---|---|---|
 | **Kite** | **30/30** | 29/30 | 27/30 | 45–99% (see below) |
 | Groww | 1/30 | 13/30 | 11/30 | 93–100% |
-| INDmoney | 3/25 | 21/25 | 19/25 | 49–107% |
 
 **Shape of RELIANCE's day:**
 - **Kite:** 360 bars, 09:15–15:14.
 - **Groww:** 363–373 bars. It includes pre-open minutes 09:00–09:08, which carry volume but `None` prices, and post-close bars up to 15:59. Nothing between 15:16 and 15:29.
-- **INDmoney:** 376 bars, 09:15–15:30.
 
 ### Findings
 
 - **Kite is the only broker whose minute bars agree with the official daily candle.** Its first bar opens at the official open on every day, and it has the widest window, so it costs the fewest calls.
 - **Groww's volumes and closes are right, but its opens aren't.** Its opens differ from Kite's on half the bars, and its first bar almost never opens at the official open. It needs twice as many calls, and one call timed out (30 s read timeout; fine on retry).
-- **INDmoney's 1-minute data is unusable.** Volumes don't match anyone. It also returns bars from 15:16 to 15:30, a window in which Kite and Groww show no trades at all. Unlike its daily data (2026-09-25 entry below), this can't replace Kite.
 - **The trading session changed in August 2026.** The full 210-stock backfill shows 375 bars a day up to the switch and 360 after it. 207 stocks switched on 3 Aug and 3 stocks on 26 Aug, and none went back. Details in [`INTRADAY_HISTORY.md`](INTRADAY_HISTORY.md).
 - **Kite's minute volume can miss much of a day.** On 31 Aug 2026 the average stock's minute bars held only 74% of its daily volume, and some as little as 22%. On 18 Sep the average was 78%. That's volume traded outside the continuous session, so take a day's volume from the daily candle.
 - **No broker tested offers historical bars under 1 minute.**
@@ -259,90 +392,3 @@ the closes `update_fno_history.py` had already stored, on all 4,410 shared rows.
 - **Dhan.** Re-run the script with a fresh `DHAN_ACCESS_TOKEN`; it includes Dhan automatically.
 - Days older than 60 sessions.
 - Whether the August session change comes from an NSE circular (not checked).
-
----
-
-## 2026-09-25: INDmoney vs Kite, daily data for the F&O universe
-
-**Question.** Can INDmoney replace Kite as the first choice for the daily
-open/close capture used for gaps and gainers/losers? INDmoney is free, can log
-in without a person, and is faster. But its docs have been wrong before, so
-it needed checking against Kite.
-
-**Setup.**
-- Run on 2026-09-25, 13:3x IST, market open.
-- Universe: the 210 NSE F&O stocks in the `fno_universe` set in `data/market.db`.
-- Window: daily candles from 2026-08-11 to 2026-09-24, which is 32 trading days. Today's candle was still forming, so it was left out.
-- Kite: `GET /instruments/historical/{token}/day` (one stock per call) and `GET /quote/ohlc`.
-- INDmoney: `GET /market/historical/1day` (5 stocks per call) and `GET /market/quotes/full`.
-- Both read-only. INDmoney's token had been generated from TOTP that day.
-
-### Results
-
-| Check | Result |
-|---|---|
-| Instrument mapping | **210/210** stocks found on INDmoney. INDmoney's `SECURITY_ID` equals Kite's `exchange_token` (the NSE token) for all 210 |
-| Trading days returned | 32 on both, with the same dates. Neither broker had a day the other lacked |
-| Stock-days compared | **6,720** (210 × 32) |
-| Open, high, low, close | **6,717 identical to the paisa.** 3 differ, all HINDPETRO (below) |
-| Volume | **6,720/6,720 identical** |
-| Snapshot, previous close (`ohlc.close` vs `prev_close`) | **210/210 identical** |
-| Snapshot, today's open (`ohlc.open` vs `day_open`) | **210/210 identical** |
-| Snapshot, last price | median difference 0.000%, 95th percentile 0.037%, max 0.062%. The two calls were ~0.4 s apart, so this is price movement, not error |
-| Last stored candle close = snapshot previous close | Kite 210/210, INDmoney 205/205 on the first pass |
-| Gap % (`open ÷ previous close − 1`), 6,355 pairs | Identical except **1**: HINDPETRO on 14 Aug |
-| Top 10 and bottom 10 movers over 1, 3, 5, 7 and 20 days | **Identical lists** on every window |
-
-### Cost and reliability
-
-| | Kite | INDmoney |
-|---|---|---|
-| Candles for 210 stocks × 45 days | 213 calls, **174 s** | 42 calls, **23 s** |
-| Errors during the run | 3 read timeouts from `api.kite.trade`, each fine on retry | 1 `403 TokenException` on one batch of 5 |
-| Bulk snapshot, 210 stocks | 1 call, 0.36 s | 1 call, 0.53 s |
-
-**The INDmoney 403 was transient.** The same token worked for every call
-before and after it. Re-requesting that batch (BHARATFORG, BHARTIARTL, BHEL,
-BIOCON, BLUESTARCO) returned `200`, and all 160 of its stock-days then
-matched Kite exactly. So a single `TokenException` on INDmoney doesn't always
-mean the token is dead. Retry once before generating a new token, because
-generating one revokes the token every other process is using.
-`scripts/compare_indmoney_kite.py` now retries it once.
-
-### The one real difference: corporate-action adjustment
-
-HINDPETRO, the four sessions before its 14 August ex-date:
-
-| Date | Kite open / close | INDmoney open / close | Volume (both) |
-|---|---|---|---|
-| 2026-08-10 | 375.65 / 373.90 | 395.00 / 393.15 | 6,272,362 |
-| 2026-08-13 | 373.50 / 373.65 | 392.75 / 392.90 | 9,450,914 |
-| **2026-08-14** | 374.00 / 373.50 | 374.00 / 373.50 | 8,013,809 |
-| 2026-08-17 onwards | identical | identical | identical |
-
-- **Kite adjusts past prices; INDmoney keeps the raw exchange prices.** Kite scaled every price before the ex-date by about 0.951, and volume is unchanged. That looks like an adjustment for a large dividend or a similar corporate action, not a split, since a split would change volume too.
-- **This affects gaps directly.** INDmoney shows HINDPETRO gapping **−4.8%** on 14 August, when the stock only lost its entitlement. Kite shows **+0.09%**.
-- **Stored history ends up unadjusted with either broker.** A daily cron stores each day's candle as it is *that* day, and Kite only adjusts retroactively. So ex-dates show up as false gaps whichever broker the cron uses.
-- **The fix is a re-fetch from Kite.** `update_fno_history.py --full --days N` re-fetches the adjusted window from Kite. See [`FNO_MOVERS.md`](FNO_MOVERS.md#known-limitations).
-
-### Conclusion
-
-**INDmoney's daily data matches Kite's.** Every open, high, low, close and
-volume matched over 32 days and 210 stocks, and so did the live snapshot. The
-only difference was Kite's corporate-action adjustment. INDmoney is also 7–8×
-cheaper to fetch, free, and logs in without a person.
-
-**Decision:**
-- **Daily capture:** INDmoney first, Kite as fallback.
-- **Backfills and repairs:** use Kite, whose history is corporate-action adjusted.
-
-Mixing the two is safe: they differ only on pre-ex-date prices, and the Kite
-re-fetch overwrites those anyway.
-
-**Not covered by this run:**
-- Stocks outside the F&O list.
-- After-hours behaviour of `/quotes/full`.
-- Any day on which INDmoney is down.
-- Whether INDmoney ever publishes a day's candle later than Kite.
-
-Re-run after 16:00 IST on a trading day to check those last two.

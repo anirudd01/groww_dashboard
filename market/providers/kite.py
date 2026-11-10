@@ -4,7 +4,7 @@ Calls the documented REST and WebSocket APIs directly - no ``kiteconnect``
 SDK. The SDK's ``KiteTicker`` runs on Twisted, whose reactor cannot be
 restarted within a process, and this service reconnects feeds as a matter of
 course. ``requests`` + ``websockets`` (already installed) cover everything, as
-they do for Dhan and INDmoney.
+they do for Dhan.
 
 References (Kite Connect v3, https://kite.trade/docs/connect/v3/):
   - Login / token   : market/providers/kite_session.py, scripts/kite_login.py

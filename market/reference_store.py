@@ -1,6 +1,6 @@
 """Generated reference data, kept in the shared SQLite store.
 
-Each broker's instrument ids (``dhan_instruments``, ``indmoney_instruments``, ``kite_instruments``),
+Each broker's instrument ids (``dhan_instruments``, ``kite_instruments``),
 the free-float weights (``index_weights``), the F&O stock list (``fno_universe``) and the confirmed
 moves (``fno_confirmed_moves``) are sets here, in ``data/market.db``, the file
 ``market/intraday_store.py`` owns. A script generates each one, and the dashboards read it at startup
@@ -32,7 +32,7 @@ from market import intraday_store, state_store
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS reference_sets (
-    name         TEXT PRIMARY KEY,   -- dhan_instruments | indmoney_instruments | kite_instruments | index_weights | fno_universe
+    name         TEXT PRIMARY KEY,   -- dhan_instruments | kite_instruments | index_weights | fno_universe
     generated_at TEXT,               -- the document's own generated_at, ISO UTC
     meta         TEXT NOT NULL       -- JSON: every other top-level field (source, note, counts, ...)
 ) WITHOUT ROWID;

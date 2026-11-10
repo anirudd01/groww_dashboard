@@ -14,7 +14,7 @@ in [`../KITE_PROMPT.md`](../KITE_PROMPT.md).
 
 | | |
 |---|---|
-| Verified live, in session | Login and token exchange, `/user/profile`, quotes, daily candles and the websocket, on both boards: **50/50 stocks and 17/17 indices**, including Nifty Oil & Gas, which INDmoney does not serve. The socket went `LIVE` about 4 s after connecting |
+| Verified live, in session | Login and token exchange, `/user/profile`, quotes, daily candles and the websocket, on both boards: **50/50 stocks and 17/17 indices**, including Nifty Oil & Gas. The socket went `LIVE` about 4 s after connecting |
 | Websocket `close` | **Is the previous close.** It matched `/quote/ohlc` `ohlc.close` on 50/50 stocks |
 | Daily candles | Include **today's candle while the session is live**, with its `close` at the current price. The candle-derived previous close matched `ohlc.close` on 50/50. Fetching 50 stocks takes ~18 s at the 3 req/s limit |
 | Seen once | A 15 s read timeout from `api.kite.trade`, which cleared within a minute. The candle lookup skips a failed request and carries on |
@@ -66,7 +66,7 @@ shows nothing.
 | REST quotes | `exchange:tradingsymbol`, repeated `i=` params | `i=NSE:RELIANCE&i=NSE:NIFTY BANK` |
 | Websocket, historical candles | numeric `instrument_token` | `738561`, `260105` |
 
-Kite's `instrument_token` is **not** the NSE token used by Dhan and INDmoney.
+Kite's `instrument_token` is **not** the NSE token used by Dhan.
 RELIANCE is `738561` on Kite; its `exchange_token` column is the NSE `2885`. So
 the `kite_instruments` set in `data/market.db` stores the
 instrument token as `security_id` (becoming `InstrumentRef.provider_id`) and
@@ -134,4 +134,4 @@ Zerodha recommends pykiteconnect. For this service, though, its `KiteTicker`
 runs on Twisted, and a Twisted reactor cannot be restarted within a process,
 while `LiveMarketDataService` routinely closes and reopens feeds on silence or
 failover. The REST API is simple and the packet format is fully documented. So
-Kite follows Dhan and INDmoney: `requests` + `websockets`, no new dependency.
+Kite follows Dhan: `requests` + `websockets`, no new dependency.

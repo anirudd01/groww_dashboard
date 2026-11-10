@@ -50,7 +50,7 @@ python scripts/kite.py history --full --history-days 1830   # 5 years, ~216 requ
 - **Nifty 100 names without futures** (TATACAP, TMCV, VAML on 2026-10-23) are fetched too. They are not added to `fno_universe`, so the F&O pages never list them.
 - **Size.** About 257,000 rows. The existing F&O pages hold their rows in memory, so they read only the last 400 calendar days (`DASHBOARD_LOOKBACK_DAYS` in `market/fno_movers.py`). Only this page reads further back, and it does so in SQL.
 
-**Sectors** are NSE's industry labels with banks split out, the same labels the sector heatmap uses. They come from NSE's Nifty 500 list plus the universes, stored as the `sectors` section of the `index_constituents` set by `python scripts/kite.py --master` (or `dhan.py` / `indmoney.py`). A stock outside the Nifty 500 (UJJIVANSFB on 2026-10-23) shows as **Other**. **Tile sizes** are the free-float market caps in `index_weights` (`python scripts/dhan.py --master`); a stock without one gets the median size.
+**Sectors** are NSE's industry labels with banks split out, the same labels the sector heatmap uses. They come from NSE's Nifty 500 list plus the universes, stored as the `sectors` section of the `index_constituents` set by `python scripts/kite.py --master` (or `dhan.py`). A stock outside the Nifty 500 (UJJIVANSFB on 2026-10-23) shows as **Other**. **Tile sizes** are the free-float market caps in `index_weights` (`python scripts/dhan.py --master`); a stock without one gets the median size.
 
 ## How it is computed
 

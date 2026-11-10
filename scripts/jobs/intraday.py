@@ -12,7 +12,7 @@ runs ``history`` first).
 Cost: Kite returns at most **60 days of 1-minute bars per call**, one stock per
 call (a 61-day window is rejected with 400; tested 2026-09-27). So a 60-day
 backfill is one minute call plus one daily call per stock - ~420 requests,
-about 4-5 minutes at Kite's 3 req/s. Why Kite and not Groww, INDmoney or
+about 4-5 minutes at Kite's 3 req/s. Why Kite and not Groww or
 Dhan: docs/PROVIDER_COMPARISON_LOG.md (2026-09-27).
 
 Re-runs are incremental: each stock restarts from its last stored bar, so a

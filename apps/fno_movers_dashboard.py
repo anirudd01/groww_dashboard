@@ -32,6 +32,7 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
+from utils.public_mode import allow_refresh
 from market.fno_movers import (
     CLOSE_COLUMNS,
     UPDATE_SCRIPT,
@@ -265,7 +266,7 @@ def main(view: str = VIEW_ALL) -> None:
                                    help="Leave stocks whose close fell by a split-like ratio out of the rankings.")
         show_live = st.toggle("Include today (live)", value=True,
                               help="One bulk Kite quote for all F&O stocks, refreshed at most every 30 s.")
-        if st.button("Refresh live prices", icon=":material/refresh:"):
+        if st.button("Refresh live prices", icon=":material/refresh:") and allow_refresh("fno_movers"):
             live_quotes.clear()
 
     rows, stored_moves, actions = load_history(closes_stamp())

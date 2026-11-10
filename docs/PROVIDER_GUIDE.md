@@ -1,7 +1,7 @@
 # Choosing a market-data provider
 
-Which broker API to use for which job. Four are wired into this repo:
-**Kite** (Zerodha), **Dhan**, **INDmoney** (API brand: INDstocks) and **Groww**.
+Which broker API to use for which job. Three are wired into this repo:
+**Kite** (Zerodha), **Dhan** and **Groww**.
 
 Read this before starting a feature that touches market data. It is a decision
 guide, not a reference. The per-broker details live in:
@@ -10,7 +10,6 @@ guide, not a reference. The per-broker details live in:
 | --- | --- | --- |
 | Kite | [`api/KITE_API.md`](api/KITE_API.md), [`KITE_PROMPT.md`](KITE_PROMPT.md) | `market/providers/kite.py` |
 | Dhan | [`SECTOR_HEATMAP.md`](SECTOR_HEATMAP.md), vendor docs [`dhan-api-docs.md`](dhan-api-docs.md) | `market/providers/dhan.py` |
-| INDmoney | [`api/INDMONEY_API.md`](api/INDMONEY_API.md), vendor docs [`indstocks-api-docs.md`](indstocks-api-docs.md) | `market/providers/indmoney.py` |
 | Groww | [`api/GROWW_API_LIVE_DATA.md`](api/GROWW_API_LIVE_DATA.md), [`api/GROWW_API_FEED.md`](api/GROWW_API_FEED.md), [`api/GROWW_API_PORTFOLIO.md`](api/GROWW_API_PORTFOLIO.md), [`api/GROWW_API_ORDERS.md`](api/GROWW_API_ORDERS.md), [`api/GROWW_API_INSTRUMENTS.md`](api/GROWW_API_INSTRUMENTS.md) | `market/providers/groww.py`, `groww_api/` |
 
 What each broker's own spec lists that we do not use (checked 2026-10-01, including a Dhan gainers/losers endpoint) is in [`API_ENDPOINT_AUDIT.md`](API_ENDPOINT_AUDIT.md). Measured head-to-head runs are in [`PROVIDER_COMPARISON_LOG.md`](PROVIDER_COMPARISON_LOG.md). There is also a worked example of picking a provider in
@@ -21,9 +20,7 @@ What each broker's own spec lists that we do not use (checked 2026-10-01, includ
 - **✅ verified**: seen against the live API from this repo, with a date.
 - **📄 docs**: the vendor docs say so, but it hasn't been tested here.
 
-INDmoney's docs are wrong in several places (see its section), so treat its 📄 claims with the most caution. The vendor mirror [`indstocks-api-docs.md`](indstocks-api-docs.md) has had its proven-wrong passages corrected or cut, marked `[pulse_tester]`.
-
-*Last updated 2026-10-18 (Groww's paid data plan tested: prices, NSE candles, option chain and Greeks work; MCX has prices but no candles or Greeks). 2026-10-17: INDmoney MCX quotes retested against Kite; Groww's free API plan tested. Earlier: 2026-09-27, 1-minute history compared across all four brokers; Dhan TOTP token generation verified.*
+*Last updated 2026-11-07 (daily and 1-minute candles compared across Kite, Groww and Dhan: which provider for which field). 2026-10-18: Groww's paid data plan tested: prices, NSE candles, option chain and Greeks work; MCX has prices but no candles or Greeks). 2026-10-17: Groww's free API plan tested. Earlier: 2026-09-27, 1-minute history compared across the brokers; Dhan TOTP token generation verified.*
 
 ---
 
@@ -31,17 +28,17 @@ INDmoney's docs are wrong in several places (see its section), so treat its 📄
 
 | Job | First choice | Second choice | Avoid | Why |
 | --- | --- | --- | --- | --- |
-| **Live streaming** (heatmaps, tickers) | **Dhan** | Kite, INDmoney | Groww | Dhan and Kite sockets connect in under 5 s and push ticks ✅. INDmoney matched Dhan's tick rate ✅. Groww's handshake takes 1–145 s and hides dropped connections ✅ |
-| **Fastest heatmap cold start** | **INDmoney** (full board from REST in ~1.4 s) | Kite, Dhan (~2.8-3.0 s) | Groww | INDmoney REST calls take ~0.35 s against ~1.1 s for the others ✅ 2026-09-30, but it serves 16 of 17 indices (no Oil & Gas). Dhan is still the pick when you need all 17. [log](PROVIDER_COMPARISON_LOG.md) |
-| **End-of-day opens and closes for many stocks** (cron → store) | **INDmoney** | Kite | Groww (its daily candles have no `open`) | INDmoney matched Kite on 6,717 of 6,720 stock-days and was 7–8× faster ✅ 2026-09-25, [log](PROVIDER_COMPARISON_LOG.md) |
-| **Today's snapshot for up to 1,000 stocks in one call** | Kite, Dhan, INDmoney (all 1,000 per call) | — | Groww (50 per call) | ✅ 2026-09-25, [`FNO_MOVERS.md`](FNO_MOVERS.md) |
-| **1-minute history** (backfill of intraday bars) | **Kite** | Dhan (90 days per call) | INDmoney | Dhan: 90 days per call, but its prices differ from Kite's on 20–40% of bars and its volume on 88% ✅. Kite: 60 days per call and one call per stock. Its bars reproduce the official daily open, high and low ✅. Groww: 30 days per call, and its opens differ from Kite's on half the bars ✅. INDmoney: 7 days per call, volumes that don't match anyone, and invented flat bars after 15:15 ✅. 2026-09-27, [log](PROVIDER_COMPARISON_LOG.md), store in [`INTRADAY_HISTORY.md`](INTRADAY_HISTORY.md) |
-| **Historical backfill** (months or years of daily candles) | **Kite** (its history is corporate-action adjusted ✅) | Dhan | — | Kite: up to 2000 days per call (5 years in one call per stock; 7 years returns 400) ✅ 2026-10-23, 3 req/s, continuous futures ✅. Kite adjusts for splits, bonuses and large dividends, not demergers; Dhan's candles are the raw traded prices ✅ 2026-10-23, see [DROP_FROM_HIGH.md](DROP_FROM_HIGH.md#checked-against-dhan-2026-10-23). Dhan: 5 years intraday 📄. INDmoney: 5 symbols per call, but one call covers at most 1 year of daily data 📄 |
-| **Option chain / Greeks** | **Dhan** or **Groww** | INDmoney | Kite | Dhan, Groww and INDmoney all return a chain with Greeks 📄. Groww's work for NSE ✅ 2026-10-18 but **not for MCX** (no chain, `get_greeks` errors) ✅. Kite has no chain API; you'd assemble it from quotes and calculate Greeks yourself 📄 |
-| **MCX commodities** | **Dhan** (Kite as fallback) | Groww (positions and prices; no MCX candles ✅ 2026-10-18) | **INDmoney** | Dhan and Kite returned identical MCX prices, OHLC and OI ✅ 2026-10-03. Dhan leads because it needs no morning login and keeps volume after the close; the MCX Futures page falls back to Kite. See [MCX on Dhan and Kite](#mcx-on-dhan-and-kite-tested-2026-10-03). INDmoney now prices MCX on REST, identical to Kite, but has no candles, no last-trade time and 19 of 28 commodities ✅ 2026-10-17, see [MCX on INDmoney](#mcx-on-indmoney-retested-2026-10-17) |
-| **Portfolio / positions** | **Groww** (the existing dashboards use it) | Kite, Dhan | INDmoney for F&O | Groww's positions, holdings and margins work on its free API plan ✅ 2026-10-17; with the paid data plan F&O and MCX positions are priced, MCX in batches of 50 ✅ 2026-10-18. This account's INDmoney profile says F&O is not activated ✅ |
-| **Unattended jobs** (no one at the machine) | **Groww**, **INDmoney** or **Dhan** | — | Kite | All three mint tokens from a stored TOTP secret: Groww and INDmoney ✅ 2026-09-25, Dhan ✅ 2026-09-27. Kite always needs a browser login |
-| **Free market data** | **INDmoney** | — | — | Kite, Dhan and Groww all charge for data APIs. Groww's free plan refuses every price, candle, option-chain and Greeks call ✅ 2026-10-17; this account has had the paid plan since 2026-10-18 |
+| **Live streaming** (heatmaps, tickers) | **Dhan** | Kite | Groww | Dhan and Kite sockets connect in under 5 s and push ticks ✅. Groww's handshake takes 1–145 s and hides dropped connections ✅ |
+| **Fastest heatmap cold start** | **Kite**, **Dhan** (full board from REST in ~2.8-3.0 s) | — | Groww | REST calls take ~1.1 s ✅ 2026-09-30. Dhan and Kite both serve all 17 indices. [log](PROVIDER_COMPARISON_LOG.md) |
+| **End-of-day opens and closes for many stocks** (cron → store) | **Dhan** (logs in unattended) | Kite (needs a daily browser login) | Groww (its daily candle has no `open`, and its high/low/volume include pre-open and closing-session trades) | Dhan's daily candle equals Kite's on every field for 88/88 stock-days; the only differences are Kite's corporate-action adjustments, Dhan being raw ✅ 2026-11-07, [log](PROVIDER_COMPARISON_LOG.md); see [End-of-day capture](#end-of-day-capture-opens-closes-gaps-movers) |
+| **Today's snapshot for up to 1,000 stocks in one call** | Kite, Dhan (both 1,000 per call) | — | Groww (50 per call) | ✅ 2026-09-25, [`FNO_MOVERS.md`](FNO_MOVERS.md) |
+| **1-minute history** (backfill of intraday bars) | **Kite** (all fields) | **Groww** for close and volume, unattended | Dhan | Kite: 60 days per call; its bars reproduce the official daily open, high and low ✅. Groww: 30 days per call; vs Kite, close 99.3% and volume 99.8% equal, high/low ~96%, open only 61% - a convention, not an error: Kite's 09:15 open is the pre-open price (Groww keeps it in a 09:08 bar), and on ~40% of minutes Kite's open repeats the previous close where Groww uses the minute's first trade. Labels line up exactly. Take the day's official open from Groww's pre-open bar or Dhan's daily candle. Keep the pre-open and 15:15–15:59 bars out of `minute_bars` ✅. Dhan: 90 days per call, official open in its 09:15 bar, labels aligned and no net delay, but trades at a minute boundary land in the neighbouring minute, so close is 62.5% and volume 13.7% exactly equal (volume off by a median 0.4%) ✅. 2026-11-07, [log](PROVIDER_COMPARISON_LOG.md), store in [`INTRADAY_HISTORY.md`](INTRADAY_HISTORY.md) |
+| **Pre-open and closing auction bars** | **Groww** (only source) | — | — | Groww sends 09:00–09:08 (volume only) and 15:15–15:59; Kite and Dhan send nothing outside 09:15–15:14 ✅ 2026-11-07 |
+| **Historical backfill** (months or years of daily candles) | **Kite** (its history is corporate-action adjusted ✅) | Dhan | — | Kite: up to 2000 days per call (5 years in one call per stock; 7 years returns 400) ✅ 2026-10-23, 3 req/s, continuous futures ✅. Kite adjusts for splits, bonuses and large dividends, not demergers; Dhan's candles are the raw traded prices ✅ 2026-10-23, see [DROP_FROM_HIGH.md](DROP_FROM_HIGH.md#checked-against-dhan-2026-10-23). Dhan: 5 years intraday 📄. |
+| **Option chain / Greeks** | **Dhan** or **Groww** | — | Kite | Dhan and Groww both return a chain with Greeks 📄. Groww's work for NSE ✅ 2026-10-18 but **not for MCX** (no chain, `get_greeks` errors) ✅. Kite has no chain API; you'd assemble it from quotes and calculate Greeks yourself 📄 |
+| **MCX commodities** | **Dhan** (Kite as fallback) | Groww (positions and prices; no MCX candles ✅ 2026-10-18) | — | Dhan and Kite returned identical MCX prices, OHLC and OI ✅ 2026-10-03. Dhan leads because it needs no morning login and keeps volume after the close; the MCX Futures page falls back to Kite. See [MCX on Dhan and Kite](#mcx-on-dhan-and-kite-tested-2026-10-03). |
+| **Portfolio / positions** | **Groww** (the existing dashboards use it) | Kite, Dhan | — | Groww's positions, holdings and margins work on its free API plan ✅ 2026-10-17; with the paid data plan F&O and MCX positions are priced, MCX in batches of 50 ✅ 2026-10-18. |
+| **Unattended jobs** (no one at the machine) | **Groww** or **Dhan** | — | Kite | Both mint tokens from a stored TOTP secret: Groww ✅ 2026-09-25, Dhan ✅ 2026-09-27. Kite always needs a browser login |
 
 ---
 
@@ -49,18 +46,18 @@ INDmoney's docs are wrong in several places (see its section), so treat its 📄
 
 Scores run from 1 (poor) to 5 (best), for the uses in this repo.
 
-| | Kite | Dhan | INDmoney | Groww |
-| --- | :-: | :-: | :-: | :-: |
-| Live streaming | 5 ✅ | 5 ✅ | 4 ✅ | 2 ✅ |
-| Bulk snapshot (many stocks, one call) | 5 ✅ | 5 ✅ | 5 ✅ | 2 ✅ |
-| Daily candles / backfill | 5 ✅ (adjusted) | 4 ✅ | 4 ✅ (raw, matches Kite) | 3 ✅ (no `open`) |
-| 1-minute history (per-call window, quality) | 5 ✅ (60 days, matches official OHLC) | 3 ✅ (90 days; prices and volumes differ from Kite) | 1 ✅ (7 days, volumes wrong) | 3 ✅ (30 days, opens differ) |
-| Option chain + Greeks | 1 📄 | 5 📄 | 4 📄 | 4 📄 |
-| MCX commodities | 5 ✅ | 5 ✅ | 3 ✅ (quotes only, 19 of 28 commodities, no candles) | 3 (positions used by `apps/fno_dashboard.py`) |
-| Unattended auth | 1 ✅ | 5 ✅ | 5 ✅ | 5 ✅ |
-| Doc accuracy | 5 | 3 | 2 | 2 |
-| Cost of data | paid | paid | **free** | paid |
-| **Overall maturity** | **5** | **4** | **2** | **3** |
+| | Kite | Dhan | Groww |
+| --- | :-: | :-: | :-: |
+| Live streaming | 5 ✅ | 5 ✅ | 2 ✅ |
+| Bulk snapshot (many stocks, one call) | 5 ✅ | 5 ✅ | 2 ✅ |
+| Daily candles / backfill | 5 ✅ (adjusted) | 4 ✅ | 3 ✅ (no `open`) |
+| 1-minute history (per-call window, quality) | 5 ✅ (60 days, matches official OHLC) | 3 ✅ (90 days; prices and volumes differ from Kite) | 3 ✅ (30 days, opens differ) |
+| Option chain + Greeks | 1 📄 | 5 📄 | 4 📄 |
+| MCX commodities | 5 ✅ | 5 ✅ | 3 (positions used by `apps/fno_dashboard.py`) |
+| Unattended auth | 1 ✅ | 5 ✅ | 5 ✅ |
+| Doc accuracy | 5 | 3 | 2 |
+| Cost of data | paid | paid | paid |
+| **Overall maturity** | **5** | **4** | **3** |
 
 ---
 
@@ -121,96 +118,12 @@ Scores run from 1 (poor) to 5 (best), for the uses in this repo.
 | What it needs | Client ID + the 6-digit Dhan PIN + a TOTP code. The Client ID is inside every access token (`dhanClientId` claim), so an expired token is enough to recover it ✅ |
 | Success response | `200` with `accessToken`, `expiryTime` (24 h after generation, IST, no zone), `dhanClientId`, `dhanClientName`, `dhanClientUcc`, `givenPowerOfAttorney` ✅ |
 | Failure response | **Also `200`**, with `{"status": "error", "message": "Invalid TOTP"}`. Check the body, not the status code ✅ |
-| Old token after a new one is made | **Still valid.** Unlike INDmoney, generating a token didn't revoke the previous one (checked immediately after) ✅ |
+| Old token after a new one is made | **Still valid.** Generating a token didn't revoke the previous one (checked immediately after) ✅ |
 | First attempt | Rejected as `Invalid TOTP` with 5 s left in the window, when the clock correction came from an HTTP `Date` header (±1 s). With the NTP-corrected clock (2026-09-28), the first code was accepted and a new token took 1.6 s. A rejection is still retried once, in the next window, after re-measuring the clock. How many failures trigger a lockout isn't documented |
 
 `.env` variables: `DHAN_CLIENT_ID`, `DHAN_PIN` (6 digits; `DHAN_MPIN` also accepted) and `DHAN_TOTP_SECRET` (base32, 32 characters; `DHAN_TOPT_SECRET` also accepted). **No access token goes in `.env`.** [`market/providers/dhan_session.py`](../market/providers/dhan_session.py) mints one, keeps it in the shared database (`data/market.db`, git-ignored) and shares it across processes under a lock (a lease row in the database). It replaces the token an hour before expiry, or when Dhan rejects it. Codes come from the NTP-corrected clock (`market/clock_offset.py`), and a rejection is retried once in the next window. Verified end to end: with no session file, `DhanProvider().connect()` minted a token on the first code in 17.5 s on 2026-09-27, when it still waited for a fresh window. With the clock correction it took **1.6 s** on 2026-09-28.
 
-### INDmoney (INDstocks)
-
-- **Strengths:**
-  - **Free market data.**
-  - 1,000 instruments per quote call, and `quotes/full` returns `day_open` and `prev_close` together ✅.
-  - 5 requests per second.
-  - Daily candles take **5 symbols per call**, so the Nifty 50 takes about 5 s ✅.
-  - JSON socket with the same tick rate as Dhan ✅.
-  - Headless login works ✅ 2026-09-25: `POST /generate/token` with the Client ID, MPIN and a TOTP code made from the stored secret. See [INDmoney token generation](#indmoney-token-generation-tested-2026-09-25).
-- **Weaknesses:**
-  - **The docs can't be trusted as written.** Checked live:
-    - The index prefix is wrong in the docs.
-    - Socket frames arrive JSON-encoded twice.
-    - Quote-mode `close` is the live price, not the previous close.
-    - One bad code makes the whole batch fail.
-    - The changelog claims features that don't exist.
-
-    See [`api/INDMONEY_API.md`](api/INDMONEY_API.md).
-  - No sandbox. Nifty Oil & Gas returns no data ✅.
-  - **1-minute history is unusable** ✅ 2026-09-27:
-    - Every request returns only the **last 7 days** before `end_time`, whatever window you ask for.
-    - Volumes matched Kite's on 0.2% of bars, and minute volumes summed to 49–107% of the day's volume.
-    - After 15:15 it returns bars up to 15:30, a window in which Kite and Groww show no trading.
-  - On this account F&O is not activated ✅.
-  - MCX is effectively not available (below).
-- **Gotchas:**
-  - **Only one TOTP-generated token can be live at a time.** Each new one cancels the last 📄. If a cron job and the dashboard both generate tokens, they will keep logging each other out. So all processes share one token through the shared database (`data/market.db`, git-ignored) (`indmoney_session.py`, since 2026-09-28).
-  - A historical request wider than the limit returns `200` with less data, not an error 📄.
-- **Use for:** free bulk snapshots and end-of-day capture, and as a streaming fallback for NSE/BSE cash and indices. Not for MCX or F&O on this account.
-
-#### INDmoney token generation (tested 2026-09-25)
-
-| Finding | Docs say | Actually |
-| --- | --- | --- |
-| What a new token needs | `x-api-key` (Client ID) + `mpin` + `totp` | Same ✅. Leaving out either gives `400 Missing required fields: totp` or `...: mpin`. **All three are required.** Neither the MPIN alone nor the TOTP alone is enough |
-| Refresh or renew endpoint | none documented | None exists: `/refresh/token`, `/token/refresh` and `/renew/token` all return 404 ✅ |
-| Token lifetime | "24 hours from generation" | **Wrong.** A token made at 13:20 IST returned `expires_in: 1790386200`, which is **07:00 IST the next day** ✅. Treat it as a fixed daily cutoff, like Kite's 06:00 |
-| Response field | `token` | `{"token": "...", "expires_in": <epoch seconds>}` ✅. `expires_in` is an absolute time, not a duration |
-| The TOTP secret | shown once at setup | The dashboard calls it the **Setup Key**. After setup it only shows the Client ID ✅ |
-
-`.env` variables: `IND_MONEY_CLIENT_ID`, `IND_MONEY_MPIN` and `IND_MONEY_TOTP_SECRET` (the Setup Key, base32). **No access token goes in `.env`** (since 2026-09-28). [`market/providers/indmoney_session.py`](../market/providers/indmoney_session.py) mints one and shares it through the shared database (`data/market.db`, git-ignored), on the Dhan pattern and the same [`token_store.py`](../market/providers/token_store.py) plumbing. Until then nothing in the repo could mint a token, so the pasted one died at 07:00 every day and INDmoney dropped out of every script. Verified 2026-09-28: with no session file, `IndMoneyProvider().connect()` minted a token on the first NTP-corrected code in 1.3 s (valid to 07:00 next day), and a second process reused it without minting.
-
-**Clock drift breaks TOTP quietly.** This PC's clock is **21.0 s slow**. Three NTP servers agreed within 10 ms on 2026-09-28; the HTTP `Date` headers measured on 2026-09-25 said "about 16–20 s", because they only have 1-second resolution. That's enough to produce a wrong code, and 5 wrong INDmoney codes lock you out for 15 minutes. **Every TOTP code in this repo must come from `market.clock_offset.totp_code(secret)`**, never from `pyotp.TOTP(...).now()`. It measures the offset by NTP once per process (falling back to HTTP `Date`, then the saved value), saves it to the git-ignored the `clock_offset` row of `data/market.db`, and waits at most 3 s, only in a window's last seconds. Dhan, INDmoney and both Groww clients use it. Syncing the Windows clock (`w32tm /resync`, as admin) is still worth doing.
-
-**Generate once, share the result.** Each new token cancels the last. The data endpoints only accept the access token, so the Client ID, MPIN and secret are used for one thing: making that token. It doesn't need a scheduled job. Any process can make one *when needed*, the way Groww's SDK does, provided all processes share one saved token:
-
-This is what `indmoney_session.py` does:
-
-1. Read the saved token.
-2. If it's missing, past its `expires_in`, or rejected **twice** (one 403 can be transient), take a lock and make a new one from TOTP.
-3. Save it and release the lock. Every other process picks it up on its next read.
-
-Without the shared file and lock, two processes that each make their own token keep revoking each other's.
-
-#### MCX on INDmoney (retested 2026-10-17)
-
-INDmoney's docs added MCX quotes in October 2026 (changelog "Unreleased"). Retested on Saturday 17 Oct, so the values
-are Friday's session; Kite was asked for the same contracts at the same time.
-
-| Surface | Result |
-| --- | --- |
-| Instrument list, `source=mcx` (now documented) | ✅ 10,623 rows; **93 `FUTCOM`, 19 commodities** (Dhan: 168, 28). No CARDAMOM, COTTON, COTTONOIL, ELECDMBL, KAPAS, LEAD, LEADMINI, MENTHAOIL, STEELREBAR, SUNOIL, and only the nearer expiries of the rest (GOLD to Apr 27, CRUDEOIL to Mar 27). `SECURITY_ID` is the MCX token, the same id Dhan uses |
-| REST `ltp`, `full`, `mkt` with `MCX_<id>` | ✅ ~0.35 s for all 93 in one call. **One id that `source=mcx` does not list fails the whole request** (`400 Invalid scrip codes or mode`) |
-| `full` against Kite (82 contracts that traded) | ✅ last price, open, high, low and OI identical on all 82. `prev_close` differed on 6: illiquid contracts, and NATURALGAS, where INDmoney's 306 is Thursday's close (Kite's daily candle agrees) while Kite's quote had already rolled to Friday's 298.6. INDmoney was the consistent one |
-| `full` fields | `live_price`, `day_open/high/low`, `prev_close`, `day_change(_percentage)`, `volume` (kept after the close, like Dhan), `open_interest`, `open_interest_change`, resolved circuits. **No last-trade time.** 11 untraded contracts come back with no price |
-| `/market/historical/{1day,15minute,1minute}` with `MCX_` | ❌ `200` with empty `data` (an NSE control in the same run returned candles) |
-
-So INDmoney can fill the MCX quote table for free, but not the charts, and the page's "trading now" test (newest last-trade time) has nothing to read. The MCX Futures page uses it as the third choice after Dhan and Kite, judging "live" from MCX's hours ([MCX_FUTURES.md](MCX_FUTURES.md#how-the-fallback-works)).
-
-<details><summary>Earlier result (2026-09-25, market open)</summary>
-
-
-| Surface | Result |
-| --- | --- |
-| Instrument list, `source=mcx` (**undocumented**) | ✅ 9,967 MCX rows (GOLD, SILVERM, CRUDEOIL, NATURALGAS, COPPER…), types `FUTCOM` and `OPTFUT` |
-| REST quotes (`ltp`, `full`) with `MCX_`, `MCXFO_`, `MCXCOM_`, `MCX_COMM_` and others | ❌ `400 Invalid scrip codes or mode` (an NSE control request worked) |
-| REST daily candles, same prefixes | ❌ `400 Invalid scrip codes` |
-| Contracts search, `underlying=CRUDEOIL` | ❌ `400 Invalid or unknown underlying` |
-| WebSocket `MCX:<id>`, `ltp` mode | ✅ CRUDEOIL Oct future priced (8939–8945), 6 ticks in 45 s |
-| WebSocket `MCX:<id>`, `quote` mode | ⚠️ `open`, `high` and `low` are always **0**; only `close` (the live price) and volume are filled |
-| WebSocket `MCXFO:` / `MCXCOM:` | ❌ silently ignored |
-
-In short, you could get a live MCX price from the socket, but no opens, no previous close and no history.
-
-</details>
+**Clock drift breaks TOTP quietly.** This PC's clock is **21.0 s slow**. Three NTP servers agreed within 10 ms on 2026-09-28; the HTTP `Date` headers measured on 2026-09-25 said "about 16–20 s", because they only have 1-second resolution. That's enough to produce a wrong code. **Every TOTP code in this repo must come from `market.clock_offset.totp_code(secret)`**, never from `pyotp.TOTP(...).now()`. It measures the offset by NTP once per process (falling back to HTTP `Date`, then the saved value), saves it to the git-ignored the `clock_offset` row of `data/market.db`, and waits at most 3 s, only in a window's last seconds. Dhan and both Groww clients use it. Syncing the Windows clock (`w32tm /resync`, as admin) is still worth doing.
 
 #### MCX on Dhan and Kite (tested 2026-10-03)
 
@@ -244,7 +157,7 @@ the margin calculator and the instrument list. No API gives order history beyond
 [`GROWW_PAID_PLAN_CHECKS.md`](GROWW_PAID_PLAN_CHECKS.md).
 
 - **Strengths:**
-  - **TOTP login is fully automatic** (`GROWW_TOTP_SECRET`), like Dhan's and INDmoney's ✅.
+  - **TOTP login is fully automatic** (`GROWW_TOTP_SECRET`), like Dhan's ✅.
   - The existing portfolio and F&O dashboards use it, including commodity positions.
   - Its past closes were identical to Kite's ✅.
   - NSE option chain and Greeks ✅ 2026-10-18, and GTT/OCO smart orders (stop-loss and target that can last past a day) 📄.
@@ -296,15 +209,13 @@ The goal is to store daily open and close for about 500 instruments, then work o
 | Provider | Cost for 500 stocks, one day | Cost for a 1-year backfill | Has `open`? | Unattended? |
 | --- | --- | --- | --- | --- |
 | Kite | 1 `quote/ohlc` call in session; after close, ~500 candle calls ≈ 3 min | ~500 calls ≈ 3 min | yes | **no** (needs that morning's login) |
-| INDmoney | 1 `quotes/full` call (`day_open` + `prev_close`); candles 100 calls ≈ 25 s | 100 calls (1 year per call) | yes | **yes** ✅ (TOTP) |
 | Dhan | 1 `marketfeed/ohlc` call; candles ~500 calls at ≤5/s | ~500 calls | yes | **yes** ✅ (TOTP, 2026-09-27) |
 | Groww | 10 calls (50 per call) | ~500 calls ≈ 3.5 min | **no** | **yes** |
 
-   **Recommendation (verified 2026-09-25):** run the cron after 16:00 IST with **INDmoney** first and **Kite** as fallback. INDmoney's candles matched Kite's on every open, high, low, close and volume except one corporate action, it's 7–8× cheaper to fetch, and it logs in without a person. See the [comparison log](PROVIDER_COMPARISON_LOG.md). Groww can't supply `open`, so it can't do gaps.
+   **Recommendation:** run the cron after 16:00 IST with **Dhan**: it logs in without a person, and its daily candles equal Kite's field for field (2026-11-07, [comparison log](PROVIDER_COMPARISON_LOG.md)). The one difference is the price basis: Kite adjusts past prices for corporate actions and Dhan doesn't, so don't mix the two in one stock's history. Groww can't supply `open`, so it can't do gaps.
 
 - On a missed day, the next run backfills from candles. Candles cost one request per stock (Kite and Dhan) no matter how many days they cover, so catching up costs the same as a single day.
-- **Corporate actions:** INDmoney returns raw exchange prices, while Kite adjusts past prices after an ex-date (HINDPETRO, 14 Aug 2026: INDmoney shows a −4.8% gap, Kite +0.09%). Rows a daily cron stores are unadjusted with either broker, so repair a window with Kite (`scripts/kite.py history --full --history-days N`). See [Known limitations](FNO_MOVERS.md#known-limitations).
-- **One `403 TokenException` from INDmoney can be transient.** Retry once before generating a new token, because generating one revokes the token everyone else is using.
+- **Corporate actions:** Dhan returns raw exchange prices (✅ 2026-10-23), while Kite adjusts past prices after an ex-date. Rows a daily cron stores are unadjusted with either broker, so repair a window with Kite (`scripts/kite.py history --full --history-days N`). See [Known limitations](FNO_MOVERS.md#known-limitations).
 
 1. **The WebSocket doesn't help here.** It streams live ticks and carries no history. Use it only for live boards.
 2. **Instrument ids come from files, never runtime lookups.** Each broker's ids are generated into `data/` by a script under `scripts/`.
@@ -314,6 +225,5 @@ The goal is to store daily open and close for about 500 instruments, then work o
 ## Keeping this file honest
 
 - When you verify a 📄 claim, mark it ✅ with the date. When a ✅ claim stops being true, fix it.
-- Re-run the INDmoney MCX test when INDmoney's docs mention MCX, or every few months.
 - Dhan: `RenewToken` is still untested. TOTP generation already makes it unnecessary.
 - Keep each broker's details in its own page under [`api/`](api/). This page holds the conclusions only.

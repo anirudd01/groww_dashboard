@@ -1,6 +1,6 @@
 growwapi==1.5.0
 streamlit==1.66.0
-pandas==2.3.3
+# pandas==2.3.3
 plotly==7.1.0
 python-dotenv==1.2.4
 pyotp==2.10.0

@@ -57,15 +57,6 @@ DHAN_TOTP_SECRET=base32_secret_from_setup_totp
 
 Market data needs Dhan's paid **Data API** plan, or the websocket stays refused.
 
-INDmoney (free, the first fallback) works the same way, with its token kept
-in the shared database (`data/market.db`, git-ignored):
-
-```bash
-IND_MONEY_CLIENT_ID=client_id_shown_after_totp_setup
-IND_MONEY_MPIN=your_mpin
-IND_MONEY_TOTP_SECRET=base32_setup_key
-```
-
 ### Fill the local database (first run)
 
 The heatmap's universes (Nifty 50, Nifty Next 50) and every broker's instrument ids are
@@ -75,7 +66,6 @@ downloaded by a script, never by the dashboard. On a fresh checkout run, once:
 python scripts/kite_login.py           # Kite only: once per trading day
 python scripts/dhan.py --master        # NSE's index lists, Dhan ids, MCX futures, weights, movers close
 python scripts/kite.py --master        # NSE's index lists, Kite ids, then the F&O history + 1-minute bars
-python scripts/indmoney.py --master    # INDmoney ids (if you use INDmoney)
 ```
 
 Afterwards `python scripts/kite.py` and `python scripts/dhan.py` are the daily jobs (after 16:00 IST),

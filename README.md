@@ -4,12 +4,13 @@ Five Streamlit dashboards: four for a Groww trading account, sharing a common AP
 
 - **[`apps/fno_dashboard.py`](apps/fno_dashboard.py)** — Futures & Options (NSE FnO + MCX Commodity) position tracker: longs and shorts, P&L, realised P&L of positions closed today, direction (a sold call counts as bearish), Greeks, and a Quick Exit action for profitable positions. Expiry, lot and tick size come from Groww's instrument list. Prices and Greeks need Groww's paid data plan (active since 2026-10-18); without it positions are listed with no price or P&L, and the page says so. Groww has no Greeks for MCX options.
 - **[`apps/app.py`](apps/app.py)** — Portfolio & MTF Decoupler: separates actual (cash-owned) delivery holdings from MTF (margin/leveraged) positions, with a margin health simulator.
-- **[`pulse_dashboard.py`](pulse_dashboard.py)** — One app with an always-expanded top navbar ([`ui/navbar.py`](ui/navbar.py)): every page is a direct link, grouped as **Sectors** (Nifty 50 Sectors, Sectoral Indices, two treemaps), **F&O** (Nifty 50 Movers, All F&O Movers, F&O Heatmap, Dhan Movers) **Insights** (Breadth, Overnight vs Intraday, Rotation, Gap Fills, Gap Streaks, Drop from High) **MCX** (MCX Futures), **Journal** (Trade Journal) and **Tools** (Dhan API Explorer). One row per group, with no dropdown or "more" menu to open first, and Streamlit's large top padding trimmed so the bar sits at the top of the page (from [`apps/sector_heatmap_dashboard.py`](apps/sector_heatmap_dashboard.py) and [`apps/fno_movers_dashboard.py`](apps/fno_movers_dashboard.py)). Live sector heatmaps, two boards: the **Nifty 50 board** aggregates the 50 constituents into sectors (equal- or market-cap weighted), and the **NSE Sectoral Indices board** shows the real index values. Both are grids of clickable tiles coloured by live percentage change, with one-click drill-down. Each tile also shows its weight (share of the Nifty, or the index's free-float market cap) and its impact on the index, and the sidebar orders tiles by **Biggest impact first** (default), **Largest sector first** (tiles stay put) or **Biggest move first**. Broker-agnostic and switchable from the sidebar: **Dhan** is the default live feed with **INDmoney** as the first fallback, **Groww** and **Zerodha Kite** as further options, or pin any one broker to compare them. Visualisation only — it places no orders and generates no signals. See [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md).
+- **[`pulse_dashboard.py`](pulse_dashboard.py)** — One app with an always-expanded top navbar ([`ui/navbar.py`](ui/navbar.py)): every page is a direct link, grouped as **Sectors** (Nifty 50 Sectors, Sectoral Indices, two treemaps), **F&O** (Nifty 50 Movers, All F&O Movers, F&O Heatmap, Dhan Movers) **Insights** (Breadth, Overnight vs Intraday, Rotation, Gap Fills, Gap Streaks, Drop from High, Rise from Low) **MCX** (MCX Futures), **Journal** (Trade Journal) and **Tools** (Dhan API Explorer). One row per group, with no dropdown or "more" menu to open first, and Streamlit's large top padding trimmed so the bar sits at the top of the page (from [`apps/sector_heatmap_dashboard.py`](apps/sector_heatmap_dashboard.py) and [`apps/fno_movers_dashboard.py`](apps/fno_movers_dashboard.py)). Live sector heatmaps, two boards: the **Nifty 50 board** aggregates the 50 constituents into sectors (equal- or market-cap weighted), and the **NSE Sectoral Indices board** shows the real index values. Both are grids of clickable tiles coloured by live percentage change, with one-click drill-down. Each tile also shows its weight (share of the Nifty, or the index's free-float market cap) and its impact on the index, and the sidebar orders tiles by **Biggest impact first** (default), **Largest sector first** (tiles stay put) or **Biggest move first**. Broker-agnostic and switchable from the sidebar: **Dhan** is the default live feed with **Groww** and **Zerodha Kite** as fallbacks, or pin any one broker to compare them. Visualisation only — it places no orders and generates no signals. See [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md).
 - **[`apps/fno_movers_dashboard.py`](apps/fno_movers_dashboard.py)** — F&O top gainers and losers, one card per day (last 1/3/5/7 days), as two navbar pages: the **Nifty 50** and **all ~210 NSE F&O stocks**. Past days come from a stored close history, and today from one bulk Kite quote. Visualisation only. See [`docs/FNO_MOVERS.md`](docs/FNO_MOVERS.md).
 - **[`apps/fno_heatmap_dashboard.py`](apps/fno_heatmap_dashboard.py)** — **F&O consistency heatmap** (the **F&O Heatmap** navbar page): which F&O stocks rose or fell *steadily* over the last 3–20 trading days, not just which moved most. Three stock × day heatmaps in tabs: the **Nifty 50**, the most consistent **gainers** among the other F&O stocks, and the most consistent **losers** among them. Each cell is one day's % change. Rows are ranked by a consistency score (net move ÷ total distance moved) or, from a radio button, by up days or plain net change. Reads only the stored daily closes, with no API call. See [`docs/FNO_HEATMAP.md`](docs/FNO_HEATMAP.md).
 - **F&O insights**: five pages in the **Insights** group, built only from the stored history, with no API call. They are **[Market Breadth](apps/fno_breadth_dashboard.py)** (% of stocks above their 20/50-day averages, A/D line, new highs vs lows), **[Overnight vs Intraday](apps/fno_session_split_dashboard.py)** (whether each stock's move came from the gaps or the session), **[Relative Rotation](apps/fno_rotation_dashboard.py)** (RRG-style quadrants for Nifty 50 sectors and stocks against an equal-weight Nifty 50) and **[Gap Fills](apps/fno_gap_fills_dashboard.py)** (how often and how fast gaps trade back to the previous close, from 1-minute bars in `data/market.db`) and **[Gap Streaks](apps/fno_gap_streaks_dashboard.py)** (which stocks gapped up or down day after day: stock × day heatmaps of each day's gap, current streaks, and whether the session held the gaps). See [`docs/FNO_INSIGHTS.md`](docs/FNO_INSIGHTS.md).
 - **[Drop from High](apps/drawdown_dashboard.py)**: how far each stock trades below its high over 52 weeks, the year to date, 2 or 5 years or since any date, as a treemap of stocks (sized by free-float market cap, optionally boxed by sector) for the Nifty 50, Nifty 100, Nifty Next 50 or all F&O stocks. A range filter keeps, say, the stocks down 20% or more. Computed in SQLite over 5 years of stored daily bars, with no API call. See [`docs/DROP_FROM_HIGH.md`](docs/DROP_FROM_HIGH.md).
-- **[`apps/mcx_futures_dashboard.py`](apps/mcx_futures_dashboard.py)** — **MCX Futures**: one row per MCX commodity (bullion, energy, base metals, agri) with last price, change against the previous close, the day's range, volume and open interest, plus headline cards for gold, silver, crude, natural gas and copper. Shows the most active contract (highest open interest) by default, or the near/next/far month. Click a row for 5-minute, 15-minute, hourly or daily candles with open interest. **Dhan** serves it, **Kite** takes over automatically when Dhan fails (after `kite_login.py`), and **INDmoney** (free; quotes only, 19 of 28 commodities, no candles) when both do. The contract list comes from `scripts/dhan.py --master`, and which contracts INDmoney lists from `scripts/indmoney.py --master`. Visualisation only. See [`docs/MCX_FUTURES.md`](docs/MCX_FUTURES.md).
+- **[Rise from Low](apps/rally_dashboard.py)**: the mirror of Drop from High. How far each stock trades above its lowest intraday low over the same windows (52 weeks, year to date, 2 or 5 years or since any date), with where it stands against its high, whether the low came after the high, and how much of that fall it has won back. Same treemap, universes and filters, plus a "Low came" filter. See [`docs/RISE_FROM_LOW.md`](docs/RISE_FROM_LOW.md).
+- **[`apps/mcx_futures_dashboard.py`](apps/mcx_futures_dashboard.py)** — **MCX Futures**: one row per MCX commodity (bullion, energy, base metals, agri) with last price, change against the previous close, the day's range, volume and open interest, plus headline cards for gold, silver, crude, natural gas and copper. Shows the most active contract (highest open interest) by default, or the near/next/far month. Click a row for 5-minute, 15-minute, hourly or daily candles with open interest. **Dhan** serves it, **Kite** takes over automatically when Dhan fails (after `kite_login.py`). The contract list comes from `scripts/dhan.py --master`. Visualisation only. See [`docs/MCX_FUTURES.md`](docs/MCX_FUTURES.md).
 - **[`apps/dhan_journal_dashboard.py`](apps/dhan_journal_dashboard.py)** — **Trade Journal**: your Dhan fills and ledger as round trips (flat to flat per contract and product), measured after every charge: net P&L, win rate, expectancy, profit factor, average win against average loss, drawdown, losing streaks, daily P&L against a ₹50,000 loss limit, round trips grouped by contract, side and product, and every split (underlying, side, holding time, product, weekday, hour) on one scrolling page. Daily P&L for MCX and F&O is Dhan's own daily settlement, and a Checks view reconciles the journal with the ledger. Data from `scripts/dhan.py --journal` or the page's Sync button. Reads statements only, no orders. See [`docs/DHAN_JOURNAL.md`](docs/DHAN_JOURNAL.md).
 - **[`apps/dhan_movers_dashboard.py`](apps/dhan_movers_dashboard.py)** — **Dhan Movers**: Dhan's own server-side rankings (`/v2/data/marketmovers`). Four screens: **Stocks** (top gainers/losers of F&O stocks, Nifty 50/500 or a sector index, set against money traded), **Futures** (price against open-interest build-up, and the most traded contracts with their basis) **Options** (open interest by strike, calls against puts) and **History** (the stored closes, read from the database: any past session, breadth over time, the stocks that keep topping the lists). The live screens rank today against the previous close only. Needs Dhan credentials. Visualisation only. See [`docs/DHAN_MOVERS.md`](docs/DHAN_MOVERS.md).
 - **[`apps/dhan_api_explorer.py`](apps/dhan_api_explorer.py)** — **Dhan API Explorer** (Tools): send one `/v2/data/marketmovers` request, built from controls or hand-edited JSON, and see the reply as a table and raw JSON with the time it took. A **Members** screen ticks which stocks of the stored Nifty 50 / Next 50 appear in each Dhan universe, next to the NSE sector, and shows why the rankings cannot replace NSE's lists (no sector field; sector universes are indices). Nothing stored. See [`docs/DHAN_API_EXPLORER.md`](docs/DHAN_API_EXPLORER.md).
@@ -31,7 +32,7 @@ pulse_tester/
 │   ├── dhan_movers_dashboard.py  # Dhan market movers: stocks, futures build-up, options OI (page + standalone)
 │   ├── dhan_journal_dashboard.py # Trade journal: Dhan round trips after costs, daily P&L, splits (page + standalone)
 │   ├── dhan_api_explorer.py      # Send one marketmovers request, see the raw reply; universe membership check
-│   ├── mcx_futures_dashboard.py  # MCX commodity futures: board + candles, Dhan, then Kite, then INDmoney (page + standalone)
+│   ├── mcx_futures_dashboard.py  # MCX commodity futures: board + candles, Dhan, then Kite (page + standalone)
 │   ├── fno_heatmap_dashboard.py  # F&O consistency heatmap: Nifty 50 / other F&O gainers / losers (stored closes only)
 │   ├── fno_breadth_dashboard.py  # Insights: market breadth (stored closes only)
 │   ├── fno_session_split_dashboard.py  # Insights: overnight vs intraday (stored closes only)
@@ -39,6 +40,7 @@ pulse_tester/
 │   ├── fno_gap_fills_dashboard.py  # Insights: gap fills (data/market.db)
 │   ├── fno_gap_streaks_dashboard.py  # Insights: consistent gap-ups / gap-downs (stored closes only)
 │   ├── drawdown_dashboard.py     # Insights: Drop from High treemap, 52w / YTD / 2y / 5y / since a date (SQL, no login)
+│   ├── rally_dashboard.py        # Insights: Rise from Low treemap, the mirror of Drop from High (SQL, no login)
 │   ├── fno_common.py             # Shared loaders/widgets for the Insights pages
 │   └── tradingview_dashboard.py  # Market pulse: TradingView widgets, no credentials
 ├── groww_api/                    # Groww API code (paid data plan since 2026-10-18; see below)
@@ -57,12 +59,10 @@ pulse_tester/
 │   ├── providers/                # Broker-agnostic market data providers
 │   │   ├── base.py               # MarketDataProvider / FeedHandle interfaces
 │   │   ├── dhan.py               # DhanHQ v2 REST + binary websocket (preferred)
-│   │   ├── indmoney.py           # INDmoney (INDstocks) REST + JSON websocket
 │   │   ├── groww.py              # Adapter over the existing Groww stack
 │   │   ├── kite.py               # Zerodha Kite Connect REST + binary websocket (read-only)
 │   │   ├── kite_session.py       # Kite login flow + the saved daily session
 │   │   ├── dhan_session.py       # Dhan token minted from TOTP, shared via market.db (dhan_session)
-│   │   ├── indmoney_session.py   # INDmoney token minted from TOTP, shared via market.db (indmoney_session)
 │   │   ├── token_store.py        # Small helpers both of those share (JWT claims, env spellings); the storage and lock are in state_store.py
 │   │   ├── candles.py            # Shared daily-candle previous-close logic
 │   │   └── registry.py           # Name -> provider, preference order
@@ -79,6 +79,7 @@ pulse_tester/
 │   ├── gap_fills.py              # Gap fills from daily_gaps + minute bars (read-only SQLite)
 │   ├── gap_streaks.py            # Consistent gap-ups/downs, streaks, session follow-through (pure)
 │   ├── drawdown.py               # Drop from a high over a window, in one SQLite query over daily_bars
+│   ├── rally.py                  # Rise from a low over a window (reuses drawdown's windows and resets)
 │   ├── clock_offset.py           # PC clock vs NTP, saved to market.db (clock_offset); all TOTP codes use it
 │   ├── intraday_store.py         # The shared SQLite database: connection, F&O bars schema, upserts, read-only handle
 │   ├── state_store.py            # Saved sessions + clock offset as rows in that database, and the cross-process lock
@@ -104,6 +105,7 @@ pulse_tester/
 │   ├── index_board.py            # NSE sectoral index board
 │   ├── fno_heatmap.py            # Stock x day Plotly heatmap for the F&O consistency page
 │   ├── drawdown_treemap.py       # Drop-from-high treemap (stocks, optional sector boxes) and tables
+│   ├── rally_treemap.py          # Rise-from-low treemap and tables
 │   ├── insight_charts.py         # Plotly figures for the Insights pages
 │   ├── navbar.py                 # Always-expanded top navbar: every page a direct link
 │   └── tradingview.py            # TradingView widget HTML for st.iframe (+ in-browser theme detection)
@@ -112,7 +114,6 @@ pulse_tester/
 │   ├── test_sector_heatmap.py     # % change, aggregation, ranking, staleness, universe
 │   ├── test_sector_impact.py      # Tile weight, impact and the three tile orders
 │   ├── test_providers.py          # Provider interface, registry, Dhan packet decoding
-│   ├── test_indmoney.py           # INDmoney frames, REST mapping, index-name table
 │   ├── test_kite.py               # Kite login/session expiry, packets, REST mapping, read-only guard
 │   ├── test_fno_movers.py         # F&O universe, stored closes, confirmed moves, gap-safe daily moves
 │   ├── test_state_store.py        # Sessions/offset documents, the lease lock, and the suite's safety net
@@ -125,6 +126,7 @@ pulse_tester/
 │   ├── test_dhan_movers_store.py  # Movers tables in the shared store: schema, atomic write, reads, read-only handle
 │   ├── test_fno_consistency.py    # Consistency score, ranking, gaps, heatmap figure, page AppTest
 │   ├── test_drawdown.py           # Drop from high: windows, the SQL on a known database, resets, treemap, page AppTest
+│   ├── test_rally.py              # Rise from low: the SQL on a known database, resets, treemap, page AppTest
 │   ├── test_fno_insights.py       # Breadth, overnight/intraday, rotation, gap fills/streaks, navbar, page AppTests
 │   ├── test_groww.py              # Groww: instrument units, positions (shorts, unpriced, closed), exit orders, margins, F&O page AppTest
 │   ├── test_ui_colours.py         # Colour ramp, tile keys/labels/CSS, styled table
@@ -147,15 +149,12 @@ pulse_tester/
 ├── scripts/                      # One command per broker; --master refreshes reference data first
 │   ├── kite.py                   # Kite: F&O close history + 1-minute backfill (daily); --master: constituents + Kite ids
 │   ├── dhan.py                   # Dhan: movers close (daily); --master: constituents, Dhan ids, MCX futures, weights; --journal: your fills and ledger
-│   ├── indmoney.py               # INDmoney: --master only (constituents, INDmoney ids, its MCX list); no data job
 │   ├── kite_login.py             # Daily Zerodha login -> market.db (kite_session)
 │   ├── confirm_fno_move.py       # Lists suspected splits, confirms one as a real move (or takes it back)
 │   ├── jobs/                     # The jobs the three commands run (one module each, run(args) -> exit code)
 │   │   ├── index_constituents.py # NSE's Nifty 50 / Next 50 lists, plus every index tile's members and Nifty 500 sectors (niftyindices.com) -> index_constituents
 │   │   ├── kite_instruments.py   # -> kite_instruments (public dump, no login)
 │   │   ├── dhan_instruments.py   # -> dhan_instruments (Dhan's 35 MB scrip master, downloaded once per run)
-│   │   ├── indmoney_instruments.py # -> indmoney_instruments
-│   │   ├── indmoney_mcx.py       # -> indmoney_mcx (which MCX futures INDmoney quotes)
 │   │   ├── mcx_futures.py        # -> mcx_futures (MCX contracts with Dhan + Kite ids)
 │   │   ├── index_weights.py      # -> index_weights (Dhan companyinfo: market cap x (1 - promoter holding))
 │   │   ├── fno_history.py        # -> fno_universe + daily_bars (needs Kite login)
@@ -165,14 +164,13 @@ pulse_tester/
 │   └── debug/                    # Diagnostics and broker comparisons; nothing here writes the database
 │       ├── check_heatmap_universe.py   # Verifies tokens, previous closes & the live feed
 │       ├── compare_heatmap_startup.py  # Times each broker bringing up a board
-│       ├── compare_indmoney_kite.py    # Measured INDmoney vs Kite daily-data comparison
-│       ├── compare_intraday_providers.py # Measured 1-minute history comparison, all four brokers
+│       ├── compare_intraday_providers.py # Measured 1-minute history comparison, Kite, Groww and Dhan
 │       ├── probe_extended_session.py   # Does any feed carry pre-open / closing-auction data?
 │       ├── probe_groww.py              # Which Groww calls work on the current plan + open questions (read-only)
 │       └── test_api.py                 # CLI connectivity check for groww_api/groww_client.py
 │
 ├── docs/                         # Reference docs, API notes, and dated project history
-│   ├── PROVIDER_GUIDE.md          # Which broker API (Kite/Dhan/INDmoney/Groww) for which job — read first
+│   ├── PROVIDER_GUIDE.md          # Which broker API (Kite/Dhan/Groww) for which job — read first
 │   ├── PROVIDER_COMPARISON_LOG.md # Dated, measured broker comparisons (the evidence behind the guide)
 │   ├── GROWW_PAID_PLAN_CHECKS.md  # Groww paid-plan results (2026-10-18) and the checks still open
 │   ├── INTRADAY_HISTORY.md        # SQLite store of 1-minute bars + daily gaps (data/market.db)
@@ -182,14 +180,15 @@ pulse_tester/
 │   ├── DHAN_GOLD_STRATEGY.md      # strategies/dhan_gold_band_strategy.py: MCX GOLD ±50 band orders, lot sizing, no stop loss
 │   ├── DHAN_MOVERS.md             # Dhan Movers page: what marketmovers returns, quirks, limits
 │   ├── DHAN_API_EXPLORER.md       # Raw marketmovers explorer; why it cannot replace NSE's constituent lists
-│   ├── MCX_FUTURES.md             # MCX Futures page: provider choice, Dhan/Kite/INDmoney fallback, contract list, quirks
+│   ├── MCX_FUTURES.md             # MCX Futures page: provider choice, Dhan/Kite fallback, contract list, quirks
 │   ├── FNO_HEATMAP.md             # F&O consistency heatmap: the score, the three heatmaps, controls
 │   ├── DROP_FROM_HIGH.md          # Drop from High: windows, the SQL, corporate actions, the check against Dhan
+│   ├── RISE_FROM_LOW.md           # Rise from Low: definitions, low before/after the high, fall won back
 │   ├── FNO_INSIGHTS.md            # Breadth, overnight vs intraday, relative rotation, gap fills, gap streaks
 │   ├── TRADINGVIEW_WIDGETS.md     # TradingView widget reference: formats, options, symbol availability, Streamlit notes
 │   ├── ROADMAP.md                 # What is done and what is planned next
 │   ├── QUICK_START.md
-│   ├── api/                      # Groww (GROWW_API_*.md), INDmoney and Kite API notes (INDMONEY_API.md: Dhan comparison)
+│   ├── api/                      # Groww (GROWW_API_*.md) and Kite API notes
 │   └── _archived/                # Superseded docs (old architecture, status, Groww API index, changelog); git-ignored, local only
 │
 ├── requirements.txt
@@ -229,22 +228,17 @@ TOTP secret from Dhan Web → DhanHQ Trading APIs → **Setup TOTP**. Market dat
 needs Dhan's paid **Data API** plan. Details:
 [Dhan token generation](docs/PROVIDER_GUIDE.md#dhan-token-generation-tested-2026-09-27).
 
-**For INDmoney (free market data), the same idea:**
-
-```bash
-IND_MONEY_CLIENT_ID=client_id_shown_after_totp_setup   # sent as x-api-key
-IND_MONEY_MPIN=your_mpin
-IND_MONEY_TOTP_SECRET=base32_setup_key
-```
-
-There's no access token in `.env` here either. `market/providers/indmoney_session.py`
-mints one (valid to 07:00 IST) and shares it through the `indmoney_session` row of `data/market.db`. A new INDmoney token **revokes** the previous one, so
-it's only minted when none is usable or INDmoney rejects the saved one. Set up
-TOTP at indstocks.com → API Trading → Access Tokens.
 Choose the broker in the heatmap's sidebar (**Data provider**): *Auto* walks
 `PULSE_MARKET_PROVIDERS` with failover, and picking one broker pins the boards
-to it. How INDmoney compares with Dhan, and what it does not serve (Nifty Oil &
-Gas), is in [`docs/api/INDMONEY_API.md`](docs/api/INDMONEY_API.md).
+to it.
+
+#### INDmoney removed (7 Nov 2026)
+
+After weighing the pros and cons, INDmoney was eliminated as a data provider: its code, scripts, tests and documentation were removed. This section is the one place that records the decision.
+
+- **What it offered:** it worked as a fallback for live quotes, the websocket feed and MCX quotes.
+- **Why it went:** minting a new token revokes the previous one (re-verified live on 7 Nov 2026: token A was rejected as "revoked" right after token B was minted), so a server and a laptop sharing the account keep logging each other out. Only one token can be generated per 60 seconds, five wrong TOTP codes lock generation for 15 minutes, and tokens expire at 07:00 IST every day. Dhan and Groww already cover the same data (Groww was checked the same day: an older token stays valid after a new one is minted, as with Dhan). And it was one more set of account secrets to protect.
+- The `IND_MONEY_*` variables can be deleted from `.env`.
 
 **For Zerodha Kite (paid Kite Connect plan), two variables plus a daily login:**
 
@@ -309,12 +303,13 @@ streamlit run pulse_dashboard.py             # Everything, one always-expanded t
 streamlit run apps/fno_movers_dashboard.py --server.port 8503   # F&O movers pages on their own
 streamlit run apps/fno_heatmap_dashboard.py --server.port 8510  # F&O consistency heatmap on its own (stored closes only, no login)
 streamlit run apps/drawdown_dashboard.py --server.port 8511     # Drop from High on its own (stored daily bars only, no login)
+streamlit run apps/rally_dashboard.py --server.port 8513        # Rise from Low on its own (stored daily bars only, no login)
 streamlit run apps/fno_breadth_dashboard.py --server.port 8506  # Insights pages on their own (8506-8509, 8511; no login)
 streamlit run apps/tradingview_dashboard.py --server.port 8504  # Market pulse (TradingView widgets, no .env needed)
 streamlit run apps/dhan_movers_dashboard.py --server.port 8505  # Dhan market movers on their own (needs Dhan credentials)
 streamlit run apps/dhan_journal_dashboard.py --server.port 8506  # Trade journal on its own (needs Dhan credentials)
 streamlit run apps/dhan_api_explorer.py --server.port 8506      # Dhan API explorer on its own (needs Dhan credentials)
-streamlit run apps/mcx_futures_dashboard.py --server.port 8512  # MCX commodity futures on their own (Dhan, then Kite, then INDmoney)
+streamlit run apps/mcx_futures_dashboard.py --server.port 8512  # MCX commodity futures on their own (Dhan, then Kite)
 ```
 
 The first one opens at `http://localhost:8501`; start others with `--server.port` (for example
@@ -334,7 +329,6 @@ python scripts/dhan.py                    # daily after 16:00 IST: the close of 
 python scripts/dhan.py --journal          # your Dhan fills and ledger for the Trade Journal (after the close, or any time)
 python scripts/kite.py --master           # monthly: NSE constituents + Kite ids, then the daily jobs
 python scripts/dhan.py --master           # monthly: NSE constituents, Dhan ids, MCX futures, weights, then the movers
-python scripts/indmoney.py --master       # monthly: NSE constituents, INDmoney ids, its MCX list (no daily job)
 python scripts/kite.py --master-only      # reference data only, no data jobs (works the same for dhan.py)
 python scripts/confirm_fno_move.py suspected   # which falls the F&O pages flag as possible splits (add / remove / list too)
 ```
@@ -348,7 +342,6 @@ code 0 all ok, 2 partly done, 1 a job failed). `--help` on each lists the job op
 |---|---|---|
 | NSE index constituents (every `--master`) | The Nifty 50 and Nifty Next 50 members and their sectors, from NSE's own CSVs on niftyindices.com (`index_constituents`). NSE's `Industry` is the sector; banks are split out of Financial Services by Nifty Bank membership. Every universe and every broker's ids follow this list. It also stores the member list of every index on the Sectoral Indices board (`index_members`), so those tiles can be sized by free-float market cap, and the sector of every Nifty 500 stock (`sectors`, for the Drop from High page) | After an NSE index reconstitution (end of March / end of September). Monthly otherwise |
 | Dhan ids (`dhan.py --master`) | Broker security ids for every tracked symbol. Dhan publishes these only as a 35 MB uncompressed CSV of every F&O contract; this pulls out the rows that matter | Same as the constituents, or when the dashboard reports unresolved symbols |
-| INDmoney ids (`indmoney.py --master`) | INDmoney's ids for the same symbols. Equity ids equal Dhan's; index ids and names are INDmoney's own | Same |
 | Kite ids (`kite.py --master`) | Kite's `instrument_token` (websocket/candles) **and** `tradingsymbol` (REST quotes) for the same symbols, from Kite's public 0.7 MB NSE dump | Same |
 | MCX futures (`dhan.py --master`) | Every MCX commodity future with Dhan's security id and Kite's `instrument_token` + `tradingsymbol`, matched on commodity and expiry. From the same Dhan master (downloaded once per run) and Kite's public 1.3 MB MCX list | Monthly, as new expiries are listed. The MCX page warns when the stored list runs out within 45 days |
 | Weights (`dhan.py --master`) | Free-float market caps for cap-weighted sector aggregation and for each tile's weight and impact: Dhan's `companyinfo` market cap x (1 - promoter holding), one call per stock - the Nifty 50 / Next 50 plus every constituent of the sectoral board's indices (~510 stocks, about six minutes) | Monthly; the dashboard warns after 45 days |
@@ -370,7 +363,6 @@ python scripts/debug/test_api.py                   # Groww connectivity (groww_a
 python scripts/debug/check_heatmap_universe.py     # heatmap data pipeline + live feed
 python scripts/debug/check_heatmap_universe.py --provider dhan --seconds 20
 python scripts/debug/check_heatmap_universe.py --board indices --provider dhan
-python scripts/debug/check_heatmap_universe.py --provider indmoney --seconds 20
 python scripts/debug/check_heatmap_universe.py --provider kite --seconds 20     # after kite_login.py
 ```
 
@@ -400,15 +392,15 @@ module per feature that adds its own tables to the same file. `.env` (credential
 | `daily_bars`, `minute_bars` | Daily bars for the F&O stocks and the Nifty 100 (5 years: the closes behind every F&O page, which read the last 400 days, and the Drop from High page) and 1-minute bars, plus the `daily_gaps` view | `scripts/kite.py history` (daily), `scripts/kite.py intraday` (both) | Yes, from Kite |
 | `dhan_movers`, `dhan_movers_breadth` | Dhan's gainers/losers, one close per session | `scripts/dhan.py` | **No**: Dhan only returns the current session |
 | `dhan_fills`, `dhan_ledger` | Your Dhan fills (with charges) and ledger | `scripts/dhan.py --journal` | Yes: `--journal --since <date>` |
-| `runtime_state`, `state_locks` | The saved Dhan, INDmoney and Kite sessions (**live tokens**), the clock offset, and the lock that stops two processes minting one token | The providers, `scripts/kite_login.py` | Yes: log in again |
-| `reference_sets`, `reference_rows` | Generated reference data: NSE's index members and sectors (`index_constituents`), each broker's instrument ids (`dhan_instruments`, `indmoney_instruments`, `kite_instruments`), the MCX contracts (`mcx_futures`, and `indmoney_mcx` for which INDmoney lists), `index_weights`, `fno_universe`, and `fno_confirmed_moves` (falls confirmed as real moves) | `--master` on `scripts/kite.py`, `dhan.py` and `indmoney.py`, `scripts/kite.py history`, and `confirm_fno_move.py` | Yes: run the script. The confirmed moves are a person's decisions, so they are re-added with `confirm_fno_move.py` |
+| `runtime_state`, `state_locks` | The saved Dhan and Kite sessions (**live tokens**), the clock offset, and the lock that stops two processes minting one token | The providers, `scripts/kite_login.py` | Yes: log in again |
+| `reference_sets`, `reference_rows` | Generated reference data: NSE's index members and sectors (`index_constituents`), each broker's instrument ids (`dhan_instruments`, `kite_instruments`), the MCX contracts (`mcx_futures`), `index_weights`, `fno_universe`, and `fno_confirmed_moves` (falls confirmed as real moves) | `--master` on `scripts/kite.py` and `dhan.py`, `scripts/kite.py history`, and `confirm_fno_move.py` | Yes: run the script. The confirmed moves are a person's decisions, so they are re-added with `confirm_fno_move.py` |
 
 - **Back it up.** The Dhan history cannot be re-fetched, and the confirmed moves are your own notes. The file also
-  holds live tokens, which all expire within a day (Kite at 06:00 IST, Dhan after 24 hours, INDmoney at 07:00), so an
+  holds live tokens, which all expire within a day (Kite at 06:00 IST, Dhan after 24 hours), so an
   old backup holds nothing usable, but do not share it.
 - **A fresh checkout starts empty**, and the dashboards say which script to run: `kite_login.py`, then
-  `scripts/kite.py --master`, `scripts/dhan.py --master` and `scripts/indmoney.py --master` (the Dhan and INDmoney
-  sessions mint themselves). Until a `--master` run stores NSE's lists there are no Nifty 50 / Next 50 universes.
+  `scripts/kite.py --master` and `scripts/dhan.py --master` (the Dhan
+  session mints itself). Until a `--master` run stores NSE's lists there are no Nifty 50 / Next 50 universes.
 - **`PULSE_STATE_DB`** points the sessions, offset, reference data and daily closes at another database file. The
   test suite sets it to a throwaway file, so tests never touch the real one.
 - Two processes can use it at once (the file runs in WAL mode). A token is minted by one process under a
@@ -457,8 +449,8 @@ Things to know before building on this:
 - **Two separate API client layers exist on purpose:** `groww_api/groww_client.py` (`GrowwClient`) backs `apps/app.py`, while the `groww_api/` package (`GrowwAPIClient` + `GrowwAPIService` + `PositionProcessor`) backs `apps/fno_dashboard.py`. The `groww_api/` package uses a singleton auth pattern so the app authenticates once per session instead of on every cache refresh.
 - **Shared formatting/sentiment logic** lives in `utils/` and is imported by both `apps/fno_dashboard.py` and `groww_api/groww_client.py` (for `format_inr`/`format_inr_full`) to avoid duplicated implementations.
 - **Quick Exit** (in `apps/fno_dashboard.py`, order built by `groww_api/orders.py`) offers profitable, priced positions, highest P&L% first. It sells a long at LTP − 0.5% rounded down to the tick, buys back a short at LTP + 0.5% rounded up, in the position's own product, and reads back the order status via `GrowwAPIService.get_order_status`. It refuses, with the reason, when there is no live price, no tick size, or the quantity is not whole lots.
-- **The sector heatmap is broker-agnostic.** `market/providers/` defines a `MarketDataProvider` + `FeedHandle` interface, implemented by **Dhan** (DhanHQ v2, preferred), **INDmoney** (INDstocks API, free, first fallback), **Groww** (an adapter over the existing stack) and **Kite** (Zerodha Kite Connect, last in *Auto*). `PULSE_MARKET_PROVIDERS` sets the preference order for *Auto*; the service adopts the first broker that authenticates and fails over if its websocket cannot deliver. The sidebar's **Data provider** switch can instead pin one broker with no failover, for comparing them. Kite is called without the `kiteconnect` SDK: the SDK's ticker runs on Twisted, whose reactor cannot restart within a process, and this service reconnects feeds as a matter of course.
-- **Two boards share one engine.** The Nifty 50 board aggregates constituents into sectors; the NSE Sectoral Indices board shows real index values (Dhan's `IDX_I` segment, or INDmoney's `NIDX`), where each tile is one index and nothing is averaged. Each board runs its own feed (Dhan allows 5 connections per client id, INDmoney 3 per user) and a board you have not opened is never started. The index drill-down shows the Nifty 50 members of the matching sector, labelled explicitly as *not* the index's real constituent list — neither broker publishes that.
+- **The sector heatmap is broker-agnostic.** `market/providers/` defines a `MarketDataProvider` + `FeedHandle` interface, implemented by **Dhan** (DhanHQ v2, preferred), **Groww** (an adapter over the existing stack) and **Kite** (Zerodha Kite Connect, last in *Auto*). `PULSE_MARKET_PROVIDERS` sets the preference order for *Auto*; the service adopts the first broker that authenticates and fails over if its websocket cannot deliver. The sidebar's **Data provider** switch can instead pin one broker with no failover, for comparing them. Kite is called without the `kiteconnect` SDK: the SDK's ticker runs on Twisted, whose reactor cannot restart within a process, and this service reconnects feeds as a matter of course.
+- **Two boards share one engine.** The Nifty 50 board aggregates constituents into sectors; the NSE Sectoral Indices board shows real index values (Dhan's `IDX_I` segment, or Kite's NSE indices), where each tile is one index and nothing is averaged. Each board runs its own feed (Dhan allows 5 connections per client id) and a board you have not opened is never started. The index drill-down shows the Nifty 50 members of the matching sector, labelled explicitly as *not* the index's real constituent list — no broker publishes that.
 - **Sector percentages are market-cap weighted** — "how did this sector's big names do". (An Equal / Market-cap switch existed until 2026-10-18 and was removed at the user's request.) Market caps are not in any broker's quote feed, so free-float weights are generated offline by `scripts/dhan.py --master` (Dhan's `companyinfo`: market cap x (1 - promoter holding)) into the `index_weights` set in `data/market.db` and only *read* at runtime — the dashboard never fetches fundamentals while the market is open. A sector with no weight falls back to a plain average and says so rather than presenting an unweighted number as weighted.
 - **It reuses, rather than duplicates, the existing Groww stack:** it authenticates through the same `GrowwAPIClient` singleton and extends `GrowwAPIService` with NSE-CASH helpers (instrument resolution, previous close via `get_ohlc`, batched LTP). Its live feed runs on a background daemon thread owned by `LiveMarketDataService`, deliberately outside Streamlit's rerun lifecycle, so reruns and view changes never rebuild the websocket. Full design notes and the REST fallback are in [`docs/SECTOR_HEATMAP.md`](docs/SECTOR_HEATMAP.md); how Groww's websocket differs from Dhan's, and what the adapter does about it, is in [`docs/api/GROWW_API_FEED.md`](docs/api/GROWW_API_FEED.md#websocket-behaviour-in-practice-observed).
 
@@ -491,13 +483,10 @@ and websocket APIs are called directly.
 - **Restarting after a credential change** — `GrowwAPIClient`/`GrowwClient` authenticate once per running process. The sidebar's "Refresh Data" button only clears the Streamlit data cache; after changing `.env` credentials, fully restart the Streamlit process to re-authenticate.
 - **Dashboard won't start** — confirm the venv is activated and Streamlit is installed (`python -m streamlit run apps/fno_dashboard.py`).
 
-- **INDmoney: "authentication failed ... TokenException"** — the 24h token has expired or was revoked. Generate a new one at indstocks.com → API Trading → Access Tokens and restart the dashboard.
-- **INDmoney index board shows 16/17, with Nifty Oil & Gas missing** — expected. INDmoney lists that index but serves no data for it; see [`docs/api/INDMONEY_API.md`](docs/api/INDMONEY_API.md).
 - **Kite shows "no credentials" in the provider list** — the API key is set but nobody has logged in today, or the session passed 06:00 IST. Run `python scripts/kite_login.py`.
 - **Kite: "authentication failed (HTTP 403 ... TokenException)"** — the token was revoked, for example by logging out of all Kite sessions. Log in again with `scripts/kite_login.py`.
 - **Kite: "market data unavailable (HTTP 403 ... PermissionException)"** — the app is on the free *Personal* plan, which has no quotes, historical data or websocket. The paid *Kite Connect* plan is needed.
 - **Kite login: "Token is invalid or has expired"** — the `request_token` in the redirect URL is single-use and lasts a few minutes. Log in again and paste the new URL promptly.
-- **INDmoney websocket won't connect while both boards are open** — INDmoney allows 3 sockets per user. Two boards plus a `scripts/debug/check_heatmap_universe.py` run already use all three.
 
 - **Market pulse shows "Permission denied – This symbol is only available on TradingView"** — that exchange is not licensed for TradingView widgets (NSE, MCX, NSEIX/GIFT Nifty, NYMEX and ICE all are not). No setting fixes it. Use a proxy symbol, or list it as a link in `market/tradingview_symbols.py`. Check a symbol with `python scripts/tradingview_symbol_probe.py EXCHANGE:TICKER`.
 - **Market pulse: Indian charts ignore a 1-day range** — deliberate. BSE data in widgets is end of day, which rejects intraday ranges, so those charts use 3 months as a minimum.

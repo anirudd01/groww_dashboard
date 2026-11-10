@@ -18,7 +18,7 @@ BSE 12,823. By type: CE 63,690, PE 63,702, EQ 12,794, FUT 984, IDX 31.
 | Column | Example | Notes |
 |---|---|---|
 | `exchange` | `NSE`, `MCX`, `BSE` | |
-| `exchange_token` | `2885` | The exchange's id. For MCX it equals Dhan's and INDmoney's id |
+| `exchange_token` | `2885` | The exchange's id. For MCX it equals Dhan's id |
 | `trading_symbol` | `NIFTY26OCTFUT` | What orders, positions, `get_quote` and `get_ltp` use |
 | `groww_symbol` | `NSE-NIFTY-27Oct26-FUT` | What `get_historical_candles` uses |
 | `name` | `Reliance Industries` | |

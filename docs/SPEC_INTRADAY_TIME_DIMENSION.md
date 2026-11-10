@@ -77,7 +77,7 @@ restart at 14:00 means no 30-minute or 1-hour window until 14:30 or 15:00. Optio
 For B: Kite's minute bars are the most faithful to official prices (measured), but
 Kite needs the daily login. Dhan's `/v2/charts/intraday` is the feed's own broker
 but its minute prices differ from Kite's on 20-40% of bars (measured, see the
-[comparison log](PROVIDER_COMPARISON_LOG.md)). INDmoney's are unusable. Whether
+[comparison log](PROVIDER_COMPARISON_LOG.md)). Whether
 Dhan's or Kite's endpoint returns *today's partial day* is **(unverified)** for
 Dhan; it is verified for Kite.
 
@@ -150,8 +150,8 @@ on a broker chart.
 
 - **5a** `price_history.py`, window changes, sidebar selector, "warming up". Tests.
 - **5b** Sparkline columns.
-- **5c** Since-open basis (needs `day_open` from the quote packet, which Dhan and
-  INDmoney already send; Kite's socket is **(unverified)**).
+- **5c** Since-open basis (needs `day_open` from the quote packet, which Dhan
+  already sends; Kite's socket is **(unverified)**).
 - **5d** Optional seeding from minute bars (decision 1).
 
 ## 11. Risks

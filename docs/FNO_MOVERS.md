@@ -93,21 +93,21 @@ docs export; the 2026-10-09 export documents it, the release notes still do not)
 `PRICE_LOSERS` over a universe such as `FNO_STOCKS` or `NIFTY_50`. Tried live: 0.4 s,
 correct-looking. See [`API_ENDPOINT_AUDIT.md`](API_ENDPOINT_AUDIT.md); the "Dhan Movers" page ([`DHAN_MOVERS.md`](DHAN_MOVERS.md)) is built on it. It ranks *today against the
 previous close* only, so it could serve the "By day" card for today, but not the multi-day
-views, which still need stored closes. Kite, Groww and INDmoney have no such endpoint, so for
+views, which still need stored closes. Kite and Groww have no such endpoint, so for
 them every mover is computed from closes. The brokers differ only in how cheaply they deliver
 the closes. The page does not use Dhan's endpoint yet (see the roadmap).
 
 ## Which provider (measured 2026-09-25)
 
-| | Kite | Dhan | Groww | INDmoney |
-|---|---|---|---|---|
-| Live quote, instruments per call | **1000** | 1000 | 50 | 1000 |
-| Calls for today, 210 stocks | **1** | 1 | 5 | 1 |
-| Daily candles | 1 instrument/call, any range | 1/call | 1/call | 5/call |
-| Candle rate limit | 3/s | 5/s | not published; ~0.4 s/call measured | 5/s |
-| F&O stock list | **public dump, no login** | public 35 MB CSV | SDK instrument list | needs token |
-| Past closes | verified | – | **identical to Kite on every past day checked** (5 stocks x 5 days) | – |
-| Login | daily browser login | token lasts ~24h | TOTP, automatic | token lasts 24h |
+| | Kite | Dhan | Groww |
+|---|---|---|---|
+| Live quote, instruments per call | **1000** | 1000 | 50 |
+| Calls for today, 210 stocks | **1** | 1 | 5 |
+| Daily candles | 1 instrument/call, any range | 1/call | 1/call |
+| Candle rate limit | 3/s | 5/s | not published; ~0.4 s/call measured |
+| F&O stock list | **public dump, no login** | public 35 MB CSV | SDK instrument list |
+| Past closes | verified | – | **identical to Kite on every past day checked** (5 stocks x 5 days) |
+| Login | daily browser login | token lasts ~24h | TOTP, automatic |
 
 Kite was chosen because it needs the fewest calls and the least setup: one bulk
 call for today, a public F&O list, and an adapter already verified in this

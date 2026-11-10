@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - mirrors the other dashboards
         except Exception:
             pass
 
+from utils.public_mode import is_public
 from market.config import HeatmapConfig, ORDERS, ORDER_BY_IMPACT
 from market.live_feed import LiveMarketDataService
 from market.market_hours import session_state
@@ -140,15 +141,66 @@ def _service_registry():
     return {}, threading.Lock()
 
 
+#: How often the idle reaper looks for feeds nobody is watching.
+IDLE_CHECK_SECONDS = 60
+
+
+def stop_idle_services(services: dict, lock, idle_after: float) -> list:
+    """Pause every feed no viewer has asked about for ``idle_after`` seconds.
+
+    An open tab asks for a snapshot every refresh, so only a board with no tab
+    on it goes idle. The service stays in the registry: a page that wakes up
+    (a locked phone, a suspended tab) still holds this object in its
+    fragments, and its next ``snapshot()`` restarts the feed. Returns the keys
+    paused.
+    """
+    if idle_after <= 0:
+        return []
+    with lock:
+        idle = [(key, service) for key, service in services.items()
+                if service.idle_seconds > idle_after and not service.is_idle_stopped]
+    for key, service in idle:  # outside the lock: stopping joins a thread
+        logger.info("No viewer for %s (%s) in %.0f s - pausing its live feed", key[0], key[1], idle_after)
+        service.stop_for_idle()
+    return [key for key, _ in idle]
+
+
+_reaper_started = threading.Lock()
+_reaper_thread: Optional[threading.Thread] = None
+
+
+def _start_idle_reaper(services: dict, lock) -> None:
+    """One daemon thread per process that stops feeds nobody is watching."""
+    global _reaper_thread
+    idle_after = HeatmapConfig.from_env().feed_idle_stop_seconds
+    if idle_after <= 0:
+        return
+    with _reaper_started:
+        if _reaper_thread is not None and _reaper_thread.is_alive():
+            return
+
+        def reap() -> None:
+            stop = threading.Event()
+            while not stop.wait(IDLE_CHECK_SECONDS):
+                try:
+                    stop_idle_services(services, lock, idle_after)
+                except Exception:  # noqa: BLE001 - the reaper must outlive one bad stop
+                    logger.exception("Idle feed check failed")
+
+        _reaper_thread = threading.Thread(target=reap, name="live-feed-idle-reaper", daemon=True)
+        _reaper_thread.start()
+
+
 def get_service(universe_key: str, provider_choice: str = PROVIDER_AUTO) -> LiveMarketDataService:
     """One live-feed service per universe for the chosen provider.
 
     Switching provider stops the board's previous service before starting
-    the new one: brokers cap concurrent sockets (INDmoney at 3, Dhan at 5),
+    the new one: brokers cap concurrent sockets (Dhan at 5),
     and a feed nobody is looking at would otherwise hold one of them open.
     The registry is process-wide, so the switch applies to every open tab.
     """
     services, lock = _service_registry()
+    _start_idle_reaper(services, lock)
     key = (universe_key, provider_choice)
     with lock:
         for other in [k for k in services if k[0] == universe_key and k != key]:
@@ -837,22 +889,29 @@ def sidebar_controls(config: HeatmapConfig, show_weights: bool = True) -> Contro
         st.markdown("### Data provider")
         options = provider_options()
         default_choice = canonical_provider_name(os.getenv("PULSE_HEATMAP_PROVIDER", ""))
-        provider_choice = _persistent_radio(
-            "Data provider",
-            "provider_choice",
-            options,
-            default_choice if default_choice in options else PROVIDER_AUTO,
-            format_func=lambda v: provider_option_label(v, config),
-            label_visibility="collapsed",
-            help=(
-                "Auto uses the first broker in PULSE_MARKET_PROVIDERS that "
-                "works and fails over to the next. Picking one broker uses "
-                "only that broker, so two brokers can be compared honestly."
-            ),
-        )
-        st.caption(
-            "Switching reconnects the board's feed. It applies to every open tab."
-        )
+        initial = default_choice if default_choice in options else PROVIDER_AUTO
+        if is_public():
+            # A switch here reconnects the feed for every visitor, so on a shared server the
+            # provider stays the one the operator set (PULSE_HEATMAP_PROVIDER / PULSE_MARKET_PROVIDERS).
+            provider_choice = initial
+            st.caption(provider_option_label(provider_choice, config))
+        else:
+            provider_choice = _persistent_radio(
+                "Data provider",
+                "provider_choice",
+                options,
+                initial,
+                format_func=lambda v: provider_option_label(v, config),
+                label_visibility="collapsed",
+                help=(
+                    "Auto uses the first broker in PULSE_MARKET_PROVIDERS that "
+                    "works and fails over to the next. Picking one broker uses "
+                    "only that broker, so two brokers can be compared honestly."
+                ),
+            )
+            st.caption(
+                "Switching reconnects the board's feed. It applies to every open tab."
+            )
 
         st.markdown("### Display")
         order = _persistent_radio(

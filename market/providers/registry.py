@@ -1,9 +1,9 @@
 """Provider registry - the single place that knows which brokers exist.
 
 Preference order comes from config (``PULSE_MARKET_PROVIDERS``, default
-``dhan,indmoney,groww,kite``). The live service walks the list in order and
+``dhan,groww,kite``). The live service walks the list in order and
 uses the first broker that authenticates and resolves instruments, so Dhan is
-used when it is configured, then INDmoney, then Groww, then Kite. Naming a
+used when it is configured, then Groww, then Kite. Naming a
 single broker (in config or with the dashboard's sidebar switch) pins the board
 to that broker alone.
 
@@ -25,12 +25,6 @@ def _make_dhan() -> MarketDataProvider:
     return DhanProvider()
 
 
-def _make_indmoney() -> MarketDataProvider:
-    from market.providers.indmoney import IndMoneyProvider
-
-    return IndMoneyProvider()
-
-
 def _make_groww() -> MarketDataProvider:
     from market.providers.groww import GrowwProvider
 
@@ -46,16 +40,12 @@ def _make_kite() -> MarketDataProvider:
 #: name -> factory.
 PROVIDER_FACTORIES: Dict[str, Callable[[], MarketDataProvider]] = {
     "dhan": _make_dhan,
-    "indmoney": _make_indmoney,
     "groww": _make_groww,
     "kite": _make_kite,
 }
 
-#: Other names people use for a broker. The app is INDmoney; its API is
-#: branded INDstocks. Zerodha's API is Kite Connect.
+#: Other names people use for a broker. Zerodha's API is Kite Connect.
 PROVIDER_ALIASES: Dict[str, str] = {
-    "indstocks": "indmoney",
-    "ind_money": "indmoney",
     "zerodha": "kite",
     "kiteconnect": "kite",
 }
@@ -65,7 +55,7 @@ PLANNED_PROVIDERS: set = set()
 
 #: Kite is last: it is the newest adapter and needs a browser login every
 #: morning, so a board on "auto" should not stall waiting for it.
-DEFAULT_PROVIDER_ORDER = ("dhan", "indmoney", "groww", "kite")
+DEFAULT_PROVIDER_ORDER = ("dhan", "groww", "kite")
 
 
 def available_provider_names() -> List[str]:
@@ -80,7 +70,7 @@ def canonical_provider_name(raw: str) -> str:
 
 def provider_label(name: str) -> str:
     """Display label for a provider name, without constructing the provider."""
-    return {"dhan": "Dhan", "indmoney": "INDmoney", "groww": "Groww", "kite": "Kite"}.get(
+    return {"dhan": "Dhan", "groww": "Groww", "kite": "Kite"}.get(
         canonical_provider_name(name), name
     )
 

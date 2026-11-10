@@ -18,7 +18,6 @@ __pycache__/
 # must never be committed.
 .kite_session.json
 .dhan_session.json
-.indmoney_session.json
 
 # Raw broker instrument masters kept by scripts/fetch_instrument_master.py
 # --keep-raw. 35 MB, re-downloadable, never source. The generated ids are not a
@@ -37,3 +36,6 @@ data/extended_session_probe.csv
 
 # Tests stay local for now; to be committed later (see README, "Tests are not committed yet")
 tests/
+
+# Auction captures (scripts/debug/capture_auctions.py): local research data, never source.
+data/captures/

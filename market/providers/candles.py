@@ -16,7 +16,7 @@ def positive(value) -> Optional[float]:
     """``value`` as a float when it is a usable price, otherwise None.
 
     Brokers send 0 for any field they have no value for yet (Dhan before the
-    first trade, INDmoney for index volume). Zero must stay "unknown" rather
+    first trade). Zero must stay "unknown" rather
     than becoming a price.
     """
     try:

@@ -79,16 +79,12 @@ Boot time.
 
 ## Phase 4c — complete
 
-A second live broker, switchable, so brokers can be compared.
+A provider switch, so brokers can be compared.
 
 | | |
 |---|---|
-| INDmoney provider | `market/providers/indmoney.py` over the INDstocks REST + websocket APIs. Free; token minted from TOTP (see below). Live on both boards (16/17 indices — Nifty Oil & Gas is not served by INDmoney) |
-| Instrument ids | `scripts/indmoney.py --master` → the `indmoney_instruments` set in `data/market.db`, same offline contract as Dhan's |
 | Provider switch | Sidebar **Data provider**: Auto (configured order with failover) or one broker pinned, no failover |
-| Default chain | `dhan,indmoney,groww` — INDmoney ahead of Groww because it also serves the index board |
 | Shared candle logic | Previous-close selection moved to `market/providers/candles.py`, so the next broker only converts its candle format |
-| Comparison | [`api/INDMONEY_API.md`](api/INDMONEY_API.md) — Dhan vs INDmoney capability table and the live behaviours the vendor docs get wrong |
 
 ## Phase 4d — complete (verified live 2026-09-25)
 
@@ -99,7 +95,7 @@ Zerodha Kite as the fourth broker, read-only.
 | Kite provider | `market/providers/kite.py`: REST quotes (`/quote`, `/quote/ohlc`, `/quote/ltp`), daily candles for the previous close outside market hours, and the binary `wss://ws.kite.trade` feed in `quote` mode. No `kiteconnect` SDK, because its Twisted-based ticker cannot reconnect within a process |
 | Login | `market/providers/kite_session.py` + `scripts/kite_login.py`: browser login, `request_token` → `access_token`, saved to the shared database (`data/market.db`, git-ignored) with its **06:00 IST** expiry. The API secret is never stored |
 | Instrument ids | `scripts/kite.py --master` → the `kite_instruments` set in `data/market.db` (instrument token + tradingsymbol), from Kite's public NSE dump. 67/67 symbols resolved on 2026-09-25 |
-| Default chain | `dhan,indmoney,groww,kite`: Kite is last, because it needs a login every morning |
+| Default chain | `dhan,groww,kite`: Kite is last, because it needs a login every morning |
 | Read-only | No order, GTT or alert endpoint is referenced; `tests/test_kite.py` asserts it |
 
 ## F&O movers dashboard — complete (2026-09-25)
@@ -120,7 +116,6 @@ A separate page, not part of the heatmap: [`FNO_MOVERS.md`](FNO_MOVERS.md).
 | 1-minute store | `scripts/kite.py intraday` → git-ignored SQLite `data/market.db`: `minute_bars`, `daily_bars` and a `daily_gaps` view for the 210 F&O stocks. One 60-day Kite call per stock. See [`INTRADAY_HISTORY.md`](INTRADAY_HISTORY.md) |
 | Provider pick | All four brokers measured: Kite is the only one whose minute bars reproduce the official daily open. [Log](PROVIDER_COMPARISON_LOG.md) |
 | Dhan login | `market/providers/dhan_session.py` mints the 24 h token from TOTP (`DHAN_CLIENT_ID`, `DHAN_PIN`, `DHAN_TOTP_SECRET`). It shares the token through the shared database (`data/market.db`, git-ignored) under a lease-row lock. `.env` no longer holds a Dhan access token |
-| INDmoney login | `market/providers/indmoney_session.py` mints the token (valid to 07:00 IST) from `IND_MONEY_CLIENT_ID`, `IND_MONEY_MPIN`, `IND_MONEY_TOTP_SECRET` and shares it through the `indmoney_session` row of `data/market.db`. Minted only when needed, because each one revokes the last. Both session modules share `token_store.py`. The provider and all three INDmoney scripts use it; no script reads a token from `.env` or a session file by hand any more (`auth_headers()` on the Kite, Dhan and INDmoney providers) |
 | Clock correction | `market/clock_offset.py` measures this PC's clock against NTP (21.0 s slow on 2026-09-28) once per process and saves it to the `clock_offset` row of `data/market.db`. Dhan's and both Groww clients' TOTP codes use it. A fresh Dhan token now takes ~1.6 s instead of ~17.5 s, because nothing waits out a window "to be safe" |
 
 ---
@@ -184,7 +179,7 @@ A navbar page in a new **MCX** row: [`MCX_FUTURES.md`](MCX_FUTURES.md).
 
 | | |
 |---|---|
-| Provider | Dhan primary, Kite automatic fallback. Both were tested live and returned identical MCX prices, OHLC and OI. Dhan leads because it needs no morning login and keeps volume after the close. INDmoney is the third choice since 2026-10-17 (quotes only, no candles, 19 of 28 commodities; [retest](PROVIDER_GUIDE.md#mcx-on-indmoney-retested-2026-10-17)); Groww is positions-only here. Results in [`PROVIDER_GUIDE.md`](PROVIDER_GUIDE.md#mcx-on-dhan-and-kite-tested-2026-10-03) |
+| Provider | Dhan primary, Kite automatic fallback. Both were tested live and returned identical MCX prices, OHLC and OI. Dhan leads because it needs no morning login and keeps volume after the close. Groww is positions-only here. Results in [`PROVIDER_GUIDE.md`](PROVIDER_GUIDE.md#mcx-on-dhan-and-kite-tested-2026-10-03) |
 | Page | `apps/mcx_futures_dashboard.py`: headline cards (gold, silver, crude, natural gas, copper), a one-contract-per-commodity table, and candles (5 min to daily) with OI for the clicked row. Most active contract (highest OI) by default, because MCX liquidity often sits beyond the nearest expiry |
 | Data | `scripts/dhan.py --master` stores 164 contracts (28 commodities) with Dhan and Kite ids in the `mcx_futures` set; run monthly. `market/mcx_futures.py` holds the logic and the fallback; `get_quotes` / `get_candles` were added to both providers |
 | Next | Optional: stream MCX ticks over Dhan's socket instead of 30 s polling; store MCX daily closes for multi-day views |
@@ -195,7 +190,7 @@ Everything the project stores locally is in the shared `data/market.db`; `.env` 
 
 | Piece | What it is |
 |---|---|
-| Runtime state | `market/state_store.py`: the Dhan, INDmoney and Kite sessions and the clock offset in `runtime_state`, and a lease row in `state_locks` that stops two processes minting one token (taken atomically, and not holding the database while a token is minted) |
+| Runtime state | `market/state_store.py`: the Dhan and Kite sessions and the clock offset in `runtime_state`, and a lease row in `state_locks` that stops two processes minting one token (taken atomically, and not holding the database while a token is minted) |
 | Reference data | `market/reference_store.py`: each broker's instrument ids, the index weights, the F&O universe and the confirmed moves, in `reference_sets` / `reference_rows`. A set loads back as one dictionary, so each loader parses what it always did |
 | Daily closes | The F&O closes are the `daily_bars` table, the one the 1-minute backfill fills, so there is a single daily history. `scripts/kite.py history` writes it, and the pages read it, cached against `intraday_store.store_stamp()` |
 | Confirmed moves | `scripts/confirm_fno_move.py suspected / list / add / remove` |
@@ -212,6 +207,10 @@ Everything the project stores locally is in the shared `data/market.db`; `.env` 
   - the morning protective-order job, dry run first;
   - checking what the F&O ledger line does for options, the first time one is traded;
   - an import of Groww's Excel exports, if Groww trades should join the journal.
+
+## Rise from Low — built (2026-11-04)
+
+- `market/rally.py`, `ui/rally_treemap.py`, `apps/rally_dashboard.py`: the mirror of Drop from High. Each stock's rise from its lowest intraday low over the same windows, with its position against the high, whether the low came after the high, and the share of that fall won back. Reuses `market/drawdown.py`'s windows and corporate-action resets; the Drop from High files are unchanged. See [`RISE_FROM_LOW.md`](RISE_FROM_LOW.md).
 
 ## Drop from High — built (2026-10-23)
 
@@ -248,13 +247,13 @@ ids are not part of it: they are read from the local `data/*_instruments.json`
 files, never downloaded at runtime.) The Nifty 50 board's data can't fill in, because it is a different
 universe, segment and feed. Measured 2026-09-30 with
 `scripts/debug/compare_heatmap_startup.py`: Dhan needs ~2.9 s to a full board from
-REST (two ~1.1 s calls), INDmoney ~1.4 s, Kite ~2.8 s; see
+REST (two ~1.1 s calls), Kite ~2.8 s; see
 [`PROVIDER_COMPARISON_LOG.md`](PROVIDER_COMPARISON_LOG.md).
 
 Proposal: start the index service in the background when the app opens, not on
 first visit. The websocket is cheap and the quote call is one request for ~17
 indices, but the two services' requests must be staggered to stay under the
-rate limit and the INDmoney 3-socket cap. Also persist the last snapshot (LTP,
+rate limit. Also persist the last snapshot (LTP,
 previous close, change %) to a small git-ignored file, and have the page draw
 that immediately, labelled "as of HH:MM" until the first live tick replaces it.
 No tile should show 0.00% for "no data": show the cached value or a loading
@@ -270,10 +269,9 @@ Ordered roughly by value, not commitment:
 | Holdings overlay | Mark which sectors the account is actually exposed to, reusing the existing portfolio/FnO clients. Informational only. |
 | Universe expansion | Nifty Next 50 / Nifty 500 on the aggregate board. The blocker is sector classification: a hand-maintained dict does not scale past 50 rows. |
 | Exchange holiday calendar | `market/market_hours.py` checks weekday and clock only, so a holiday looks like an open session with no ticks. Now also the last inaccuracy in the Phase 4 lookup: on a holiday it measures against the last real session and reads +0.00% rather than that session's move. |
-| Token expiry countdown | Dhan and INDmoney tokens both last ~24h, and Kite's die at 06:00 IST; the providers log the hours left at startup, but the UI does not show it, so you discover expiry when the feed stops. |
+| Token expiry countdown | Dhan tokens last ~24h, and Kite's die at 06:00 IST; the providers log the hours left at startup, but the UI does not show it, so you discover expiry when the feed stops. |
 | Kite login without the paste | `scripts/kite_login.py` asks you to paste the redirect URL. If the app's redirect URL is `http://127.0.0.1:<port>/...`, a tiny local listener could catch the `request_token` itself. |
-| Extended-session minute bars (pre-open, closing auction, post-close) | **Blocked until Groww's paid data plan is active** (its free API plan refuses candles, checked 2026-10-17). Checked 2026-09-30: none of Kite, Dhan or INDmoney documents pre-open, CAS or post-close data (since the 2026-10-09 export Dhan documents a **CAS Live Feed** websocket, Pro Traders Plan only: per-stock indicative equilibrium price, quantities, 5-level depth and imbalance, plus indicative index closes; no minute bars, not tried), and their minute bars stop at 15:14 (Kite, Dhan) or are invented flat bars to 15:30 (INDmoney). The open test is a live socket probe: `python scripts/debug/probe_extended_session.py --until 09:16` (start before 09:00) and `--until 16:05` (start before 15:15) log what Dhan, INDmoney and Kite send in those windows to `data/extended_session_probe.csv`. Built 2026-10-01 and checked mid-session; the two windows have not been run yet. The windows that matter are pre-open (09:00-09:15) and CAS, the closing auction session (15:15-15:30); after 15:30 is settlement and of less interest. The summary reports CAS separately. For strategy research, not day-to-day use. Groww returns bars outside 09:15–15:15 that Kite and Dhan omit: pre-open 09:00–09:08 (volume only; prices are `None`), the closing auction session (CAS) 15:15–15:30 (a near-empty 15:15 bar was seen, so check what else it carries), and post-close bars to 15:59. Plan: an `extended_bars` table in `data/market.db` (or a `session` column on `minute_bars`) filled from Groww, 30 days per call. That's two calls per stock for 60 days, so ~420 requests. Also confirm how the CAS price relates to the official close. Groww's opens differ from Kite's on ~half the regular-session bars, so keep Kite for 09:15–15:15. |
-| Debug INDmoney's 1-minute data | Its bars don't look wrong so much as belonging to some other series. Volumes match Kite's on 0.2% of bars, O/H/L/C agreement is ~61/82/76/71% (almost exactly Dhan's), and there are flat bars 15:16–15:30 during the CAS. Worth checking: is it BSE, or NSE+BSE consolidated (compare against the BSE scrip code)? Are the bars stamped at the end of the minute rather than the start, or cut from ticks differently? Why does every request return only 7 days? Re-run `scripts/debug/compare_intraday_providers.py` as the harness. |
+| Extended-session minute bars (pre-open, closing auction, post-close) | **Blocked until Groww's paid data plan is active** (its free API plan refuses candles, checked 2026-10-17). Checked 2026-09-30: none of Kite or Dhan documents pre-open, CAS or post-close data (since the 2026-10-09 export Dhan documents a **CAS Live Feed** websocket, Pro Traders Plan only: per-stock indicative equilibrium price, quantities, 5-level depth and imbalance, plus indicative index closes; no minute bars, not tried), and their minute bars stop at 15:14. The open test is a live socket probe: `python scripts/debug/probe_extended_session.py --until 09:16` (start before 09:00) and `--until 16:05` (start before 15:15) log what Dhan and Kite send in those windows to `data/extended_session_probe.csv`. Built 2026-10-01 and checked mid-session; the two windows have not been run yet. The windows that matter are pre-open (09:00-09:15) and CAS, the closing auction session (15:15-15:30); after 15:30 is settlement and of less interest. The summary reports CAS separately. For strategy research, not day-to-day use. Groww returns bars outside 09:15–15:15 that Kite and Dhan omit: pre-open 09:00–09:08 (volume only; prices are `None`), the closing auction session (CAS) 15:15–15:30 (a near-empty 15:15 bar was seen, so check what else it carries), and post-close bars to 15:59. Plan: an `extended_bars` table in `data/market.db` (or a `session` column on `minute_bars`) filled from Groww, 30 days per call. That's two calls per stock for 60 days, so ~420 requests. Also confirm how the CAS price relates to the official close. Groww's opens differ from Kite's on ~half the regular-session bars, so keep Kite for 09:15–15:15. |
 | More index boards | The index board is list-driven, so Nifty Midcap/Smallcap or thematic indices are rows in `index_mapping.py`, not new code. |
 
 ---

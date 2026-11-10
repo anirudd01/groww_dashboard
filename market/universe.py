@@ -105,7 +105,7 @@ INDEX_UNIVERSE_KEY = SECTORAL_INDICES.key
 
 DEFAULT_UNIVERSE_KEY = "NIFTY50"
 
-MASTER_HINT = "Run 'python scripts/kite.py --master' (or dhan.py / indmoney.py) to download NSE's lists."
+MASTER_HINT = "Run 'python scripts/kite.py --master' (or dhan.py) to download NSE's lists."
 
 
 def universes(path: Optional[str] = None) -> Dict[str, Universe]:

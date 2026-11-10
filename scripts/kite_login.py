@@ -27,6 +27,7 @@ import argparse
 import os
 import sys
 import webbrowser
+from urllib.parse import urlencode
 
 import requests
 
@@ -136,7 +137,9 @@ def main() -> int:
 
     raw = args.request_token
     if not raw:
-        url = login_url(api_key)
+        # The app's redirect URL is the dashboard's /kite-login page. "dest=local" tells that page
+        # this login belongs to this script: it then shows the address to copy and exchanges nothing.
+        url = f"{login_url(api_key)}&{urlencode({'redirect_params': urlencode({'dest': 'local'})})}"
         print("1. Log in to Zerodha at:\n")
         print(f"   {url}\n")
         if not args.no_browser:
@@ -144,8 +147,9 @@ def main() -> int:
                 webbrowser.open(url)
             except Exception:
                 pass
-        print("2. After logging in, the browser lands on your app's redirect URL (it may")
-        print("   show an error page - that is fine). Copy the whole address from the bar.\n")
+        print("2. After logging in, the browser lands on your app's redirect URL. The dashboard's")
+        print("   Kite login page shows the address to copy; on any other page (even an error")
+        print("   page) copy the whole address from the bar.\n")
         try:
             raw = input("3. Paste it here: ")
         except (EOFError, KeyboardInterrupt):

@@ -1,9 +1,9 @@
 """Shared plumbing for brokers whose tokens are minted here.
 
-Dhan (``dhan_session``) and INDmoney (``indmoney_session``) both generate access tokens from TOTP
-and share them between processes. Where the token is kept, and the lock that stops two processes
-minting at once, are in ``market/state_store.py`` (a table of the shared SQLite database). This holds
-the small helpers the two have in common:
+Dhan (``dhan_session``) generates access tokens from TOTP and shares them between processes.
+Where the token is kept, and the lock that stops two processes minting at once, are in
+``market/state_store.py`` (a table of the shared SQLite database). This holds the small helpers
+that are not specific to one broker:
 
   - ``jwt_claims`` - a token's JWT payload, decoded but not verified
   - ``env_first``  - the first non-empty value among env var spellings

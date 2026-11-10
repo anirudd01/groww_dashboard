@@ -1,8 +1,8 @@
 """Shared test isolation for brokers whose tokens are minted from TOTP.
 
-A test that reached a real token endpoint would mint a token - and for
-INDmoney that revokes the live one every dashboard is using. So every test
-module that builds a Dhan or INDmoney provider starts with ``isolate()``:
+A test that reached a real token endpoint would mint a token and overwrite
+the saved session every dashboard is using. So every test
+module that builds a Dhan provider starts with ``isolate()``:
 the real credentials are removed from the environment and the state database
 (``PULSE_STATE_DB``: sessions and the clock offset) points into a temp directory.
 """
@@ -38,7 +38,7 @@ def seed_constituents(path: str = None) -> dict:
 
 
 #: Env var prefixes that carry broker credentials minted into tokens here.
-CREDENTIAL_PREFIXES = ("DHAN_", "IND_MONEY_")
+CREDENTIAL_PREFIXES = ("DHAN_",)
 
 
 class isolate:

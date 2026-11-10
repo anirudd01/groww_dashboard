@@ -73,7 +73,7 @@ class HeatmapConfig:
     # --- providers ------------------------------------------------------
     # Broker preference order. The service uses the first one that
     # authenticates and resolves instruments; the rest are fallbacks.
-    # Known: dhan, indmoney, groww, kite (alias: zerodha).
+    # Known: dhan, groww, kite (alias: zerodha).
     providers: Tuple[str, ...] = DEFAULT_PROVIDER_ORDER
 
     # --- universe -------------------------------------------------------
@@ -125,6 +125,15 @@ class HeatmapConfig:
     # board is on REST by then, so retrying gently beats hammering - and with
     # Groww, connection churn measurably makes the next handshake worse.
     feed_retry_seconds: float = 30.0
+    # After this many reconnects in a row without a single price, stop racing:
+    # wait ``feed_slow_retry_seconds`` between attempts until prices flow again.
+    # Before 2026-11-10 nothing capped this, and an exchange holiday (which
+    # looks like a silent socket in session hours) cost 700+ reconnects a day.
+    feed_slow_after_attempts: int = 3
+    feed_slow_retry_seconds: float = 300.0
+    # A board nobody has looked at for this long stops its feed; the next
+    # viewer starts it again. 0 keeps feeds running forever.
+    feed_idle_stop_seconds: float = 600.0
 
     # --- REST fallback --------------------------------------------------
     # Only used when the websocket cannot be established or delivers nothing.
@@ -132,6 +141,9 @@ class HeatmapConfig:
     # API - but it is NOT the live feed, and the UI labels it as such.
     rest_fallback_enabled: bool = True
     rest_poll_seconds: float = 3.0
+    # Outside the session, or on a day the exchange is not trading, prices do
+    # not move: poll this rarely instead (enough to fill the board once).
+    closed_rest_poll_seconds: float = 300.0
     # The SDK defaults to no HTTP timeout; without this a throttled or stalled
     # request would hang the worker loop and freeze the dashboard.
     rest_timeout_seconds: int = 10
@@ -176,8 +188,14 @@ class HeatmapConfig:
                 1, _env_int("PULSE_HEATMAP_FEED_RECOVERY_ATTEMPTS", 2)
             ),
             feed_retry_seconds=_env_float("PULSE_HEATMAP_FEED_RETRY_SECONDS", 30.0),
+            feed_slow_after_attempts=max(
+                1, _env_int("PULSE_HEATMAP_FEED_SLOW_AFTER_ATTEMPTS", 3)
+            ),
+            feed_slow_retry_seconds=_env_float("PULSE_HEATMAP_FEED_SLOW_RETRY_SECONDS", 300.0),
+            feed_idle_stop_seconds=_env_float("PULSE_HEATMAP_FEED_IDLE_STOP_SECONDS", 600.0),
             rest_fallback_enabled=_env_bool("PULSE_HEATMAP_REST_FALLBACK", True),
             rest_poll_seconds=_env_float("PULSE_HEATMAP_REST_POLL_SECONDS", 3.0),
+            closed_rest_poll_seconds=_env_float("PULSE_HEATMAP_CLOSED_REST_POLL_SECONDS", 300.0),
             rest_timeout_seconds=_env_int("PULSE_HEATMAP_REST_TIMEOUT_SECONDS", 10),
             previous_close_refresh_seconds=_env_int(
                 "PULSE_HEATMAP_PREV_CLOSE_REFRESH_SECONDS", 900
