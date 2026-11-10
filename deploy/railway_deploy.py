@@ -25,7 +25,7 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVICE_ID = "4fcb8e29-2e76-42f2-b313-2860f975c61a"  # pulse-dashboards / dashboards
-PUBLIC_URL = "https://dashboards-production-1d39.up.railway.app"
+PUBLIC_URL = "https://market-pulse-dashboard.up.railway.app"
 TOKEN_ENV = "RAILWAY_PULSE_PROJECT_TOKEN"
 
 

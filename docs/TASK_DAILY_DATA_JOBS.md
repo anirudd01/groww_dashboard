@@ -72,7 +72,8 @@ touches the insight pages. Ask before committing; nothing from the 2026-11-07 se
 
 ## Where things stood on 2026-11-07
 
-**Public app (live):** https://dashboards-production-1d39.up.railway.app
+**Public app (live):** https://market-pulse-dashboard.up.railway.app (domain renamed by the user on
+2026-11-10; the old `dashboards-production-1d39` address now returns 404)
 
 - **Railway layout:**
   - Project `pulse-dashboards` (id `1c7d8cd5-0de0-4e4e-ad19-8680cc04030a`), environment `production`
