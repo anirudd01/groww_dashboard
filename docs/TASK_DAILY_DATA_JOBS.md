@@ -62,6 +62,17 @@ touches the insight pages. Ask before committing; nothing from the 2026-11-07 se
   - Still to do on Railway (needs approval): cut the cron's trigger attempts from 6 to 3, then deploy.
 - **Planned, not built:** pre-open prices from 09:08 (`docs/PLAN_PRE_MARKET.md`).
 - **Deployed 2026-11-10 evening:** the changes above, and the daily-jobs cron cut to 3 trigger attempts 20 s apart.
+- **Morning catch-up and Dhan live on the F&O movers page (2026-11-13, deployed):** the `daily-jobs`
+  cron is now `0 3,11 * * 1-6` (08:30 and 16:30 IST, Mon-Sat; one cron expression needs the same minute for
+  both). A `--scheduled` run before 09:00 IST fetches only `dhan-daily`, without the holiday check, so
+  yesterday's candle is stored before the open. Saturday 16:30 is skipped by the holiday check.
+- **Auction capture stopped (2026-11-13):** the `auction-capture` service's cron schedule was removed (the
+  service is kept, so it can be re-enabled by setting `25 3,9 * * 1-5` again). Do not redeploy it while it
+  has no schedule: a deploy runs its start command once and starts a capture. That happened once at
+  13:45 IST on 2026-11-13, recording that afternoon's close window. Recorded: mornings 11-13 Nov, close
+  windows 11-12 Nov (+13 Nov). Files: `/app/data/captures/*.jsonl` on the volume. The F&O Nifty 50 / All pages take the latest session from one Dhan
+  `/marketfeed/quote` (Kite is no longer needed), dated by `last_trade_time`. Evidence and the Groww
+  comparison: PROVIDER_COMPARISON_LOG.md, 2026-11-13.
 - **Auction capture on Railway (2026-11-10):** cron service `auction-capture` (id
   `dc775e7c-bcda-44f3-bfaa-afc575047163`, alpine, `25 3,9 * * 1-5` = 08:55 / 14:55 IST, restart NEVER, same
   `JOB_TRIGGER_SECRET` reference) POSTs `/capture` on the trigger, which runs `scripts/debug/capture_auctions.py`

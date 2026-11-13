@@ -15,6 +15,136 @@ python scripts/debug/compare_heatmap_startup.py --out results.json       # heatm
 
 ---
 
+## 2026-11-13: when is a session's daily candle available, Dhan vs Groww
+
+Why: the F&O Nifty 50 page stopped at 2026-11-11, because the 16:15 IST job never stores that day's
+candle (it stores the day before).
+
+Evidence:
+
+- Server runs (container log). On 2026-11-11 at 16:19 IST and 2026-11-12 at 16:19, `dhan-daily` asked
+  `/charts/historical` up to the next day, after its own 16:00 cut-off (so the job did not drop the
+  day itself). Both times, no stock had that day's candle: `daily_bars` ended 2026-11-09, then 2026-11-11.
+- Local probe, Fri 2026-11-13 13:27 IST (read-only, `.env` credentials, RELIANCE and TCS, 2026-11-09..13):
+  - Dhan daily: Mon 09, Wed 11 and **Thu 12** (closes 1339.7 / 2442.4, which match Thursday's close in the
+    pre-open captures). Nothing for Fri 13 mid-session.
+  - Groww `get_historical_candles(..., "1day")`: 09, 11 and **13** (1341.7 / 2411.0, today's running price
+    at 13:27), and **no Thu 12 at all**.
+
+Reading: Dhan publishes a session's daily candle some time after 16:20 the same day and before 13:27 the
+next day; the exact hour is not measured. Groww's daily series is no better: it carries today's running
+candle but was missing the previous session the next afternoon. So switching daily candles to Groww
+would not fix the gap. The 1-minute bars from Groww are complete at 16:15 (the job stored 09:15-15:14 for
+the same day), but a daily close built from them is not the official close.
+
+Change made (2026-11-13): the `daily-jobs` cron also runs at 08:30 IST (`0 3,11 * * 1-6`: 08:30 and 16:30). A scheduled
+run before 09:00 is a morning catch-up of `dhan-daily` only. The F&O movers page shows the latest session
+from one bulk Dhan quote, dated by `last_trade_time`, until that session's candle is stored. Still open:
+measure Dhan's publish time (e.g. probe hourly one evening) and, if it is early enough, move the evening
+run later instead.
+
+---
+
+## 2026-11-13: pre-open session, second morning (repeat of 2026-11-12)
+
+Setup: same as 2026-11-12 (Railway `auction-capture`, 68 passes every 15 s, 08:59:00-09:15:45 IST, same 10
+stocks plus NIFTY).
+
+**Same as 2026-11-12:** before the settle, `ltp` on every source was yesterday's close, both websockets
+carried nothing new, and the indicative price was only in Dhan REST `open` and Groww quote `ohlc.open`. It
+first appeared in the 09:00:15 pass (Groww `ltt` 09:00:08). `close` stayed yesterday's close. NIFTY's `ltp`
+moved from 09:00:15. Groww's websocket sent one round at the settle, then nothing until 09:15:00.
+
+**Different: the settle came at ~09:08:27, not ~09:09:44.** Every source switched in the 09:08:30 pass (Dhan
+`ltt` 13/11/2026 09:08:27), and the Groww websocket ticked all 10 stocks then. So the settle time moves from day
+to day (NSE closes pre-open order entry at a random moment near 09:08). A client must watch for the `ltt` to
+change, not assume a fixed time.
+
+**Last indicative before the settle vs final (Dhan REST, 09:08:15 pass vs 09:08:30 `ltp`):**
+
+| Stock | Yesterday's close | `open` at 09:00:15 | `open` at 09:08:15 | Final `ltp` | Gap % |
+|---|---|---|---|---|---|
+| BHARTIARTL | 2096 | 2105 | 2082 | 2082 | 0 |
+| LT | 4159.2 | 4159.2 | 4145.1 | 4145.1 | 0 |
+| TCS | 2442.4 | 2470 | 2439.7 | 2438.6 | 0.05 |
+| HDFCBANK | 812.3 | 805 | 808.8 | 808 | 0.10 |
+| INFY | 1151.2 | 1170 | 1147.5 | 1147.5 | 0 |
+| ITC | 284.05 | 284 | 284 | 284 | 0 |
+| RELIANCE | 1339.7 | 1349 | 1337 | 1336.6 | 0.03 |
+| SBIN | 1086.5 | 1095 | 1094 | 1090 | 0.37 |
+| ICICIBANK | 1590 | 1598.9 | 1576.8 | 1576.1 | 0.04 |
+| AXISBANK | 1342.9 | 1356.5 | 1338 | 1338 | 0 |
+
+5 of 10 exact, the rest within 0.4 %. The last minute before the settle was noisier than on 2026-11-12. From
+09:07:00 Dhan and Groww's RELIANCE `open` differed by up to 2.8 in the same pass (e.g. 1337.8 vs 1335.0), and
+indicative volume dipped. Before 09:07, the two matched pass for pass.
+
+**Conclusion so far (two mornings):** confirmed. Show the `open` field from ~09:00, and switch to `ltp` when its
+`ltt` turns to today. Treat the last ~90 s before the settle as less stable.
+
+---
+
+## 2026-11-12: pre-open session (08:59-09:16), Dhan vs Groww, first live morning
+
+Why: [`PLAN_PRE_MARKET.md`](PLAN_PRE_MARKET.md) needs to know what each broker sends before 09:15, so the
+heatmap can show the pre-open price instead of yesterday's.
+
+Setup: Railway cron `auction-capture` ran `scripts/debug/capture_auctions.py` on Thu 2026-11-12, 68 passes
+every 15 s from 08:59:00 to 09:15:45 IST (so every time below is ±15 s). 10 stocks (RELIANCE, TCS, HDFCBANK,
+INFY, SBIN, ICICIBANK, AXISBANK, BHARTIARTL, ITC, LT) plus NIFTY. Sources per pass: Dhan REST quote, Dhan
+websocket, Groww LTP, Groww quote (RELIANCE and NIFTY only) and Groww websocket. Read from the `[capture] PASS`
+lines of the dashboards container log. One morning only; the 2026-11-11 morning (09:00 start, 64 passes) is
+also in the log but not analysed here.
+
+**Timeline (IST):**
+
+| Phase | Dhan REST | Dhan websocket | Groww LTP | Groww quote | Groww websocket |
+|---|---|---|---|---|---|
+| 08:59-09:00 | yesterday's close; `open` 0, volume 0 | yesterday's close | yesterday's close | yesterday's OHLC | silent |
+| ~09:00:10-09:09:44 | `ltp` still yesterday's; **`open` = indicative price**, updates every few s; volume grows | yesterday's close | yesterday's close | `ltp` still yesterday's; **`ohlc.open` = indicative price**; `ltt` = now; volume grows | silent |
+| ~09:09:44 | `ltp` = final pre-open price, `ltt` 09:09:44 | final price | final price | final price, `ohlc` reset to it | one round of ticks (09:09:45-09:10:00), then silent |
+| 09:10-09:15 | frozen at final price | frozen | frozen | frozen | silent |
+| 09:15:00 | normal trading | ticks | normal | normal | ticks |
+
+First indicative value seen: 09:00:15 pass (Groww quote `ltt` 09:00:09). Settle seen: 09:09:45 pass (Dhan
+`ltt` 12/11/2026 09:09:44). Both brokers changed in the same pass at both points.
+
+**Indicative (`open`) vs final price, Dhan REST:**
+
+| Stock | Yesterday's close | `open` at 09:00:15 | `open` at 09:09:30 | Final `ltp` at 09:09:44 |
+|---|---|---|---|---|
+| BHARTIARTL | 2109 | 2130 | 2094 | 2094 |
+| LT | 4212 | 4208 | 4210 | 4210 |
+| TCS | 2472.1 | 2484 | 2442 | 2442 |
+| HDFCBANK | 806.6 | 817.9 | 802 | 803 |
+| INFY | 1155 | 1160 | 1145 | 1145 |
+| ITC | 285 | 288 | 287.4 | 287.4 |
+| RELIANCE | 1335.4 | 1349 | 1335.4 | 1335.4 |
+| SBIN | 1061.2 | 1062 | 1062 | 1062 |
+| ICICIBANK | 1571.6 | 1590 | 1574 | 1577.1 |
+| AXISBANK | 1336.4 | 1345 | 1337 | 1338.5 |
+
+7 of 10 matched exactly at 09:09:30; the other 3 were within 0.2 %. Groww's RELIANCE `ohlc.open` tracked
+Dhan's to within one rupee each pass (both 1349 → 1339 → 1336 → 1335.4).
+
+**Answers to the plan's open questions:**
+
+1. 09:00-09:08 LTP: yesterday's last price on both brokers, REST and websocket, not empty. The live
+   pre-open value is only in the `open` field (Dhan REST `open`, Groww quote `ohlc.open`).
+2. The final pre-open price becomes the LTP at ~09:09:44 (not 09:08), on REST and on both websockets,
+   with `last_trade_time` 09:09:44. Before that, Dhan's `ltt` stays yesterday's (e.g. 11/11/2026 15:59:55).
+3. `close` stays yesterday's close throughout (Dhan `close`, Groww `ohlc.close`), also after 09:15, so
+   change % against `close` works. Groww quote `ohlc.high/low` are yesterday's until 09:09:44, then reset.
+4. NIFTY gets a moving pre-open value in `ltp` itself from 09:00:15 on both brokers (Dhan `ltt` = now; Groww
+   `ohlc.open` stays 0 until 09:09:44). Settled at 25213.5 at 09:09:44.
+
+**Conclusion (one morning, confirm with more):** a pre-open heatmap can show the indicative price from
+~09:00 by polling the `open` field over REST; neither websocket carries it. Dhan REST covers all stocks in
+one call; the Groww quote was only asked for two symbols here, so its batch cost is not measured. From
+~09:09:44 the LTP itself is right on every source.
+
+---
+
 ## 2026-11-07: Kite vs Groww vs Dhan, 1-minute and daily, all three logged in
 
 Why: the 2026-09-27 Groww numbers predate the 2026-10-01 fix (session-only comparison, label

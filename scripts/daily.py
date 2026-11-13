@@ -29,6 +29,12 @@ run does not want:
   the run skipped, as a success. A failed check counts as "maybe": the jobs run.
 * A job that fails is run again at most twice, 10 minutes apart. Never more: a job that fails
   because the broker has no data must give up rather than loop.
+
+A scheduled run before 09:00 IST is the **morning catch-up**: only ``dhan-daily``, and no "did NSE
+trade today?" check (nothing has traded yet). Dhan's daily endpoint does not have a session's candle
+at 16:15 the same day (seen 2026-11-11 and 2026-11-12; it was there by 13:27 the next day), so the
+evening run stores the day before, and the morning run fills in yesterday before the market opens.
+The server's ``daily-jobs`` cron calls the trigger at both times.
 """
 
 import argparse
@@ -52,6 +58,9 @@ RETRIES, RETRY_GAP_S = 2, 600
 RUN_BUDGET_S = 40 * 60
 #: Scheduled runs: "did NSE trade today?" checks before skipping, and the wait between them.
 MARKET_CHECKS, MARKET_CHECK_GAP_S = 3, 60
+#: Scheduled runs before this IST hour are the morning catch-up (dhan-daily only, no market check).
+MORNING_BEFORE_HOUR = 9
+MORNING_JOBS = ("dhan-daily",)
 
 logger = logging.getLogger("jobs")
 
@@ -77,6 +86,13 @@ def nse_traded_today(probe: Optional[Callable] = None, checks: int = MARKET_CHEC
             return True
         verdicts.append(verdict)
     return False if all(v is False for v in verdicts) else None
+
+
+def is_morning_catch_up(now=None) -> bool:
+    """A scheduled run before the market: only yesterday's daily candles are worth fetching."""
+    from market.market_hours import now_ist
+
+    return (now or now_ist()).hour < MORNING_BEFORE_HOUR
 
 
 def parse_args(argv=None):
@@ -113,6 +129,14 @@ def main(argv=None) -> int:
     if not args.scheduled:
         return common.run_jobs(jobs)
     deadline = time.monotonic() + RUN_BUDGET_S
+    if is_morning_catch_up():
+        jobs = [plan[name] for name in JOBS if name in wanted and name in MORNING_JOBS]
+        if not jobs:
+            logger.warning("Morning catch-up runs only %s, and none of it was asked for: nothing to do.",
+                           ", ".join(MORNING_JOBS))
+            return 0
+        logger.info("Morning catch-up: %s only, for the last session's daily candles.", ", ".join(MORNING_JOBS))
+        return common.run_jobs(jobs, retries=RETRIES, retry_gap=RETRY_GAP_S, deadline=deadline)
     if nse_traded_today() is False:
         logger.info("NSE did not trade today (a holiday) - nothing to fetch, skipping the run.")
         return 0

@@ -968,14 +968,14 @@ class DhanProvider(MarketDataProvider):
                 continue
         return times
 
-    def get_quotes(self, refs: List[InstrumentRef]) -> Dict[str, dict]:
+    def get_quotes(self, refs: List[InstrumentRef], strict: bool = False) -> Dict[str, dict]:
         """The full ``/marketfeed/quote`` entry per symbol: last price, OHLC, volume, OI, circuit limits.
 
         Used by the MCX page, which shows more of the quote than the boards' price-only calls.
         Note ``ohlc.close`` is the *previous* session's close here, and for MCX it stays so
-        after the session ends (seen 2026-10-03, a Saturday).
+        after the session ends (seen 2026-10-03, a Saturday). ``strict``: see ``_post_marketfeed``.
         """
-        return self._post_marketfeed("quote", refs)
+        return self._post_marketfeed("quote", refs, strict=strict)
 
     def get_candles(
         self, ref: InstrumentRef, start: datetime, end: datetime, interval: Optional[int] = None

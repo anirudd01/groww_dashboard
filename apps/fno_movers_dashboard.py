@@ -1,9 +1,10 @@
 """F&O top gainers and losers, day by day - Streamlit entry point.
 
 Two views: the Nifty 50 (all of which trade in F&O) and every NSE F&O stock.
-Past days come from the stored daily closes, written by
-scripts/kite.py history. Today, while the market is open, comes from one
-bulk Kite quote for all ~210 stocks.
+Past days come from the stored daily closes (``daily_bars``), written on the
+server by scripts/daily.py from Dhan's daily candles. The latest session comes
+from one bulk Dhan quote for all ~220 stocks: live while the market is open,
+and after the close until that session's candle is stored.
 
 Visualisation only - it places no orders and generates no signals.
 
@@ -47,6 +48,8 @@ from market.fno_movers import (
     load_confirmed_moves,
     load_universe,
     period_changes,
+    previous_stored_day,
+    quote_session,
     suspected_corporate_actions,
     top_movers,
     top_period_movers,
@@ -54,11 +57,9 @@ from market.fno_movers import (
 from market.market_hours import (
     SESSION_OPEN,
     SESSION_PRE_MARKET,
-    SESSION_WEEKEND,
     now_ist,
     session_state,
 )
-from market.providers.base import InstrumentRef
 from apps.fno_common import nifty50 as nifty50_universe
 from ui.shading import shade_change
 
@@ -78,31 +79,28 @@ def load_history(stamp: float):
 
 
 @st.cache_resource(ttl="1h", show_spinner=False)
-def kite_provider():
-    """A connected Kite provider, or the reason there is none."""
-    from market.providers.kite import KiteProvider
+def dhan_provider():
+    """A connected Dhan provider. Raises with the reason it could not be (and so is not cached)."""
+    from market.providers.dhan import DhanProvider
 
-    provider = KiteProvider()
+    provider = DhanProvider()
     if not provider.is_configured():
-        return None, "No Kite session for today - run 'python scripts/kite_login.py'."
-    try:
-        provider.connect()
-    except Exception as exc:  # noqa: BLE001 - shown in the UI
-        return None, str(exc)
-    return provider, ""
+        raise RuntimeError("Dhan is not configured (DHAN_CLIENT_ID, DHAN_PIN, DHAN_TOTP_SECRET).")
+    provider.connect()
+    return provider
 
 
 @st.cache_data(ttl=LIVE_TTL_SECONDS, show_spinner=False)
-def live_quotes(tokens: tuple):
-    """One ``/quote/ohlc`` call for every F&O stock. Returns (quotes, error, fetched_at)."""
-    provider, error = kite_provider()
-    if provider is None:
-        return {}, error, None
-    refs = [InstrumentRef(symbol=s, provider_id=t) for s, t in tokens]
+def live_quotes(symbols: tuple):
+    """One bulk Dhan ``/marketfeed/quote`` for every F&O stock. Returns (quotes, error, fetched_at)."""
     try:
-        quotes = provider.get_ohlc_quotes(refs)
-    except Exception as exc:  # noqa: BLE001
-        return {}, f"Kite quote failed: {exc}", None
+        provider = dhan_provider()
+        refs, _missing = provider.resolve_instruments(list(symbols))
+        quotes = provider.get_quotes(list(refs.values()), strict=True)
+    except Exception as exc:  # noqa: BLE001 - shown in the UI
+        return {}, f"Dhan quote failed: {exc}", None
+    if not quotes:
+        return {}, "Dhan returned no prices.", None
     return quotes, "", now_ist()
 
 
@@ -264,8 +262,9 @@ def main(view: str = VIEW_ALL) -> None:
         limit = st.segmented_control("Rows per table", [5, 10, 15, 20], default=10, required=True)
         hide_suspected = st.toggle("Hide suspected splits/bonuses", value=True,
                                    help="Leave stocks whose close fell by a split-like ratio out of the rankings.")
-        show_live = st.toggle("Include today (live)", value=True,
-                              help="One bulk Kite quote for all F&O stocks, refreshed at most every 30 s.")
+        show_live = st.toggle("Include latest session (live)", value=True,
+                              help="One bulk Dhan quote for all F&O stocks, refreshed at most every 30 s. Shows "
+                                   "the latest session until its daily candle is stored.")
         if st.button("Refresh live prices", icon=":material/refresh:") and allow_refresh("fno_movers"):
             live_quotes.clear()
 
@@ -274,17 +273,25 @@ def main(view: str = VIEW_ALL) -> None:
     today = now_ist().date().isoformat()
     state = session_state()
 
-    live_note = ""
-    if show_live and today not in moves_by_day and state != SESSION_WEEKEND:
-        quotes, error, fetched_at = live_quotes(tuple(sorted(universe.tokens.items())))
+    live_note, live_day = "", None
+    if show_live:
+        quotes, error, fetched_at = live_quotes(tuple(sorted(universe.tokens)))
+        session, quotes = quote_session(quotes)
         if error:
-            live_note = f"Today not shown: {error}"
-        elif quotes:
-            in_session = state in (SESSION_OPEN, SESSION_PRE_MARKET)
-            todays = live_moves(quotes, today, rows, in_session)
-            if todays:
-                moves_by_day[today] = todays
-                live_note = f"Today: {len(todays)} stocks, Kite quote at {fetched_at:%H:%M:%S} IST ({state.lower()})"
+            live_note = f"Latest session not shown: {error}"
+        elif session and session not in moves_by_day:
+            # The quote's own close is the previous close only during the session (verified);
+            # otherwise live_moves takes the closes of the previous stored day, named in the note.
+            in_session = session == today and state in (SESSION_OPEN, SESSION_PRE_MARKET)
+            latest = live_moves(quotes, session, rows, in_session)
+            against = ("the previous close in Dhan's quote" if in_session else
+                       f"the stored close of {pd.Timestamp(previous_stored_day(rows, session)):%a %d %b}"
+                       if previous_stored_day(rows, session) else "no stored close")
+            if latest:
+                moves_by_day[session], live_day = latest, session
+                live_note = (f"{pd.Timestamp(session):%a %d %b}: {len(latest)} stocks from a Dhan quote at "
+                             f"{fetched_at:%H:%M:%S} IST ({state.lower()}), against {against}; "
+                             "not yet in the stored closes.")
 
     days = sorted(moves_by_day, reverse=True)[:days_to_show] if mode == "By day" else []
     stored_days = sorted({d for d, _ in rows})
@@ -295,15 +302,15 @@ def main(view: str = VIEW_ALL) -> None:
                   help=f"{stored_days[0]} to {stored_days[-1]}" if stored_days else None)
         st.metric("Last stored day", stored_days[-1] if stored_days else "-", border=True)
     st.caption(
-        "Data source: Kite. Past days come from the stored closes "
-        f"(data/market.db, written by {UPDATE_SCRIPT} from Kite's daily candles); "
-        "today comes from one Kite quote. This page does not use the sidebar "
-        "data-provider setting of the heatmap pages."
+        "Data source: Dhan. Past days come from the stored daily closes (Dhan's daily candles, "
+        "fetched after the close and again the next morning); the latest session, until it is stored, "
+        "comes from one Dhan quote. This page does not use the sidebar data-provider setting of the "
+        "heatmap pages."
     )
     if live_note:
         st.caption(live_note)
     if stored_days and (pd.Timestamp(today) - pd.Timestamp(stored_days[-1])).days > 4:
-        st.warning(f"The history ends on {stored_days[-1]}. Run 'python {UPDATE_SCRIPT}' to catch up.",
+        st.warning(f"The history ends on {stored_days[-1]}. Run 'python scripts/daily.py dhan-daily' to catch up.",
                    icon=":material/history:")
 
     nifty50 = set(nifty50_universe().symbols) & set(universe.tokens)
@@ -317,9 +324,9 @@ def main(view: str = VIEW_ALL) -> None:
             moves = moves_by_day[day]
             if hide_suspected:
                 moves = drop_suspected_moves(moves, actions)
-            day_card(day, moves, symbols, limit, live=(day == today and day not in stored_moves))
+            day_card(day, moves, symbols, limit, live=(day == live_day))
     else:
-        period_view(rows, moves_by_day.get(today) if today not in stored_moves else None,
+        period_view(rows, moves_by_day.get(live_day) if live_day else None,
                     symbols, PERIODS[period], limit, actions, hide_suspected)
 
     with st.sidebar:

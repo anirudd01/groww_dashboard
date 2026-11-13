@@ -336,17 +336,21 @@ def live_moves(
     stored: Dict[Tuple[str, str], dict],
     in_session: bool,
 ) -> List[Move]:
-    """Today's moves from one bulk ``/quote/ohlc`` answer.
+    """Today's moves from one bulk quote answer (Kite ``/quote/ohlc`` or Dhan ``/marketfeed/quote``).
 
     During the session the quote's ``ohlc.close`` is the previous close
-    (verified against daily candles on 2026-09-25). Outside it that field's
-    meaning is not verified, so the last *stored* close before today is used
-    instead, and a symbol without one is left out.
+    (verified against daily candles on 2026-09-25 for Kite, and in the Dhan
+    pre-open captures of 2026-11-12/13). Outside it that field's
+    meaning is not verified, so the stored close of the previous stored day is
+    used instead. That is one day for the whole board (``previous_stored_day``):
+    a symbol without a close on it is left out, never compared with an older
+    close, which would show a two-day move as one day's.
     """
+    previous_day = previous_stored_day(stored, today)
     last_stored: Dict[str, Tuple[str, float]] = {}
     for (day, symbol), row in stored.items():
         close = _number(row.get("close"))
-        if day < today and close and (symbol not in last_stored or day > last_stored[symbol][0]):
+        if day == previous_day and close:
             last_stored[symbol] = (day, close)
 
     moves = []
@@ -360,6 +364,37 @@ def live_moves(
         if previous:
             moves.append(Move(symbol, today, price, previous))
     return moves
+
+
+def previous_stored_day(stored: Dict[Tuple[str, str], dict], day: str) -> Optional[str]:
+    """The latest stored date before ``day``, or None."""
+    earlier = [d for d, _ in stored if d < day]
+    return max(earlier) if earlier else None
+
+
+def quote_session(quotes: Dict[str, dict]) -> Tuple[Optional[str], Dict[str, dict]]:
+    """The session a bulk Dhan quote belongs to, and only the quotes from that session.
+
+    After the close, at the weekend or on a holiday Dhan's prices are the last session's, and
+    only ``last_trade_time`` (``13/11/2026 13:29:46``, IST) says which session that is. The
+    most common trade date wins, so one stale or odd stock cannot move the whole board to
+    another day; quotes from any other date are left out. ``(None, {})`` if nothing is dated.
+    Early in a session a stock that has not traded yet still carries the last session's time,
+    so it is left out until its first trade.
+    """
+    dated: Dict[str, str] = {}
+    for symbol, entry in quotes.items():
+        try:
+            dated[symbol] = datetime.strptime(str(entry.get("last_trade_time")), "%d/%m/%Y %H:%M:%S").date().isoformat()
+        except ValueError:
+            continue
+    if not dated:
+        return None, {}
+    counts: Dict[str, int] = {}
+    for day in dated.values():
+        counts[day] = counts.get(day, 0) + 1
+    session = max(counts, key=lambda day: (counts[day], day))
+    return session, {symbol: quotes[symbol] for symbol, day in dated.items() if day == session}
 
 
 def top_movers(moves: List[Move], limit: int = 10, symbols: Optional[set] = None) -> Tuple[List[Move], List[Move]]:
