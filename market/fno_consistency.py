@@ -23,8 +23,8 @@ nothing here calls a broker.
 """
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from market.fno_movers import _number, trading_days
 
@@ -46,13 +46,13 @@ class ConsistencyRow:
 
     symbol: str
     #: The N days whose moves are shown, oldest first (the first close's day is not included)
-    dates: List[str]
+    dates: list[str]
     #: N+1 closes, from the day before ``dates[0]`` to ``dates[-1]``. Empty when built from ``steps``
-    closes: List[float] = field(default_factory=list)
+    closes: list[float] = field(default_factory=list)
     #: N daily % changes, aligned with ``dates``
-    changes: List[float] = field(default_factory=list)
+    changes: list[float] = field(default_factory=list)
     #: N daily log returns, aligned with ``dates``
-    steps: List[float] = field(default_factory=list)
+    steps: list[float] = field(default_factory=list)
     #: A day whose |% change| is below this counts as neither up nor down
     flat_below: float = 0.0
 
@@ -105,7 +105,7 @@ class ConsistencyRow:
         return sign * count
 
 
-def window_dates(rows: Dict[Tuple[str, str], dict], window: int) -> List[str]:
+def window_dates(rows: dict[tuple[str, str], dict], window: int) -> list[str]:
     """The last ``window + 1`` trading days in the file (one extra for the first move's base).
 
     Empty if the file has fewer days than that.
@@ -117,11 +117,11 @@ def window_dates(rows: Dict[Tuple[str, str], dict], window: int) -> List[str]:
 
 
 def consistency_rows(
-    rows: Dict[Tuple[str, str], dict],
+    rows: dict[tuple[str, str], dict],
     window: int,
-    symbols: Optional[Iterable[str]] = None,
-    exclude: Optional[Set[Tuple[str, str]]] = None,
-) -> Tuple[List[ConsistencyRow], List[str]]:
+    symbols: Iterable[str] | None = None,
+    exclude: set[tuple[str, str]] | None = None,
+) -> tuple[list[ConsistencyRow], list[str]]:
     """One row per stock that has a close on **every** day of the window.
 
     Returns ``(rows, left_out)``, where ``left_out`` lists the symbols missing at
@@ -156,12 +156,12 @@ def sort_key(row: ConsistencyRow, metric: str) -> tuple:
     return (round(row.efficiency, 9), row.net_change_pct, row.symbol)
 
 
-def rank(rows: List[ConsistencyRow], metric: str = METRIC_CONSISTENCY, best_first: bool = True) -> List[ConsistencyRow]:
+def rank(rows: list[ConsistencyRow], metric: str = METRIC_CONSISTENCY, best_first: bool = True) -> list[ConsistencyRow]:
     """Rows ordered by ``metric``: strongest first, or weakest first with ``best_first=False``."""
     return sorted(rows, key=lambda r: sort_key(r, metric), reverse=best_first)
 
 
-def leaders(rows: List[ConsistencyRow], metric: str, limit: int) -> Tuple[List[ConsistencyRow], List[ConsistencyRow]]:
+def leaders(rows: list[ConsistencyRow], metric: str, limit: int) -> tuple[list[ConsistencyRow], list[ConsistencyRow]]:
     """``(gainers, losers)``: the ``limit`` strongest rows and the ``limit`` weakest.
 
     Gainers must have risen over the window and losers fallen, so a market where

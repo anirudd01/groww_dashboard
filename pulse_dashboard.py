@@ -23,12 +23,16 @@ Dhan fills and ledger (account statements), never orders.
 
 import streamlit as st
 
-from apps import dhan_movers_dashboard
+from apps import (
+    dhan_movers_dashboard,
+    fno_heatmap_dashboard,
+    fno_movers_dashboard,
+    kite_login_dashboard,
+)
 from apps import drawdown_dashboard as drawdown
 from apps import fno_breadth_dashboard as breadth
 from apps import fno_gap_fills_dashboard as gap_fills
 from apps import fno_gap_streaks_dashboard as gap_streaks
-from apps import fno_heatmap_dashboard, fno_movers_dashboard, kite_login_dashboard
 from apps import fno_rotation_dashboard as rotation
 from apps import fno_session_split_dashboard as session_split
 from apps import mcx_futures_dashboard as mcx

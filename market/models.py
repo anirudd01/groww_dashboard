@@ -6,8 +6,6 @@ there is no need for anything heavier.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
-
 
 # --------------------------------------------------------------------------
 # Feed status
@@ -39,21 +37,21 @@ class StockMarketData:
     sector: str
     exchange: str = "NSE"
     segment: str = "CASH"
-    exchange_token: Optional[str] = None
-    previous_close: Optional[float] = None
-    ltp: Optional[float] = None
-    last_update: Optional[datetime] = None
+    exchange_token: str | None = None
+    previous_close: float | None = None
+    ltp: float | None = None
+    last_update: datetime | None = None
 
     # Intraday session bar. Only providers whose feed carries it populate these
     # (Dhan quote packets do; the Groww fallback generally does not), so every
     # consumer must treat them as optional rather than assuming a value.
-    day_open: Optional[float] = None
-    day_high: Optional[float] = None
-    day_low: Optional[float] = None
-    volume: Optional[int] = None
+    day_open: float | None = None
+    day_high: float | None = None
+    day_low: float | None = None
+    volume: int | None = None
 
     @property
-    def change_pct(self) -> Optional[float]:
+    def change_pct(self) -> float | None:
         """Percentage change vs the previous trading day's close."""
         from market.sector_aggregation import compute_change_pct
 
@@ -64,7 +62,7 @@ class StockMarketData:
         return self.change_pct is not None
 
     @property
-    def range_position_pct(self) -> Optional[float]:
+    def range_position_pct(self) -> float | None:
         """Where the LTP sits inside the day's range, 0 (low) to 100 (high).
 
         ``None`` when the range is unknown or degenerate - a stock that has not
@@ -91,7 +89,7 @@ class SectorMarketData:
     """Aggregated state for one sector."""
 
     sector: str
-    change_pct: Optional[float]
+    change_pct: float | None
     constituent_count: int
     priced_count: int = 0
     positive_count: int = 0
@@ -107,7 +105,7 @@ class SectorMarketData:
     #: unweighted would be a lie.
     fell_back_to_equal_weight: bool = False
     #: Mean position within the day's range across constituents that report one.
-    avg_range_position_pct: Optional[float] = None
+    avg_range_position_pct: float | None = None
     #: How many constituents supplied a usable day range.
     range_count: int = 0
 
@@ -115,23 +113,23 @@ class SectorMarketData:
     # from the stored free-float weights. ``None`` means no weight was usable -
     # never zero.
     #: Free-float market cap of the members we hold a weight for, in rupees.
-    free_float_cap: Optional[float] = None
+    free_float_cap: float | None = None
     #: Share of the parent index, 0-100 (sector board only; indices overlap).
-    index_share_pct: Optional[float] = None
+    index_share_pct: float | None = None
     #: Market-cap weighted % change - what moves the index, whatever the tile shows.
-    cap_weighted_change_pct: Optional[float] = None
+    cap_weighted_change_pct: float | None = None
     #: Rupee change in free-float market value today. Drives "biggest impact".
-    impact_value: Optional[float] = None
+    impact_value: float | None = None
     #: Contribution to the parent index's move, in % of the index (sector board).
-    index_impact_pct: Optional[float] = None
+    index_impact_pct: float | None = None
     #: The same in index points, when the index's previous close is known.
-    index_impact_points: Optional[float] = None
+    index_impact_points: float | None = None
     #: Members with a usable weight, out of ``member_total``.
     weighted_members: int = 0
     member_total: int = 0
 
     @property
-    def advancing_pct(self) -> Optional[float]:
+    def advancing_pct(self) -> float | None:
         """Share of priced constituents that are up, 0-100.
 
         ``None`` when nothing in the sector is priced, so an empty sector is
@@ -158,18 +156,18 @@ class FeedStatus:
     #: label of the broker currently supplying prices, e.g. "Dhan"
     provider: str = ""
     detail: str = ""
-    last_tick_at: Optional[datetime] = None
+    last_tick_at: datetime | None = None
     subscribed_count: int = 0
     requested_count: int = 0
     priced_count: int = 0
-    missing_previous_close: List[str] = field(default_factory=list)
-    unresolved_symbols: List[str] = field(default_factory=list)
+    missing_previous_close: list[str] = field(default_factory=list)
+    unresolved_symbols: list[str] = field(default_factory=list)
     market_open: bool = False
     #: One of the PREV_CLOSE_* constants, or "" while nothing has resolved.
     previous_close_source: str = ""
 
     @property
-    def seconds_since_tick(self) -> Optional[float]:
+    def seconds_since_tick(self) -> float | None:
         if self.last_tick_at is None:
             return None
         return max(0.0, (datetime.now() - self.last_tick_at).total_seconds())
@@ -179,14 +177,14 @@ class FeedStatus:
 class MarketSnapshot:
     """An immutable point-in-time view handed to the UI layer."""
 
-    stocks: List[StockMarketData]
+    stocks: list[StockMarketData]
     status: FeedStatus
     taken_at: datetime
     #: The universe's own index (NIFTY for the Nifty 50 board), carried on the
     #: same feed but never a constituent: it is not in ``stocks`` and counts in
     #: no sector, breadth or "priced" figure. ``None`` when the board has no
     #: index of its own or the active broker does not serve it.
-    index: Optional[StockMarketData] = None
+    index: StockMarketData | None = None
 
-    def for_sector(self, sector: str) -> List[StockMarketData]:
+    def for_sector(self, sector: str) -> list[StockMarketData]:
         return [s for s in self.stocks if s.sector == sector]

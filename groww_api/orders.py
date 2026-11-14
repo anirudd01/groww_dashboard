@@ -6,7 +6,7 @@ of letting Groww reject it (or worse, fill it at a made-up price).
 """
 
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any
 
 from groww_api.instruments import round_to_tick
 
@@ -14,7 +14,7 @@ from groww_api.instruments import round_to_tick
 EXIT_SLIPPAGE = 0.005
 
 
-def build_exit_order(pos: Dict[str, Any], slippage: float = EXIT_SLIPPAGE) -> Dict[str, Any]:
+def build_exit_order(pos: dict[str, Any], slippage: float = EXIT_SLIPPAGE) -> dict[str, Any]:
     """``place_order`` arguments that flatten one position from the position processor.
 
     A long is sold at ``ltp * (1 - slippage)`` rounded down to the tick, a short is bought back at

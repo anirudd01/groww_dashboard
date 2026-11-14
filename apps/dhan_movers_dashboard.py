@@ -41,12 +41,12 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
-from utils.public_mode import allow_refresh
 from market import dhan_movers as dm
 from market import dhan_movers_store as store
 from market import intraday_store
 from market.market_hours import SESSION_OPEN, now_ist, session_state
 from ui.shading import shade_change
+from utils.public_mode import allow_refresh
 
 logger = logging.getLogger(__name__)
 

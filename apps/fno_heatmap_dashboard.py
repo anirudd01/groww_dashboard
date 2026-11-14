@@ -26,6 +26,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 import pandas as pd
 import streamlit as st
 
+from apps.fno_common import nifty50 as nifty50_universe
 from market.fno_consistency import (
     METRIC_CONSISTENCY,
     METRIC_NET_CHANGE,
@@ -46,7 +47,6 @@ from market.fno_movers import (
     suspected_corporate_actions,
 )
 from market.market_hours import now_ist
-from apps.fno_common import nifty50 as nifty50_universe
 from ui.fno_heatmap import build_heatmap, colour_limit, rows_frame
 
 WINDOWS = [3, 5, 7, 10, 15, 20]

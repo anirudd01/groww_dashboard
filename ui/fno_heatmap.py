@@ -5,7 +5,7 @@ is a stock and each column a trading day, and a cell's colour is that day's %
 change. A stock that rose day after day reads as a solid green row.
 """
 
-from typing import List, Sequence
+from collections.abc import Sequence
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -33,7 +33,7 @@ def row_label(row: ConsistencyRow) -> str:
     return f"<b>{row.symbol}</b>  {row.up_days}/{row.days}↑  {row.net_change_pct:+.1f}%"
 
 
-def build_heatmap(rows: List[ConsistencyRow], limit: float = None, scale_title: str = "Day %") -> go.Figure:
+def build_heatmap(rows: list[ConsistencyRow], limit: float = None, scale_title: str = "Day %") -> go.Figure:
     """One heatmap, rows in the order given (top row first)."""
     if not rows:
         return go.Figure()
@@ -77,7 +77,7 @@ def build_heatmap(rows: List[ConsistencyRow], limit: float = None, scale_title: 
     return figure
 
 
-def rows_frame(rows: List[ConsistencyRow], up_label: str = "Up days", down_label: str = "Down days") -> pd.DataFrame:
+def rows_frame(rows: list[ConsistencyRow], up_label: str = "Up days", down_label: str = "Down days") -> pd.DataFrame:
     """The heatmap's rows as a table, one column per day, for display and CSV export."""
     records = []
     for r in rows:

@@ -33,7 +33,6 @@ import io
 import logging
 import os
 from datetime import date, datetime, timezone
-from typing import Dict, Set
 
 import requests
 
@@ -52,7 +51,7 @@ RAW_PREFIX = "kite-instruments-NSE-"
 
 #: Dashboard index symbol -> Kite ``tradingsymbol``, where the two differ.
 #: Checked against the dump on 2026-09-25.
-INDEX_NAMES: Dict[str, str] = {
+INDEX_NAMES: dict[str, str] = {
     "BANKNIFTY": "NIFTY BANK",
     # Not "NIFTY FINSRV25 50" (the capped 25/50 variant) or "NIFTY FINSEREXBNK"
     # (Financial Services ex-Bank).
@@ -93,10 +92,10 @@ def _row_fields(row: dict) -> dict:
     }
 
 
-def extract(text: str, wanted: Dict[str, Set[str]]) -> Dict[str, Dict[str, dict]]:
+def extract(text: str, wanted: dict[str, set[str]]) -> dict[str, dict[str, dict]]:
     """``{segment: {symbol: fields}}`` for the wanted cash and index symbols."""
-    equities: Dict[str, dict] = {}
-    indices_by_name: Dict[str, dict] = {}
+    equities: dict[str, dict] = {}
+    indices_by_name: dict[str, dict] = {}
     for row in csv.DictReader(io.StringIO(text)):
         if (row.get("exchange") or "").strip() != "NSE":
             continue

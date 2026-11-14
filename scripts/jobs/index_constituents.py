@@ -17,7 +17,6 @@ Public files: no account, no credentials. Read-only.
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
 
 import requests
 
@@ -46,7 +45,7 @@ def fetch_list(session: requests.Session, filename: str) -> list:
     return rows
 
 
-def fetch_members(session: requests.Session, fetched: Dict[str, list]) -> Tuple[Dict[str, list], list]:
+def fetch_members(session: requests.Session, fetched: dict[str, list]) -> tuple[dict[str, list], list]:
     """Every index tile's constituent symbols, reusing lists already in ``fetched`` (by file)."""
     members, failed = {}, []
     for symbol, filename in ic.INDEX_MEMBER_FILES.items():
@@ -62,7 +61,7 @@ def fetch_members(session: requests.Session, fetched: Dict[str, list]) -> Tuple[
     return members, failed
 
 
-def run(db: Optional[str] = None) -> int:
+def run(db: str | None = None) -> int:
     try:
         session = new_session()
         lists, fetched = {}, {}

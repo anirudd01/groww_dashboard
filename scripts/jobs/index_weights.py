@@ -23,7 +23,6 @@ Read-only: no orders, no account data. Needs the Dhan credentials in ``.env``.
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Dict, Optional, Tuple
 
 import requests
 
@@ -43,7 +42,7 @@ TRIES = 3
 PAUSE_SECONDS = 0.2
 
 
-def figures_from(body: dict) -> Optional[dict]:
+def figures_from(body: dict) -> dict | None:
     """``companyinfo``'s answer -> the stored figures, or None when it has no market cap."""
     data = (body or {}).get("data") or {}
     overview, holding = data.get("CO") or {}, data.get("SHP") or {}
@@ -66,7 +65,7 @@ def figures_from(body: dict) -> Optional[dict]:
     }
 
 
-def fetch_one(headers: dict, security_id: str) -> Tuple[Optional[dict], str]:
+def fetch_one(headers: dict, security_id: str) -> tuple[dict | None, str]:
     body = {"securityId": security_id, "exchangeSegment": "NSE_EQ", "instrument": "EQUITY", "metrics": ["CO", "SHP"]}
     error = ""
     for attempt in range(TRIES):
@@ -107,8 +106,8 @@ def run(args) -> int:
         return 1
     headers = provider.auth_headers()
 
-    weights: Dict[str, dict] = {}
-    failures: Dict[str, str] = dict.fromkeys(unknown, "no Dhan security id")
+    weights: dict[str, dict] = {}
+    failures: dict[str, str] = dict.fromkeys(unknown, "no Dhan security id")
     wanted = [s for s in symbols if s in ids]
     logger.info("Fetching market cap and promoter holding for %d stocks (~%.0f s) ...",
                 len(wanted), len(wanted) * (0.45 + PAUSE_SECONDS))

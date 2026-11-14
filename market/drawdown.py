@@ -22,9 +22,9 @@ Nothing here talks to a broker; it is pure data handling.
 
 import sqlite3
 import statistics
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from market import intraday_store, state_store
 from market.fno_movers import CorporateAction, load_confirmed_moves, split_ratio
@@ -45,7 +45,7 @@ NEAR_HIGH_PCT = 5.0
 DEEP_DROP_PCT = 20.0
 
 
-def window_start(window: str, as_of: str, custom: Optional[str] = None) -> str:
+def window_start(window: str, as_of: str, custom: str | None = None) -> str:
     """The first day of ``window`` ending on ``as_of`` (both ``YYYY-MM-DD``)."""
     end = date.fromisoformat(as_of)
     if window == WINDOW_52W:
@@ -83,7 +83,7 @@ class Drawdown:
     #: Sessions after the one that set the high.
     sessions_since_high: int
     #: Set when the stock is measured only from a suspected corporate action.
-    reset_on: Optional[str] = None
+    reset_on: str | None = None
     #: True when the history starts well after the window does.
     partial: bool = False
 
@@ -97,11 +97,11 @@ class Drawdown:
         return (self.close / self.low - 1.0) * 100.0
 
 
-def _connect(path: Optional[str]) -> Optional[sqlite3.Connection]:
+def _connect(path: str | None) -> sqlite3.Connection | None:
     return intraday_store.connect_readonly(path or state_store.db_path())
 
 
-def stored_range(path: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+def stored_range(path: str | None = None) -> tuple[str | None, str | None]:
     """``(first, last)`` stored day in ``daily_bars``, or ``(None, None)``."""
     conn = _connect(path)
     if conn is None:
@@ -118,8 +118,8 @@ def _placeholders(count: int) -> str:
     return ",".join("?" * count)
 
 
-def suspected_actions(symbols: Sequence[str], start: str, as_of: str, path: Optional[str] = None,
-                      confirmed: Optional[set] = None) -> List[CorporateAction]:
+def suspected_actions(symbols: Sequence[str], start: str, as_of: str, path: str | None = None,
+                      confirmed: set | None = None) -> list[CorporateAction]:
     """Split-like one-day falls between ``start`` and ``as_of``, newest first.
 
     SQL picks the falls of ``MIN_SPLIT_DROP_PCT`` or more (a handful of rows out of years);
@@ -158,8 +158,8 @@ def suspected_actions(symbols: Sequence[str], start: str, as_of: str, path: Opti
     return sorted(found, key=lambda a: (a.date, a.symbol), reverse=True)
 
 
-def drawdowns(symbols: Iterable[str], start: str, as_of: str, path: Optional[str] = None,
-              resets: Optional[Dict[str, str]] = None) -> List[Drawdown]:
+def drawdowns(symbols: Iterable[str], start: str, as_of: str, path: str | None = None,
+              resets: dict[str, str] | None = None) -> list[Drawdown]:
     """One ``Drawdown`` per stock in ``symbols`` with a bar in ``[start, as_of]``, deepest drop first.
 
     ``resets`` is symbol -> a later start for that stock (the day of a suspected corporate action).
@@ -212,9 +212,9 @@ def drawdowns(symbols: Iterable[str], start: str, as_of: str, path: Optional[str
     return sorted(result, key=lambda d: (d.drop_pct, d.symbol))
 
 
-def resets_for(actions: Iterable[CorporateAction]) -> Dict[str, str]:
+def resets_for(actions: Iterable[CorporateAction]) -> dict[str, str]:
     """Symbol -> the day of its latest suspected action (``actions`` may hold several per stock)."""
-    latest: Dict[str, str] = {}
+    latest: dict[str, str] = {}
     for action in actions:
         latest[action.symbol] = max(latest.get(action.symbol, ""), action.date)
     return latest
@@ -237,7 +237,7 @@ class GroupSummary:
     worst: str
 
 
-def weighted_drop(rows: Sequence[Drawdown], weights: Optional[Dict[str, float]] = None) -> float:
+def weighted_drop(rows: Sequence[Drawdown], weights: dict[str, float] | None = None) -> float:
     """Weight-averaged drop. A stock without a weight counts at the median weight of the others."""
     if not rows:
         return 0.0
@@ -249,7 +249,7 @@ def weighted_drop(rows: Sequence[Drawdown], weights: Optional[Dict[str, float]] 
     return sum(w * d for w, d in pairs) / total
 
 
-def summarise(name: str, rows: Sequence[Drawdown], weights: Optional[Dict[str, float]] = None) -> GroupSummary:
+def summarise(name: str, rows: Sequence[Drawdown], weights: dict[str, float] | None = None) -> GroupSummary:
     drops = [r.drop_pct for r in rows]
     worst = min(rows, key=lambda r: r.drop_pct).symbol if rows else ""
     return GroupSummary(
@@ -263,10 +263,10 @@ def summarise(name: str, rows: Sequence[Drawdown], weights: Optional[Dict[str, f
     )
 
 
-def by_sector(rows: Sequence[Drawdown], sectors: Dict[str, str], weights: Optional[Dict[str, float]] = None,
-              unknown: str = "Other") -> List[GroupSummary]:
+def by_sector(rows: Sequence[Drawdown], sectors: dict[str, str], weights: dict[str, float] | None = None,
+              unknown: str = "Other") -> list[GroupSummary]:
     """One summary per sector, deepest weighted drop first."""
-    groups: Dict[str, List[Drawdown]] = {}
+    groups: dict[str, list[Drawdown]] = {}
     for row in rows:
         groups.setdefault(sectors.get(row.symbol) or unknown, []).append(row)
     summaries = [summarise(name, members, weights) for name, members in groups.items()]

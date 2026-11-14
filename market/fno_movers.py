@@ -34,9 +34,9 @@ import csv
 import io
 import logging
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
 
 from market import intraday_store, reference_store, state_store
 
@@ -67,13 +67,13 @@ class FnoUniverse:
     """F&O stocks and their Kite instrument tokens."""
 
     #: symbol -> Kite instrument_token (as a string, like the other id files)
-    tokens: Dict[str, str] = field(default_factory=dict)
-    generated_at: Optional[datetime] = None
+    tokens: dict[str, str] = field(default_factory=dict)
+    generated_at: datetime | None = None
     path: str = ""
     error: str = ""
 
     @property
-    def symbols(self) -> List[str]:
+    def symbols(self) -> list[str]:
         return sorted(self.tokens)
 
     @property
@@ -92,9 +92,9 @@ def fno_underlyings(nfo_csv: str) -> set:
     return names
 
 
-def nse_equity_tokens(nse_csv: str) -> Dict[str, str]:
+def nse_equity_tokens(nse_csv: str) -> dict[str, str]:
     """``tradingsymbol -> instrument_token`` for NSE cash equities in Kite's NSE dump."""
-    tokens: Dict[str, str] = {}
+    tokens: dict[str, str] = {}
     for row in csv.DictReader(io.StringIO(nse_csv)):
         if (row.get("segment") or "").strip() != "NSE":
             continue
@@ -107,7 +107,7 @@ def nse_equity_tokens(nse_csv: str) -> Dict[str, str]:
     return tokens
 
 
-def build_universe(nfo_csv: str, nse_csv: str) -> Tuple[Dict[str, str], List[str]]:
+def build_universe(nfo_csv: str, nse_csv: str) -> tuple[dict[str, str], list[str]]:
     """F&O stocks with their cash-equity tokens, plus the F&O names not matched.
 
     Index futures (NIFTY, BANKNIFTY, ...) have no NSE equity row, so they drop
@@ -120,8 +120,8 @@ def build_universe(nfo_csv: str, nse_csv: str) -> Tuple[Dict[str, str], List[str
     return tokens, unmatched
 
 
-def extra_history_tokens(nse_csv: str, fno_tokens: Dict[str, str],
-                         members: Iterable[str]) -> Tuple[Dict[str, str], List[str]]:
+def extra_history_tokens(nse_csv: str, fno_tokens: dict[str, str],
+                         members: Iterable[str]) -> tuple[dict[str, str], list[str]]:
     """Index members with no F&O contract, to store daily bars for: ``({symbol: token}, not found)``.
 
     The drawdown page covers the Nifty 100, and a few of its members (new listings, demerged
@@ -133,7 +133,7 @@ def extra_history_tokens(nse_csv: str, fno_tokens: Dict[str, str],
     return {s: equities[s] for s in wanted if s in equities}, [s for s in wanted if s not in equities]
 
 
-def save_universe(tokens: Dict[str, str], unmatched: List[str], path: Optional[str] = None) -> None:
+def save_universe(tokens: dict[str, str], unmatched: list[str], path: str | None = None) -> None:
     """Store the F&O stocks, replacing the earlier list. ``path`` is a database file, for tests."""
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -149,7 +149,7 @@ def save_universe(tokens: Dict[str, str], unmatched: List[str], path: Optional[s
     reference_store.save_document(UNIVERSE_SET, payload, sections=("tokens",), path=path)
 
 
-def load_universe(path: Optional[str] = None) -> FnoUniverse:
+def load_universe(path: str | None = None) -> FnoUniverse:
     """Never raises - check ``is_usable`` and show ``error``. ``path`` is a database file, for tests."""
     database = path or state_store.db_path()
     label = f"{UNIVERSE_SET} in {database}"
@@ -170,7 +170,7 @@ def load_universe(path: Optional[str] = None) -> FnoUniverse:
 # -- close history -----------------------------------------------------------
 
 
-def _number(value) -> Optional[float]:
+def _number(value) -> float | None:
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -178,7 +178,7 @@ def _number(value) -> Optional[float]:
     return number if number > 0 else None
 
 
-def closes_available(path: Optional[str] = None) -> bool:
+def closes_available(path: str | None = None) -> bool:
     """Whether any daily history is stored. Does not create the database."""
     conn = intraday_store.connect_readonly(path or state_store.db_path())
     if conn is None:
@@ -191,24 +191,24 @@ def closes_available(path: Optional[str] = None) -> bool:
         conn.close()
 
 
-def closes_stamp(path: Optional[str] = None) -> float:
+def closes_stamp(path: str | None = None) -> float:
     """Changes when the database does: the cache key for a loader of the closes."""
     return intraday_store.store_stamp(path or state_store.db_path())
 
 
-def dashboard_since(today: Optional[date] = None) -> str:
+def dashboard_since(today: date | None = None) -> str:
     """First day the in-memory pages load: ``DASHBOARD_LOOKBACK_DAYS`` before ``today``."""
     return ((today or date.today()) - timedelta(days=DASHBOARD_LOOKBACK_DAYS)).isoformat()
 
 
-def load_closes(path: Optional[str] = None, since: Optional[str] = None) -> Dict[Tuple[str, str], dict]:
+def load_closes(path: str | None = None, since: str | None = None) -> dict[tuple[str, str], dict]:
     """``{(date, symbol): row}`` of the stored daily bars from ``since`` on (all of them if None).
 
     A row is ``{date, symbol, open, high, low, close, volume}`` with every value as text, the shape the
     callers have always had. ``path`` is a database file, for tests; the default is the shared one.
     Pages pass ``since=dashboard_since()``: the table holds years, and these rows all sit in memory.
     """
-    rows: Dict[Tuple[str, str], dict] = {}
+    rows: dict[tuple[str, str], dict] = {}
     conn = intraday_store.connect_readonly(path or state_store.db_path())
     if conn is None:
         return rows
@@ -235,7 +235,7 @@ def _same_figure(a: str, b: str) -> bool:
         return a == b
 
 
-def upsert_closes(existing: Dict[Tuple[str, str], dict], new_rows: Iterable[dict]) -> int:
+def upsert_closes(existing: dict[tuple[str, str], dict], new_rows: Iterable[dict]) -> int:
     """Add or replace rows keyed by (date, symbol), in memory. Returns how many changed."""
     changed = 0
     for row in new_rows:
@@ -248,7 +248,7 @@ def upsert_closes(existing: Dict[Tuple[str, str], dict], new_rows: Iterable[dict
     return changed
 
 
-def save_closes(rows: Dict[Tuple[str, str], dict], path: Optional[str] = None) -> int:
+def save_closes(rows: dict[tuple[str, str], dict], path: str | None = None) -> int:
     """Write rows to the ``daily_bars`` table, replacing any bar with the same (symbol, date).
 
     A row missing a price is skipped: the table does not accept a bar without all four. Returns how many
@@ -269,7 +269,7 @@ def save_closes(rows: Dict[Tuple[str, str], dict], path: Optional[str] = None) -
     return len(bars)
 
 
-def candle_rows(symbol: str, candles, exclude_date: Optional[str] = None) -> List[dict]:
+def candle_rows(symbol: str, candles, exclude_date: str | None = None) -> list[dict]:
     """Kite daily candles ``[[iso_ts, o, h, l, c, v], ...]`` -> close-file rows.
 
     ``exclude_date`` drops that day's candle - used for today while the session
@@ -304,12 +304,12 @@ class Move:
         return (self.close - self.previous_close) / self.previous_close * 100.0
 
 
-def trading_days(rows: Dict[Tuple[str, str], dict]) -> List[str]:
+def trading_days(rows: dict[tuple[str, str], dict]) -> list[str]:
     """Dates present in the history, ascending."""
     return sorted({day for day, _ in rows})
 
 
-def daily_changes(rows: Dict[Tuple[str, str], dict]) -> Dict[str, List[Move]]:
+def daily_changes(rows: dict[tuple[str, str], dict]) -> dict[str, list[Move]]:
     """``{date: [Move, ...]}`` for every stored day that has a previous day.
 
     The previous close is the symbol's close on the **previous trading day in
@@ -317,10 +317,10 @@ def daily_changes(rows: Dict[Tuple[str, str], dict]) -> Dict[str, List[Move]]:
     no move is reported for it rather than silently spanning two days.
     """
     days = trading_days(rows)
-    closes: Dict[str, Dict[str, float]] = {}
+    closes: dict[str, dict[str, float]] = {}
     for (day, symbol), row in rows.items():
         closes.setdefault(day, {})[symbol] = _number(row.get("close"))
-    moves: Dict[str, List[Move]] = {}
+    moves: dict[str, list[Move]] = {}
     for previous, day in zip(days, days[1:]):
         before = closes.get(previous, {})
         for symbol, close in closes.get(day, {}).items():
@@ -331,11 +331,11 @@ def daily_changes(rows: Dict[Tuple[str, str], dict]) -> Dict[str, List[Move]]:
 
 
 def live_moves(
-    quotes: Dict[str, dict],
+    quotes: dict[str, dict],
     today: str,
-    stored: Dict[Tuple[str, str], dict],
+    stored: dict[tuple[str, str], dict],
     in_session: bool,
-) -> List[Move]:
+) -> list[Move]:
     """Today's moves from one bulk quote answer (Kite ``/quote/ohlc`` or Dhan ``/marketfeed/quote``).
 
     During the session the quote's ``ohlc.close`` is the previous close
@@ -347,7 +347,7 @@ def live_moves(
     close, which would show a two-day move as one day's.
     """
     previous_day = previous_stored_day(stored, today)
-    last_stored: Dict[str, Tuple[str, float]] = {}
+    last_stored: dict[str, tuple[str, float]] = {}
     for (day, symbol), row in stored.items():
         close = _number(row.get("close"))
         if day == previous_day and close:
@@ -366,13 +366,13 @@ def live_moves(
     return moves
 
 
-def previous_stored_day(stored: Dict[Tuple[str, str], dict], day: str) -> Optional[str]:
+def previous_stored_day(stored: dict[tuple[str, str], dict], day: str) -> str | None:
     """The latest stored date before ``day``, or None."""
     earlier = [d for d, _ in stored if d < day]
     return max(earlier) if earlier else None
 
 
-def quote_session(quotes: Dict[str, dict]) -> Tuple[Optional[str], Dict[str, dict]]:
+def quote_session(quotes: dict[str, dict]) -> tuple[str | None, dict[str, dict]]:
     """The session a bulk Dhan quote belongs to, and only the quotes from that session.
 
     After the close, at the weekend or on a holiday Dhan's prices are the last session's, and
@@ -382,7 +382,7 @@ def quote_session(quotes: Dict[str, dict]) -> Tuple[Optional[str], Dict[str, dic
     Early in a session a stock that has not traded yet still carries the last session's time,
     so it is left out until its first trade.
     """
-    dated: Dict[str, str] = {}
+    dated: dict[str, str] = {}
     for symbol, entry in quotes.items():
         try:
             dated[symbol] = datetime.strptime(str(entry.get("last_trade_time")), "%d/%m/%Y %H:%M:%S").date().isoformat()
@@ -390,14 +390,14 @@ def quote_session(quotes: Dict[str, dict]) -> Tuple[Optional[str], Dict[str, dic
             continue
     if not dated:
         return None, {}
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for day in dated.values():
         counts[day] = counts.get(day, 0) + 1
     session = max(counts, key=lambda day: (counts[day], day))
     return session, {symbol: quotes[symbol] for symbol, day in dated.items() if day == session}
 
 
-def top_movers(moves: List[Move], limit: int = 10, symbols: Optional[set] = None) -> Tuple[List[Move], List[Move]]:
+def top_movers(moves: list[Move], limit: int = 10, symbols: set | None = None) -> tuple[list[Move], list[Move]]:
     """``(gainers, losers)``, each best-first, optionally within ``symbols``.
 
     A day where everything fell still has "top gainers" - the smallest losers -
@@ -423,7 +423,7 @@ class PeriodMove:
     start_close: float
     end_close: float
     #: Closes from ``start_date`` to ``end_date`` (days the stock has no row are skipped)
-    history: List[float] = field(default_factory=list)
+    history: list[float] = field(default_factory=list)
 
     @property
     def change_pct(self) -> float:
@@ -440,10 +440,10 @@ class PeriodMove:
 
 
 def period_changes(
-    rows: Dict[Tuple[str, str], dict],
+    rows: dict[tuple[str, str], dict],
     window: int,
-    today_moves: Optional[List[Move]] = None,
-) -> List[PeriodMove]:
+    today_moves: list[Move] | None = None,
+) -> list[PeriodMove]:
     """Change over the last ``window`` trading days, for every stock that has both ends.
 
     The window ends on the latest day available: today's live price when
@@ -455,7 +455,7 @@ def period_changes(
     if window < 1:
         return []
     days = trading_days(rows)
-    closes: Dict[str, Dict[str, float]] = {}
+    closes: dict[str, dict[str, float]] = {}
     for (day, symbol), row in rows.items():
         close = _number(row.get("close"))
         if close:
@@ -480,8 +480,8 @@ def period_changes(
 
 
 def top_period_movers(
-    moves: List[PeriodMove], limit: int = 10, symbols: Optional[set] = None
-) -> Tuple[List[PeriodMove], List[PeriodMove]]:
+    moves: list[PeriodMove], limit: int = 10, symbols: set | None = None
+) -> tuple[list[PeriodMove], list[PeriodMove]]:
     """``(gainers, losers)`` over a period, best-first, optionally within ``symbols``."""
     pool = [m for m in moves if symbols is None or m.symbol in symbols]
     gainers = sorted(pool, key=lambda m: (m.change_pct, m.symbol), reverse=True)[:limit]
@@ -519,7 +519,7 @@ class CorporateAction:
         return f"fell to about 1/{self.ratio:g} of the prior close"
 
 
-def confirmed_moves(path: Optional[str] = None) -> Dict[str, Dict[str, str]]:
+def confirmed_moves(path: str | None = None) -> dict[str, dict[str, str]]:
     """``{symbol: {date: why}}`` of the falls someone confirmed as real. Empty if none are stored."""
     document = reference_store.load_document(CONFIRMED_SET, path or state_store.db_path())
     moves = (document or {}).get("moves")
@@ -529,12 +529,12 @@ def confirmed_moves(path: Optional[str] = None) -> Dict[str, Dict[str, str]]:
             for symbol, days in moves.items() if isinstance(days, dict)}
 
 
-def load_confirmed_moves(path: Optional[str] = None) -> set:
+def load_confirmed_moves(path: str | None = None) -> set:
     """(symbol, date) pairs someone has confirmed as real moves. Empty if none are stored."""
     return {(symbol, day) for symbol, days in confirmed_moves(path).items() for day in days}
 
 
-def confirm_move(symbol: str, day: str, why: str, path: Optional[str] = None) -> None:
+def confirm_move(symbol: str, day: str, why: str, path: str | None = None) -> None:
     """Record that a suspected split on ``day`` was a real move. Raises ``ValueError`` on bad input."""
     symbol, why = (symbol or "").strip().upper(), (why or "").strip()
     if not symbol:
@@ -550,7 +550,7 @@ def confirm_move(symbol: str, day: str, why: str, path: Optional[str] = None) ->
     reference_store.save_document(CONFIRMED_SET, {"moves": moves}, nested=("moves",), path=path)
 
 
-def unconfirm_move(symbol: str, day: str, path: Optional[str] = None) -> bool:
+def unconfirm_move(symbol: str, day: str, path: str | None = None) -> bool:
     """Take a confirmation back, so the fall is flagged again. True if there was one."""
     symbol = (symbol or "").strip().upper()
     moves = confirmed_moves(path)
@@ -564,8 +564,8 @@ def unconfirm_move(symbol: str, day: str, path: Optional[str] = None) -> bool:
 
 
 def suspected_corporate_actions(
-    rows: Dict[Tuple[str, str], dict], confirmed: Optional[set] = None
-) -> List[CorporateAction]:
+    rows: dict[tuple[str, str], dict], confirmed: set | None = None
+) -> list[CorporateAction]:
     """Days where a stock's close fell by a split-like ratio, newest first.
 
     Kite adjusts its candles retroactively, but rows already stored keep the old
@@ -589,7 +589,7 @@ def suspected_corporate_actions(
     return sorted(found, key=lambda a: (a.date, a.symbol), reverse=True)
 
 
-def split_ratio(previous_close: float, close: float) -> Optional[float]:
+def split_ratio(previous_close: float, close: float) -> float | None:
     """The split or bonus ratio a one-day fall matches, or None (a fall under ``MIN_SPLIT_DROP_PCT``)."""
     if not previous_close or not close or close > previous_close * (1 - MIN_SPLIT_DROP_PCT / 100):
         return None
@@ -598,15 +598,15 @@ def split_ratio(previous_close: float, close: float) -> Optional[float]:
     return nearest if abs(ratio / nearest - 1) <= SPLIT_TOLERANCE else None
 
 
-def drop_suspected_moves(moves: List[Move], actions: List[CorporateAction]) -> List[Move]:
+def drop_suspected_moves(moves: list[Move], actions: list[CorporateAction]) -> list[Move]:
     """Daily moves without the (symbol, date) pairs that look like a split."""
     skip = {(a.symbol, a.date) for a in actions}
     return [m for m in moves if (m.symbol, m.date) not in skip]
 
 
-def drop_suspected_periods(moves: List[PeriodMove], actions: List[CorporateAction]) -> List[PeriodMove]:
+def drop_suspected_periods(moves: list[PeriodMove], actions: list[CorporateAction]) -> list[PeriodMove]:
     """Period moves whose window contains a suspected split for that stock."""
-    by_symbol: Dict[str, List[str]] = {}
+    by_symbol: dict[str, list[str]] = {}
     for action in actions:
         by_symbol.setdefault(action.symbol, []).append(action.date)
     return [

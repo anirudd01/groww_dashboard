@@ -20,7 +20,6 @@ close is back through the previous close, but which no minute bar reached, fille
 in that auction. It counts as filled at 15:15 (``AUCTION_MINUTE``).
 """
 
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -146,8 +145,8 @@ def per_stock(gaps: pd.DataFrame, min_gaps: int = 3) -> pd.DataFrame:
     return table[table["gaps"] >= min_gaps].sort_values(["filled_pct", "gaps"], ascending=False)
 
 
-def filter_gaps(gaps: pd.DataFrame, min_gap: float, symbols: Optional[set] = None,
-                direction: Optional[str] = None) -> pd.DataFrame:
+def filter_gaps(gaps: pd.DataFrame, min_gap: float, symbols: set | None = None,
+                direction: str | None = None) -> pd.DataFrame:
     out = gaps[gaps["abs_gap"] >= min_gap]
     if symbols is not None:
         out = out[out["symbol"].isin(symbols)]

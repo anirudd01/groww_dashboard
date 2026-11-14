@@ -38,9 +38,9 @@ import math
 import sqlite3
 import time
 from collections import defaultdict
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -147,7 +147,7 @@ class DhanAccount:
         client_id = client_id_from_token(self.token) or dhan_session.client_id_from_env()
         return {"access-token": self.token, "client-id": client_id, "Accept": "application/json"}
 
-    def get(self, path: str, params: Optional[dict] = None):
+    def get(self, path: str, params: dict | None = None):
         renewed = False
         for attempt in range(4):
             resp = self.http.get(f"{REST_BASE}{path}", headers=self._headers(), params=params, timeout=self.timeout)
@@ -170,9 +170,9 @@ class DhanAccount:
             raise DhanJournalError(f"Dhan {path.split('?')[0]}: {code} {message}".strip())
         raise DhanJournalError(f"Dhan {path}: no answer after retries")
 
-    def fills(self, start: date, end: date, pause: float = 0.25) -> List[dict]:
+    def fills(self, start: date, end: date, pause: float = 0.25) -> list[dict]:
         """Every fill from ``start`` to ``end`` (inclusive), walking the pages until one is empty."""
-        rows: List[dict] = []
+        rows: list[dict] = []
         for page in range(1000):
             batch = self.get(f"/trades/{start.isoformat()}/{end.isoformat()}/{page}")
             if not isinstance(batch, list):
@@ -183,17 +183,17 @@ class DhanAccount:
             self.sleep(pause)
         raise DhanJournalError("Dhan trade history: more than 1000 pages")
 
-    def todays_fills(self) -> List[dict]:
+    def todays_fills(self) -> list[dict]:
         body = self.get("/trades")
         return body if isinstance(body, list) else []
 
-    def ledger(self, start: date, end: date) -> List[dict]:
+    def ledger(self, start: date, end: date) -> list[dict]:
         body = self.get("/ledger", params={"from-date": start.isoformat(), "to-date": end.isoformat()})
         if not isinstance(body, list):
             raise DhanJournalError(f"Dhan ledger: unexpected answer {str(body)[:200]}")
         return body
 
-    def last_prices(self, by_segment: Dict[str, List[str]]) -> Dict[str, float]:
+    def last_prices(self, by_segment: dict[str, list[str]]) -> dict[str, float]:
         """``{security_id: last price}`` from ``/marketfeed/ltp`` (needs the Data API plan)."""
         body = {segment: [int(s) for s in ids] for segment, ids in by_segment.items() if ids}
         if not body:
@@ -213,7 +213,7 @@ class DhanAccount:
         return prices
 
 
-def _error_of(payload: dict) -> Optional[Tuple[str, str]]:
+def _error_of(payload: dict) -> tuple[str, str] | None:
     """``(code, message)`` for Dhan's error shapes, else None."""
     if payload.get("errorCode") or payload.get("errorMessage"):
         return str(payload.get("errorCode") or ""), str(payload.get("errorMessage") or "")
@@ -237,12 +237,12 @@ def _number(value, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
-def _text(value) -> Optional[str]:
+def _text(value) -> str | None:
     text = str(value).strip() if value is not None else ""
     return None if text in ("", "NA", "None", "null") else text
 
 
-def _time(raw: dict) -> Optional[str]:
+def _time(raw: dict) -> str | None:
     """The fill's exchange time as ``YYYY-MM-DDTHH:MM:SS``; the history writes a T, the trade book a space."""
     for key in ("exchangeTime", "updateTime", "createTime"):
         text = _text(raw.get(key))
@@ -255,7 +255,7 @@ def _time(raw: dict) -> Optional[str]:
     return None
 
 
-def parse_fills(raw_fills: Iterable[dict], charges_known: bool = True) -> List[dict]:
+def parse_fills(raw_fills: Iterable[dict], charges_known: bool = True) -> list[dict]:
     """Dhan fills as stored rows, in time order, numbered within each day. Unreadable fills are skipped."""
     rows = []
     for raw in raw_fills:
@@ -290,14 +290,14 @@ def parse_fills(raw_fills: Iterable[dict], charges_known: bool = True) -> List[d
             row[name] = _number(raw.get(dhan_name)) if charges_known else 0.0
         rows.append(row)
     rows.sort(key=lambda r: (r["exchange_time"], r["order_id"]))
-    counters: Dict[str, int] = defaultdict(int)
+    counters: dict[str, int] = defaultdict(int)
     for row in rows:
         row["seq"] = counters[row["trade_date"]]
         counters[row["trade_date"]] += 1
     return rows
 
 
-def parse_ledger(raw_rows: Iterable[dict]) -> List[dict]:
+def parse_ledger(raw_rows: Iterable[dict]) -> list[dict]:
     """Ledger entries as stored rows, oldest first; the opening and closing balance rows are dropped."""
     rows = []
     for raw in raw_rows:
@@ -322,7 +322,7 @@ def parse_ledger(raw_rows: Iterable[dict]) -> List[dict]:
     # Dhan lists newest first; keep its order within a day, reversed to oldest first.
     rows.reverse()
     rows.sort(key=lambda r: r["entry_date"])
-    counters: Dict[str, int] = defaultdict(int)
+    counters: dict[str, int] = defaultdict(int)
     for row in rows:
         row["seq"] = counters[row["entry_date"]]
         counters[row["entry_date"]] += 1
@@ -333,9 +333,9 @@ CHARGE_LABELS = {"brokerage": "Brokerage", "exchange_charges": "Exchange charges
                  "stamp_duty": "Stamp duty", "gst": "GST"}
 
 
-def charges_by_kind(fills: Iterable[dict]) -> Dict[str, float]:
+def charges_by_kind(fills: Iterable[dict]) -> dict[str, float]:
     """Total of each charge. Dhan reports STT and MCX's CTT in one field (``stt``); split here by segment."""
-    totals: Dict[str, float] = defaultdict(float)
+    totals: dict[str, float] = defaultdict(float)
     for fill in fills:
         totals["CTT" if fill["segment"] == "MCX_COMM" else "STT"] += _number(fill.get("stt"))
         for name, label in CHARGE_LABELS.items():
@@ -350,13 +350,13 @@ def fill_charges(fill: dict) -> float:
 # -- store ---------------------------------------------------------------------
 
 
-def connect(path: Optional[str] = None) -> sqlite3.Connection:
+def connect(path: str | None = None) -> sqlite3.Connection:
     conn = state_store.connect_shared(path, SCHEMA)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def connect_readonly(path: Optional[str] = None) -> Optional[sqlite3.Connection]:
+def connect_readonly(path: str | None = None) -> sqlite3.Connection | None:
     """A read-only handle, or None if there is no database or no journal in it yet."""
     conn = intraday_store.connect_readonly(path or state_store.db_path())
     if conn is None:
@@ -373,7 +373,7 @@ def _insert(table: str, columns: Sequence[str]) -> str:
     return f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(':' + c for c in columns)})"
 
 
-def replace_range(conn: sqlite3.Connection, start: str, end: str, fills: List[dict], ledger: List[dict]) -> None:
+def replace_range(conn: sqlite3.Connection, start: str, end: str, fills: list[dict], ledger: list[dict]) -> None:
     """Replace every stored fill and ledger entry dated ``start``..``end`` with these, in one transaction."""
     with conn:
         conn.execute("DELETE FROM dhan_fills WHERE trade_date BETWEEN ? AND ?", (start, end))
@@ -382,15 +382,15 @@ def replace_range(conn: sqlite3.Connection, start: str, end: str, fills: List[di
         conn.executemany(_insert("dhan_ledger", LEDGER_COLUMNS), [{c: r.get(c) for c in LEDGER_COLUMNS} for r in ledger])
 
 
-def load_fills(conn: sqlite3.Connection) -> List[dict]:
+def load_fills(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in conn.execute("SELECT * FROM dhan_fills ORDER BY exchange_time, trade_date, seq")]
 
 
-def load_ledger(conn: sqlite3.Connection) -> List[dict]:
+def load_ledger(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in conn.execute("SELECT * FROM dhan_ledger ORDER BY entry_date, seq")]
 
 
-def newest_fill_date(conn: sqlite3.Connection) -> Optional[str]:
+def newest_fill_date(conn: sqlite3.Connection) -> str | None:
     return conn.execute("SELECT MAX(trade_date) FROM dhan_fills").fetchone()[0]
 
 
@@ -428,7 +428,7 @@ class SyncResult:
     ledger_rows: int
     open_trips: int
     prices: int
-    price_error: Optional[str] = None
+    price_error: str | None = None
 
     def summary(self) -> str:
         text = (f"{self.fills} fills and {self.ledger_rows} ledger entries for {self.start} to {self.end}"
@@ -439,7 +439,7 @@ class SyncResult:
         return text
 
 
-def sync(account: DhanAccount, today: date, since: Optional[date] = None, path: Optional[str] = None) -> SyncResult:
+def sync(account: DhanAccount, today: date, since: date | None = None, path: str | None = None) -> SyncResult:
     """Fetch fills and ledger from ``since`` (default: a few days before the newest stored fill, or the
     start of the financial year) to ``today`` and replace that range in the store.
 
@@ -467,7 +467,7 @@ def sync(account: DhanAccount, today: date, since: Optional[date] = None, path: 
     open_trips = [t for t in trips if t.is_open]
     prices, price_error = {}, None
     if open_trips:
-        by_segment: Dict[str, List[str]] = defaultdict(list)
+        by_segment: dict[str, list[str]] = defaultdict(list)
         for trip in open_trips:
             by_segment[trip.segment].append(trip.security_id)
         try:
@@ -484,7 +484,7 @@ def sync(account: DhanAccount, today: date, since: Optional[date] = None, path: 
     return result
 
 
-def last_sync(path: Optional[str] = None) -> Optional[dict]:
+def last_sync(path: str | None = None) -> dict | None:
     return state_store.read(SYNC_STATE, path)
 
 
@@ -498,13 +498,13 @@ class Trip:
     segment: str
     product: str
     symbol: str
-    instrument: Optional[str]
-    expiry: Optional[str]
-    option_type: Optional[str]
-    strike: Optional[float]
+    instrument: str | None
+    expiry: str | None
+    option_type: str | None
+    strike: float | None
     side: str                      # LONG | SHORT
     opened_at: str
-    closed_at: Optional[str] = None
+    closed_at: str | None = None
     fills: int = 0
     max_quantity: int = 0
     open_quantity: int = 0         # signed; 0 once closed
@@ -530,7 +530,7 @@ class Trip:
         return self.entry_value / self.entry_quantity if self.entry_quantity else 0.0
 
     @property
-    def avg_exit(self) -> Optional[float]:
+    def avg_exit(self) -> float | None:
         return self.exit_value / self.exit_quantity if self.exit_quantity else None
 
     @property
@@ -539,15 +539,15 @@ class Trip:
         return self.sign * self.exit_quantity * ((self.avg_exit or 0.0) - self.avg_entry)
 
     @property
-    def gross(self) -> Optional[float]:
+    def gross(self) -> float | None:
         """Closed trips: money received minus money paid, before charges."""
         return None if self.is_open else self.booked
 
     @property
-    def net(self) -> Optional[float]:
+    def net(self) -> float | None:
         return None if self.is_open else self.booked - self.charges
 
-    def unrealised(self, price: Optional[float]) -> Optional[float]:
+    def unrealised(self, price: float | None) -> float | None:
         if not self.is_open or not price:
             return None
         return self.open_quantity * (price - self.avg_entry)
@@ -560,7 +560,7 @@ class Trip:
         return self.symbol.split()[0] if self.symbol else self.security_id
 
     @property
-    def holding_seconds(self) -> Optional[float]:
+    def holding_seconds(self) -> float | None:
         if self.is_open:
             return None
         return (datetime.fromisoformat(self.closed_at) - datetime.fromisoformat(self.opened_at)).total_seconds()
@@ -570,7 +570,7 @@ class Trip:
         return (self.closed_at or "")[:10] != self.opened_at[:10]
 
 
-def spread_day_charges(fills: Sequence[dict]) -> List[dict]:
+def spread_day_charges(fills: Sequence[dict]) -> list[dict]:
     """Copies of the fills with STT/CTT and stamp duty spread over each contract's fills of the day.
 
     Dhan books a whole day's STT (or MCX's CTT) and stamp duty for a contract on **one** fill (2026-10-16:
@@ -579,7 +579,7 @@ def spread_day_charges(fills: Sequence[dict]) -> List[dict]:
     side that pays it: STT on sells (both sides for delivery equity), stamp duty on buys. Totals are kept.
     """
     out = [dict(f) for f in fills]
-    groups: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for fill in out:
         groups[(fill["trade_date"], fill["security_id"])].append(fill)
     for members in groups.values():
@@ -596,13 +596,13 @@ def spread_day_charges(fills: Sequence[dict]) -> List[dict]:
     return out
 
 
-def round_trips(fills: Sequence[dict]) -> List[Trip]:
+def round_trips(fills: Sequence[dict]) -> list[Trip]:
     """Round trips from fills (any order), per contract and product. Closed ones in closing order,
     then the open ones in opening order. A day's STT and stamp duty are spread first (``spread_day_charges``)."""
     ordered = sorted(spread_day_charges(fills), key=lambda f: (f["exchange_time"], f["trade_date"], f["seq"]))
-    position: Dict[Tuple[str, str], int] = defaultdict(int)
-    current: Dict[Tuple[str, str], Trip] = {}
-    closed: List[Trip] = []
+    position: dict[tuple[str, str], int] = defaultdict(int)
+    current: dict[tuple[str, str], Trip] = {}
+    closed: list[Trip] = []
     used_ids: set = set()
 
     for fill in ordered:
@@ -657,7 +657,7 @@ def round_trips(fills: Sequence[dict]) -> List[Trip]:
 # -- statistics ------------------------------------------------------------------
 
 
-def scored(trips: Iterable[Trip]) -> List[Trip]:
+def scored(trips: Iterable[Trip]) -> list[Trip]:
     """Closed trips whose P&L is known: complete history and charges in."""
     return [t for t in trips if not t.is_open and not t.incomplete and t.charges_known]
 
@@ -703,9 +703,9 @@ def trip_stats(trips: Sequence[Trip]) -> dict:
     }
 
 
-def breakdown(trips: Sequence[Trip], key: Callable[[Trip], str]) -> List[dict]:
+def breakdown(trips: Sequence[Trip], key: Callable[[Trip], str]) -> list[dict]:
     """Stats per group, biggest net P&L first."""
-    groups: Dict[str, List[Trip]] = defaultdict(list)
+    groups: dict[str, list[Trip]] = defaultdict(list)
     for trip in scored(trips):
         groups[key(trip)].append(trip)
     rows = []
@@ -729,10 +729,10 @@ def holding_bucket(trip: Trip) -> str:
     return "Over 2 h, same day"
 
 
-def daily_pnl(ledger: Sequence[dict], trips: Sequence[Trip]) -> List[dict]:
+def daily_pnl(ledger: Sequence[dict], trips: Sequence[Trip]) -> list[dict]:
     """P&L per day, net of charges: the ledger's daily settlement for MCX and NSE F&O (carried positions
     marked to market), plus closed cash-equity round trips on the day they closed. Oldest first."""
-    days: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    days: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for row in ledger:
         label = MTM_LEDGER_EXCHANGES.get(row["exchange"])
         if label and row["description"].startswith("Trades Executed"):
@@ -747,10 +747,10 @@ def daily_pnl(ledger: Sequence[dict], trips: Sequence[Trip]) -> List[dict]:
     return rows
 
 
-def other_costs(ledger: Sequence[dict]) -> List[dict]:
+def other_costs(ledger: Sequence[dict]) -> list[dict]:
     """Ledger debits that are neither trading nor money moved out: interest, account and data fees,
     square-off charges. One row per kind, largest first."""
-    kinds: Dict[str, float] = defaultdict(float)
+    kinds: dict[str, float] = defaultdict(float)
     for row in ledger:
         text = row["description"]
         if text.startswith("Trades Executed") or text.startswith(("Money withdrawn", "Money added")):
@@ -764,7 +764,7 @@ def other_costs(ledger: Sequence[dict]) -> List[dict]:
     return sorted(({"kind": k, "amount": v} for k, v in kinds.items()), key=lambda r: -r["amount"])
 
 
-def reconcile(ledger: Sequence[dict], trips: Sequence[Trip], prices: Dict[str, float]) -> List[dict]:
+def reconcile(ledger: Sequence[dict], trips: Sequence[Trip], prices: dict[str, float]) -> list[dict]:
     """Per MCX / NSE F&O: the ledger's settlement total against closed trips' net plus open trips at the
     last price. They differ by the open positions' move from the last settlement price to that price."""
     rows = []

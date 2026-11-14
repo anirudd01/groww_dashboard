@@ -7,12 +7,11 @@ format into the parallel-array shape below and call ``prior_close_from_candles``
 """
 
 from datetime import date, datetime
-from typing import List, Optional
 
 from market.market_hours import IST
 
 
-def positive(value) -> Optional[float]:
+def positive(value) -> float | None:
     """``value`` as a float when it is a usable price, otherwise None.
 
     Brokers send 0 for any field they have no value for yet (Dhan before the
@@ -26,9 +25,9 @@ def positive(value) -> Optional[float]:
     return number if number > 0 else None
 
 
-def _candle_dates(stamps) -> List[Optional[date]]:
+def _candle_dates(stamps) -> list[date | None]:
     """IST dates for a candle series' epoch timestamps, None where unreadable."""
-    dates: List[Optional[date]] = []
+    dates: list[date | None] = []
     for stamp in stamps or []:
         try:
             dates.append(datetime.fromtimestamp(int(stamp), IST).date())
@@ -37,7 +36,7 @@ def _candle_dates(stamps) -> List[Optional[date]]:
     return dates
 
 
-def prior_close_from_candles(payload: dict, session_date: Optional[date] = None):
+def prior_close_from_candles(payload: dict, session_date: date | None = None):
     """The previous session's close from a daily-candle response.
 
     ``payload`` is the parallel-array format: ``{"close": [...],

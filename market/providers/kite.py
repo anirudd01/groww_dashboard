@@ -36,20 +36,18 @@ import struct
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
 
 import requests
 
 from market.instruments import (
-    KITE_SET,
     KITE_SCRIPT,
+    KITE_SET,
     load_instruments,
     regenerate_hint,
 )
 from market.market_hours import now_ist, todays_session_date
 from market.providers.base import (
     SEGMENT_CASH,
-    SEGMENT_INDEX,
     DayBar,
     FeedHandle,
     InstrumentRef,
@@ -159,7 +157,7 @@ QUOTE_PACKET = 44
 FULL_PACKET = 184
 
 
-def split_packets(message: bytes) -> List[bytes]:
+def split_packets(message: bytes) -> list[bytes]:
     """One binary frame -> its quote packets.
 
     Layout: ``int16`` packet count, then per packet an ``int16`` length and
@@ -182,7 +180,7 @@ def split_packets(message: bytes) -> List[bytes]:
     return packets
 
 
-def parse_packet(packet: bytes) -> Optional[dict]:
+def parse_packet(packet: bytes) -> dict | None:
     """One quote packet -> ``{token, ltp, open, high, low, close, volume}``.
 
     ``close`` is the *previous* session's close - pykiteconnect computes the
@@ -195,7 +193,7 @@ def parse_packet(packet: bytes) -> Optional[dict]:
     token, raw_ltp = struct.unpack(">II", packet[0:8])
     divisor = CURRENCY_SEGMENTS.get(token & 0xFF, 100.0)
 
-    def price(raw: int) -> Optional[float]:
+    def price(raw: int) -> float | None:
         return positive(raw / divisor)
 
     out = {"token": token, "ltp": price(raw_ltp), "open": None, "high": None,
@@ -218,11 +216,11 @@ class KiteFeedHandle(FeedHandle):
     the previous close. Full mode adds only market depth.
     """
 
-    def __init__(self, api_key: str, access_token: str, refs: List[InstrumentRef]):
+    def __init__(self, api_key: str, access_token: str, refs: list[InstrumentRef]):
         self._api_key = api_key
         self._token = access_token
         self._refs = list(refs)
-        self._by_token: Dict[int, str] = {}
+        self._by_token: dict[int, str] = {}
         for ref in self._refs:
             try:
                 self._by_token[int(ref.provider_id)] = ref.symbol
@@ -230,13 +228,13 @@ class KiteFeedHandle(FeedHandle):
                 logger.warning("Kite: %s has a non-numeric instrument token %r", ref.symbol, ref.provider_id)
 
         self._lock = threading.Lock()
-        self._prices: Dict[str, float] = {}
-        self._closes: Dict[str, float] = {}
-        self._bars: Dict[str, DayBar] = {}
+        self._prices: dict[str, float] = {}
+        self._closes: dict[str, float] = {}
+        self._bars: dict[str, DayBar] = {}
 
         self._stop = threading.Event()
         self._ready = threading.Event()
-        self._error: Optional[BaseException] = None
+        self._error: BaseException | None = None
         self._alive = False
         self._thread = threading.Thread(target=self._run, name="kite-feed", daemon=True)
 
@@ -255,15 +253,15 @@ class KiteFeedHandle(FeedHandle):
     def is_alive(self) -> bool:
         return self._alive and self._thread.is_alive() and not self._stop.is_set()
 
-    def latest_prices(self) -> Dict[str, float]:
+    def latest_prices(self) -> dict[str, float]:
         with self._lock:
             return dict(self._prices)
 
-    def previous_closes(self) -> Dict[str, float]:
+    def previous_closes(self) -> dict[str, float]:
         with self._lock:
             return dict(self._closes)
 
-    def day_bars(self) -> Dict[str, DayBar]:
+    def day_bars(self) -> dict[str, DayBar]:
         with self._lock:
             return dict(self._bars)
 
@@ -364,8 +362,8 @@ class KiteProvider(MarketDataProvider):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        access_token: Optional[str] = None,
+        api_key: str | None = None,
+        access_token: str | None = None,
         timeout: int = 15,
     ):
         self._api_key = (api_key or api_key_from_env()).strip()
@@ -374,7 +372,7 @@ class KiteProvider(MarketDataProvider):
         self._timeout = timeout
         self._instrument_file = None
         #: (segment, symbol) -> Kite tradingsymbol, filled by resolve_instruments.
-        self._tradingsymbols: Dict[Tuple[str, str], str] = {}
+        self._tradingsymbols: dict[tuple[str, str], str] = {}
 
     # -- config / auth --------------------------------------------------
     def _access_token(self) -> str:
@@ -392,17 +390,17 @@ class KiteProvider(MarketDataProvider):
             return False
         return True
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         return {
             "X-Kite-Version": KITE_VERSION,
             "Authorization": f"token {self._api_key}:{self._token}",
         }
 
-    def auth_headers(self) -> Dict[str, str]:
+    def auth_headers(self) -> dict[str, str]:
         """Headers for a raw Kite REST call (scripts). Call ``connect()`` first."""
         return self._headers()
 
-    def _get(self, path: str, params, bucket: Optional[str] = None) -> Tuple[int, dict]:
+    def _get(self, path: str, params, bucket: str | None = None) -> tuple[int, dict]:
         """One GET, throttled when ``bucket`` is given and retried once on a 429."""
         response = None
         for attempt in range(2):
@@ -460,10 +458,10 @@ class KiteProvider(MarketDataProvider):
         return self._instrument_file
 
     def resolve_instruments(
-        self, symbols: List[str], segment: str = SEGMENT_CASH
-    ) -> Tuple[Dict[str, InstrumentRef], List[str]]:
-        resolved: Dict[str, InstrumentRef] = {}
-        missing: List[str] = []
+        self, symbols: list[str], segment: str = SEGMENT_CASH
+    ) -> tuple[dict[str, InstrumentRef], list[str]]:
+        resolved: dict[str, InstrumentRef] = {}
+        missing: list[str] = []
         if not symbols:
             return resolved, missing
 
@@ -499,13 +497,13 @@ class KiteProvider(MarketDataProvider):
         segment = (ref.segment or SEGMENT_CASH).upper()
         return quote_key(self._tradingsymbols.get((segment, ref.symbol), ref.symbol), ref.exchange or "NSE")
 
-    def _quotes(self, endpoint: str, refs: List[InstrumentRef]) -> Dict[str, dict]:
+    def _quotes(self, endpoint: str, refs: list[InstrumentRef]) -> dict[str, dict]:
         """Batched quote call (``""``, ``"ohlc"`` or ``"ltp"``). Returns ``{symbol: entry}``."""
         path = f"/quote/{endpoint}" if endpoint else "/quote"
         batch = QUOTE_BATCH if not endpoint else OHLC_BATCH
         by_key = {self._quote_key(r): r.symbol for r in refs}
         keys = list(by_key)
-        out: Dict[str, dict] = {}
+        out: dict[str, dict] = {}
         for i in range(0, len(keys), batch):
             chunk = keys[i : i + batch]
             status, body = self._get(path, [("i", key) for key in chunk], "quote")
@@ -520,7 +518,7 @@ class KiteProvider(MarketDataProvider):
                     out[symbol] = entry
         return out
 
-    def get_ohlc_quotes(self, refs: List[InstrumentRef]) -> Dict[str, dict]:
+    def get_ohlc_quotes(self, refs: list[InstrumentRef]) -> dict[str, dict]:
         """Raw ``/quote/ohlc`` entries (``last_price`` + ``ohlc``) per symbol.
 
         Up to 1000 instruments per request, so every F&O stock is one call.
@@ -528,7 +526,7 @@ class KiteProvider(MarketDataProvider):
         """
         return self._quotes("ohlc", refs)
 
-    def get_previous_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_previous_close(self, refs: list[InstrumentRef]) -> dict[str, float]:
         """Previous close from ``/quote/ohlc``'s ``ohlc.close``.
 
         The service only calls this while the market is open or pre-open;
@@ -542,7 +540,7 @@ class KiteProvider(MarketDataProvider):
         logger.info("Kite resolved previous close for %d/%d", len(closes), len(refs))
         return closes
 
-    def get_prior_session_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_prior_session_close(self, refs: list[InstrumentRef]) -> dict[str, float]:
         """Previous close from daily candles - one request per instrument, 3/s."""
         if not refs:
             return {}
@@ -553,7 +551,7 @@ class KiteProvider(MarketDataProvider):
         }
         session_date = todays_session_date()
 
-        closes: Dict[str, float] = {}
+        closes: dict[str, float] = {}
         failures = 0
         for ref in refs:
             try:
@@ -579,7 +577,7 @@ class KiteProvider(MarketDataProvider):
         logger.info("Kite resolved previous close for %d/%d from daily candles", len(closes), len(refs))
         return closes
 
-    def get_ltp_snapshot(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_ltp_snapshot(self, refs: list[InstrumentRef]) -> dict[str, float]:
         prices = {}
         for symbol, entry in self._quotes("ltp", refs).items():
             price = positive(entry.get("last_price"))
@@ -587,9 +585,9 @@ class KiteProvider(MarketDataProvider):
                 prices[symbol] = price
         return prices
 
-    def get_day_bars(self, refs: List[InstrumentRef]) -> Dict[str, DayBar]:
+    def get_day_bars(self, refs: list[InstrumentRef]) -> dict[str, DayBar]:
         """Today's open/high/low/volume from the full ``/quote`` endpoint."""
-        bars: Dict[str, DayBar] = {}
+        bars: dict[str, DayBar] = {}
         for symbol, entry in self._quotes("", refs).items():
             ohlc = entry.get("ohlc") or {}
             volume = positive(entry.get("volume"))
@@ -601,7 +599,7 @@ class KiteProvider(MarketDataProvider):
             )
         return bars
 
-    def get_quotes(self, refs: List[InstrumentRef]) -> Dict[str, dict]:
+    def get_quotes(self, refs: list[InstrumentRef]) -> dict[str, dict]:
         """Full ``/quote`` entries per symbol (the MCX page's fallback when Dhan is down).
 
         For MCX, ``ref.symbol`` must be Kite's tradingsymbol (``CRUDEOIL26OCTFUT``) and
@@ -611,8 +609,8 @@ class KiteProvider(MarketDataProvider):
         return self._quotes("", refs)
 
     def get_candles(
-        self, ref: InstrumentRef, start: datetime, end: datetime, interval: Optional[int] = None
-    ) -> Optional[dict]:
+        self, ref: InstrumentRef, start: datetime, end: datetime, interval: int | None = None
+    ) -> dict | None:
         """Candles with open interest, in the same shape as ``DhanProvider.get_candles``.
 
         Daily candles are asked for as Kite's continuous series, which is what Dhan's daily
@@ -633,7 +631,7 @@ class KiteProvider(MarketDataProvider):
             return None
         return candles_to_arrays((body.get("data") or {}).get("candles"))
 
-    def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:
+    def open_feed(self, refs: list[InstrumentRef]) -> FeedHandle:
         if not self._token:
             self._token = self._access_token()
         return KiteFeedHandle(self._api_key, self._token, refs).start()

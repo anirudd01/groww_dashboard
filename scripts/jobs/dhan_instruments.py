@@ -45,8 +45,8 @@ import io
 import logging
 import os
 import time
+from collections.abc import Iterable
 from datetime import date, datetime, timezone
-from typing import Dict, Iterable, Set
 
 import requests
 
@@ -116,7 +116,7 @@ def download(use_cached: bool, keep_raw: bool) -> str:
     return text
 
 
-def extract(text: str, wanted: Dict[str, Set[str]], verbose: bool = False):
+def extract(text: str, wanted: dict[str, set[str]], verbose: bool = False):
     """Pull the wanted symbols out of the master CSV.
 
     Streams with ``csv.DictReader`` rather than loading a DataFrame: this walks
@@ -125,7 +125,7 @@ def extract(text: str, wanted: Dict[str, Set[str]], verbose: bool = False):
 
     Returns ``(instruments, missing)``.
     """
-    found: Dict[str, Dict[str, dict]] = {segment: {} for segment in wanted}
+    found: dict[str, dict[str, dict]] = {segment: {} for segment in wanted}
     remaining = {segment: set(symbols) for segment, symbols in wanted.items()}
     scanned = 0
 

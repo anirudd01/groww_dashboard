@@ -35,13 +35,11 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
-from typing import Optional
 
 import requests
 
-from market import clock_offset
+from market import clock_offset, state_store
 from market.market_hours import IST, now_ist
-from market import state_store
 from market.providers import token_store
 
 logger = logging.getLogger(__name__)
@@ -96,18 +94,18 @@ class DhanSession:
     expires_at: str = ""  # ISO, IST
 
     @property
-    def expires(self) -> Optional[datetime]:
+    def expires(self) -> datetime | None:
         try:
             return datetime.fromisoformat(self.expires_at)
         except (TypeError, ValueError):
             return None
 
-    def usable(self, now: Optional[datetime] = None, margin: timedelta = REFRESH_MARGIN) -> bool:
+    def usable(self, now: datetime | None = None, margin: timedelta = REFRESH_MARGIN) -> bool:
         """Unknown expiry counts as unusable - a token we cannot date is not trusted."""
         expires = self.expires
         return bool(self.access_token) and expires is not None and (now or now_ist()) + margin < expires
 
-    def hours_left(self, now: Optional[datetime] = None) -> float:
+    def hours_left(self, now: datetime | None = None) -> float:
         expires = self.expires
         if expires is None:
             return 0.0
@@ -128,12 +126,12 @@ def session_from_token(access_token: str, client_id: str = "") -> DhanSession:
     )
 
 
-def save_session(session: DhanSession, path: Optional[str] = None) -> None:
+def save_session(session: DhanSession, path: str | None = None) -> None:
     """Store the session. ``path`` is a database file, for tests; the default is the shared one."""
     state_store.write(STATE_NAME, asdict(session), path)
 
 
-def load_session(path: Optional[str] = None) -> Optional[DhanSession]:
+def load_session(path: str | None = None) -> DhanSession | None:
     """The saved session, whatever its age, or None. Never raises, no network I/O."""
     raw = state_store.read(STATE_NAME, path)
     if raw is None:
@@ -146,7 +144,7 @@ def load_session(path: Optional[str] = None) -> Optional[DhanSession]:
     )
 
 
-def saved_token(client_id: str = "", path: Optional[str] = None) -> str:
+def saved_token(client_id: str = "", path: str | None = None) -> str:
     """A saved token that is still usable for ``client_id``, else "". No network I/O."""
     session = load_session(path)
     if session is None or not session.usable():
@@ -159,7 +157,7 @@ def saved_token(client_id: str = "", path: Optional[str] = None) -> str:
 # -- generation ----------------------------------------------------------------
 
 
-def _lock(path: Optional[str]) -> state_store.Lock:
+def _lock(path: str | None) -> state_store.Lock:
     """Cross-process lock around token generation (see ``state_store.Lock``)."""
     return state_store.Lock(STATE_NAME, path, error=DhanAuthError, stale_after=LOCK_STALE_SECONDS)
 
@@ -201,7 +199,7 @@ def generate_session(timeout: int = 20, sleep=time.sleep) -> DhanSession:
     )
 
 
-def get_access_token(force_new: bool = False, rejected: str = "", path: Optional[str] = None) -> str:
+def get_access_token(force_new: bool = False, rejected: str = "", path: str | None = None) -> str:
     """A usable Dhan token: the saved one, or a newly generated one.
 
     ``force_new`` asks for a new token because the server rejected

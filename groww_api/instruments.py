@@ -18,9 +18,9 @@ Units, checked against the live CSV on 2026-10-17 (docs/api/GROWW_API_INSTRUMENT
 """
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
-from typing import Dict, Iterable, Optional, Tuple
 
 #: Exchanges whose ``tick_size`` column is in paise rather than rupees.
 PAISE_TICK_EXCHANGES = {"MCX"}
@@ -34,10 +34,10 @@ class ContractInfo:
     exchange: str
     instrument_type: str  # EQ, IDX, FUT, CE or PE
     underlying: str
-    expiry_date: Optional[str]  # yyyy-mm-dd
-    strike: Optional[float]
-    lot_size: Optional[int]
-    tick: Optional[Decimal]  # rupees
+    expiry_date: str | None  # yyyy-mm-dd
+    strike: float | None
+    lot_size: int | None
+    tick: Decimal | None  # rupees
 
     @property
     def kind(self) -> str:
@@ -54,7 +54,7 @@ def _text(value) -> str:
     return str(value).strip()
 
 
-def _decimal(value) -> Optional[Decimal]:
+def _decimal(value) -> Decimal | None:
     try:
         number = Decimal(_text(value))
     except InvalidOperation:
@@ -62,7 +62,7 @@ def _decimal(value) -> Optional[Decimal]:
     return number if number.is_finite() and number > 0 else None
 
 
-def tick_in_rupees(exchange: str, tick_size) -> Optional[Decimal]:
+def tick_in_rupees(exchange: str, tick_size) -> Decimal | None:
     """The minimum price step in rupees, or None when the cell is blank or zero."""
     tick = _decimal(tick_size)
     if tick is None:
@@ -86,7 +86,7 @@ def contract_from_row(row: dict) -> ContractInfo:
     )
 
 
-def contracts_by_symbol(instruments, keys: Iterable[Tuple[str, str]]) -> Dict[Tuple[str, str], ContractInfo]:
+def contracts_by_symbol(instruments, keys: Iterable[tuple[str, str]]) -> dict[tuple[str, str], ContractInfo]:
     """``{(exchange, trading_symbol): ContractInfo}`` for the wanted keys found in the instrument list.
 
     ``instruments`` is the DataFrame from ``GrowwAPI.get_all_instruments()``. Keys it does not

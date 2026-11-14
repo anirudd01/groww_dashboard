@@ -7,7 +7,12 @@ Layering (no upward dependencies):
                                      ->  ui / Streamlit
 """
 
-from market.config import HeatmapConfig, ORDER_BY_IMPACT, ORDER_BY_PERFORMANCE, ORDER_BY_SIZE
+from market.config import (
+    ORDER_BY_IMPACT,
+    ORDER_BY_PERFORMANCE,
+    ORDER_BY_SIZE,
+    HeatmapConfig,
+)
 from market.live_feed import LiveMarketDataService
 from market.models import (
     FeedStatus,
@@ -15,6 +20,8 @@ from market.models import (
     SectorMarketData,
     StockMarketData,
 )
+from market.providers.base import InstrumentRef, MarketDataProvider
+from market.providers.registry import available_provider_names, build_providers
 from market.sector_aggregation import (
     aggregate_sectors,
     compute_change_pct,
@@ -22,8 +29,6 @@ from market.sector_aggregation import (
     rank_sectors,
 )
 from market.sector_impact import order_sectors
-from market.providers.base import InstrumentRef, MarketDataProvider
-from market.providers.registry import available_provider_names, build_providers
 from market.universe import Universe, get_universe
 
 __all__ = [

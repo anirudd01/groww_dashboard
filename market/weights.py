@@ -25,7 +25,6 @@ any consistent unit works.
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Optional
 
 from market import reference_store, state_store
 
@@ -48,8 +47,8 @@ STALE_AFTER_DAYS = 45
 class WeightSet:
     """Loaded weights plus enough provenance to judge whether to trust them."""
 
-    weights: Dict[str, float] = field(default_factory=dict)
-    generated_at: Optional[datetime] = None
+    weights: dict[str, float] = field(default_factory=dict)
+    generated_at: datetime | None = None
     source: str = ""
     basis: str = BASIS_FREE_FLOAT
     universe: str = ""
@@ -63,7 +62,7 @@ class WeightSet:
         return bool(self.weights)
 
     @property
-    def age_days(self) -> Optional[float]:
+    def age_days(self) -> float | None:
         if self.generated_at is None:
             return None
         now = datetime.now(timezone.utc)
@@ -89,7 +88,7 @@ class WeightSet:
         return f"{len(self.weights)} weights - {self.basis}, generated {when}"
 
 
-def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+def _parse_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
@@ -100,7 +99,7 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
 
 
 def load_weights(
-    path: Optional[str] = None, basis: str = BASIS_FREE_FLOAT
+    path: str | None = None, basis: str = BASIS_FREE_FLOAT
 ) -> WeightSet:
     """Read the stored weights. Never raises - a bad set means plain-average sectors, flagged.
 
@@ -126,7 +125,7 @@ def load_weights(
     if not isinstance(raw, dict):
         return WeightSet(path=label, error=f"{label} has no 'weights' section")
 
-    weights: Dict[str, float] = {}
+    weights: dict[str, float] = {}
     skipped = []
     for symbol, figures in raw.items():
         value = figures.get(basis) if isinstance(figures, dict) else figures

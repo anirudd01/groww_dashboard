@@ -9,7 +9,6 @@ shows where the Nifty 50's large caps are moving differently from the wider
 sector. See ``market/index_mapping.py``.
 """
 
-from typing import List, Optional
 
 import pandas as pd
 
@@ -40,7 +39,7 @@ def index_tooltip(sector: SectorMarketData) -> str:
     return f"{definition.symbol} - no Nifty 50 members map to this index"
 
 
-def format_index_summary(stock: Optional[StockMarketData]) -> str:
+def format_index_summary(stock: StockMarketData | None) -> str:
     """One-line summary of an index's own numbers, for the drill-down header."""
     if stock is None or stock.ltp is None:
         return "No live value yet."
@@ -55,7 +54,7 @@ def format_index_summary(stock: Optional[StockMarketData]) -> str:
     return "  ·  ".join(parts)
 
 
-def build_index_table(stocks: List[StockMarketData]) -> pd.DataFrame:
+def build_index_table(stocks: list[StockMarketData]) -> pd.DataFrame:
     """All index values in one table, strongest first.
 
     Numeric columns stay numeric (``NaN`` when unknown) so they can be both

@@ -29,8 +29,8 @@ pre-open auction price - so the gap in ``daily_gaps`` must use daily data.
 import logging
 import os
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable, List, Optional, Tuple
 
 from market.market_hours import IST
 
@@ -79,8 +79,8 @@ FROM (
 WHERE prev_close IS NOT NULL;
 """
 
-MinuteRow = Tuple[str, str, float, float, float, float, int, Optional[int]]
-DailyRow = Tuple[str, str, float, float, float, float, int]
+MinuteRow = tuple[str, str, float, float, float, float, int, int | None]
+DailyRow = tuple[str, str, float, float, float, float, int]
 
 
 def connect(path: str = DB_PATH, extra_schema: str = "", timeout: float = 5.0) -> sqlite3.Connection:
@@ -113,7 +113,7 @@ def store_stamp(path: str = DB_PATH) -> float:
     return max((os.path.getmtime(p) for p in (path, path + "-wal") if os.path.exists(p)), default=0.0)
 
 
-def connect_readonly(path: str = DB_PATH) -> Optional[sqlite3.Connection]:
+def connect_readonly(path: str = DB_PATH) -> sqlite3.Connection | None:
     """A read-only handle on an existing store, or None if there is no file yet.
 
     Never creates or writes the database, so a dashboard can open it while a script is filling it
@@ -124,7 +124,7 @@ def connect_readonly(path: str = DB_PATH) -> Optional[sqlite3.Connection]:
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 
 
-def _ist_text(stamp: str, minutes: bool) -> Optional[str]:
+def _ist_text(stamp: str, minutes: bool) -> str | None:
     """Kite's ``2026-09-24T09:15:00+0530`` -> ``2026-09-24 09:15`` (or the date)."""
     try:
         moment = datetime.strptime(str(stamp), "%Y-%m-%dT%H:%M:%S%z")
@@ -133,7 +133,7 @@ def _ist_text(stamp: str, minutes: bool) -> Optional[str]:
     return moment.strftime("%Y-%m-%d %H:%M" if minutes else "%Y-%m-%d")
 
 
-def _price(value) -> Optional[float]:
+def _price(value) -> float | None:
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -141,7 +141,7 @@ def _price(value) -> Optional[float]:
     return number if number > 0 else None
 
 
-def kite_minute_rows(symbol: str, candles) -> List[MinuteRow]:
+def kite_minute_rows(symbol: str, candles) -> list[MinuteRow]:
     """Kite ``[[iso_ts, o, h, l, c, v(, oi)], ...]`` -> ``minute_bars`` rows.
 
     Rows with an unreadable stamp or a missing price are dropped, not
@@ -160,7 +160,7 @@ def kite_minute_rows(symbol: str, candles) -> List[MinuteRow]:
     return rows
 
 
-def kite_daily_rows(symbol: str, candles, exclude_date: Optional[str] = None) -> List[DailyRow]:
+def kite_daily_rows(symbol: str, candles, exclude_date: str | None = None) -> list[DailyRow]:
     """Kite daily candles -> ``daily_bars`` rows, dropping ``exclude_date``.
 
     ``exclude_date`` is today while the session is open: its "close" is only
@@ -178,7 +178,7 @@ def kite_daily_rows(symbol: str, candles, exclude_date: Optional[str] = None) ->
     return rows
 
 
-def dhan_daily_rows(symbol: str, payload, exclude_date: Optional[str] = None) -> List[DailyRow]:
+def dhan_daily_rows(symbol: str, payload, exclude_date: str | None = None) -> list[DailyRow]:
     """Dhan ``/charts/historical`` parallel arrays -> ``daily_bars`` rows, dropping ``exclude_date``.
 
     Dhan stamps a daily candle with the session's midnight IST in epoch seconds. Its prices are the
@@ -224,7 +224,7 @@ def dhan_daily_rows(symbol: str, payload, exclude_date: Optional[str] = None) ->
 GROWW_FIRST_MINUTE, GROWW_LAST_MINUTE = "09:15", "15:14"
 
 
-def groww_minute_rows(symbol: str, candles, opens: Optional[dict] = None) -> List[MinuteRow]:
+def groww_minute_rows(symbol: str, candles, opens: dict | None = None) -> list[MinuteRow]:
     """Groww ``[[iso_ts, o, h, l, c, v, oi], ...]`` (IST, no offset) -> ``minute_bars`` rows.
 
     Keeps 09:15-15:14 only. ``opens`` maps a date to the day's official open (from the daily candle):
@@ -291,7 +291,7 @@ def upsert_daily(conn: sqlite3.Connection, rows: Iterable[DailyRow]) -> int:
     return cur.rowcount
 
 
-def last_minute(conn: sqlite3.Connection, symbol: str) -> Optional[str]:
+def last_minute(conn: sqlite3.Connection, symbol: str) -> str | None:
     """The latest stored bar stamp for ``symbol``, or None."""
     row = conn.execute("SELECT MAX(ts) FROM minute_bars WHERE symbol = ?", (symbol,)).fetchone()
     return row[0] if row else None

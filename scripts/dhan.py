@@ -32,8 +32,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from jobs import common  # noqa: E402  (sets up the import path)
-from jobs import dhan_journal, dhan_movers  # noqa: E402
+from jobs import (  # noqa: E402  (sets up the import path)
+    common,
+    dhan_journal,
+    dhan_movers,
+)
 
 
 def parse_args(argv=None):

@@ -9,7 +9,7 @@ Days a stock has no row are NaN, never forward-filled: a gap stays a gap, the
 same rule as ``daily_changes``.
 """
 
-from typing import Dict, Iterable, Optional, Set, Tuple
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
@@ -20,7 +20,7 @@ UNIVERSE_EX_NIFTY = "F&O outside Nifty 50"
 UNIVERSES = (UNIVERSE_NIFTY50, UNIVERSE_ALL, UNIVERSE_EX_NIFTY)
 
 
-def price_panel(rows: Dict[Tuple[str, str], dict], field: str = "close") -> pd.DataFrame:
+def price_panel(rows: dict[tuple[str, str], dict], field: str = "close") -> pd.DataFrame:
     """``field`` (open/high/low/close/volume) as a date x symbol frame, dates ascending."""
     records = []
     for (day, symbol), row in rows.items():
@@ -39,7 +39,7 @@ def price_panel(rows: Dict[Tuple[str, str], dict], field: str = "close") -> pd.D
     return panel
 
 
-def blank_out(panel: pd.DataFrame, pairs: Iterable[Tuple[str, str]]) -> pd.DataFrame:
+def blank_out(panel: pd.DataFrame, pairs: Iterable[tuple[str, str]]) -> pd.DataFrame:
     """Copy of ``panel`` with each (symbol, date) pair set to NaN (for suspected splits)."""
     out = panel.copy()
     for symbol, day in pairs:
@@ -68,14 +68,14 @@ def equal_weight_index(closes: pd.DataFrame, base: float = 100.0) -> pd.Series:
     return base * (1 + mean).cumprod()
 
 
-def universe_sets(fno_symbols: Iterable[str], nifty50: Iterable[str]) -> Dict[str, Set[str]]:
+def universe_sets(fno_symbols: Iterable[str], nifty50: Iterable[str]) -> dict[str, set[str]]:
     """Label -> symbols, for the universe selectors on every insight page."""
     fno = set(fno_symbols)
     n50 = set(nifty50) & fno
     return {UNIVERSE_NIFTY50: n50, UNIVERSE_ALL: fno, UNIVERSE_EX_NIFTY: fno - n50}
 
 
-def restrict(panel: pd.DataFrame, symbols: Optional[Iterable[str]]) -> pd.DataFrame:
+def restrict(panel: pd.DataFrame, symbols: Iterable[str] | None) -> pd.DataFrame:
     """Only the columns in ``symbols`` (all of them if None), alphabetical."""
     if symbols is None:
         return panel

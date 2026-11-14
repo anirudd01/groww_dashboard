@@ -1,8 +1,7 @@
 """Singleton GrowwAPI authentication client for session management."""
 
-import os
 import logging
-from typing import Optional
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +16,11 @@ class GrowwAPIClient:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        totp_secret: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        access_token: Optional[str] = None,
-        auth_mode: Optional[str] = None
+        api_key: str | None = None,
+        totp_secret: str | None = None,
+        api_secret: str | None = None,
+        access_token: str | None = None,
+        auth_mode: str | None = None
     ):
         self.api_key = api_key or os.getenv("GROWW_API_KEY")
         self.totp_secret = totp_secret or os.getenv("GROWW_TOTP_SECRET")

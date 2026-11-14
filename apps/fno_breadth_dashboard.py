@@ -19,7 +19,14 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import streamlit as st
 
-from apps.fno_common import freshness, panels, require_history, source_caption, suspected_toggle, universe_picker
+from apps.fno_common import (
+    freshness,
+    panels,
+    require_history,
+    source_caption,
+    suspected_toggle,
+    universe_picker,
+)
 from market.breadth import HIGH_LOW_DAYS, LONG_MA, SHORT_MA, breadth_table, regime
 from market.price_panel import UNIVERSE_ALL, restrict
 from ui.insight_charts import CONFIG, advance_decline, breadth_participation, highs_lows

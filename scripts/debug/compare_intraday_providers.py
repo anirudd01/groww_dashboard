@@ -23,9 +23,16 @@ A broker whose token is missing or rejected is skipped with a note, so the
 script runs with whatever is logged in. Needs a Kite session (the reference).
 Results are logged in docs/PROVIDER_COMPARISON_LOG.md. Never prints tokens.
 """
-import argparse, csv, io, json, os, sys, time
+import argparse
+import csv
+import io
+import json
+import os
+import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

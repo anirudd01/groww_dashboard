@@ -30,10 +30,10 @@ import logging
 import math
 import os
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
@@ -85,9 +85,9 @@ class TradableContract:
     tick: Decimal  # rupees
 
 
-def pick_contract(contracts: Iterable[mcx_futures.Contract], commodity: str, year: Optional[int],
-                  month: Optional[int], today: Optional[date] = None,
-                  avoid_within_days: Optional[int] = None) -> mcx_futures.Contract:
+def pick_contract(contracts: Iterable[mcx_futures.Contract], commodity: str, year: int | None,
+                  month: int | None, today: date | None = None,
+                  avoid_within_days: int | None = None) -> mcx_futures.Contract:
     """The ``commodity`` future expiring in ``year``-``month``, or the nearest one when ``month`` is None.
 
     Raises ValueError naming the alternatives, and NearExpiry (naming the next contract) when the
@@ -121,12 +121,12 @@ def pick_contract(contracts: Iterable[mcx_futures.Contract], commodity: str, yea
     raise ValueError(f"Several {commodity} futures expire {year}-{month:02d}: {listed}")
 
 
-def latest_raw_master(pattern: str = RAW_MASTER_GLOB) -> Optional[str]:
+def latest_raw_master(pattern: str = RAW_MASTER_GLOB) -> str | None:
     files = sorted(glob.glob(pattern))
     return files[-1] if files else None
 
 
-def master_row(security_id: str, path: str) -> Optional[Dict[str, str]]:
+def master_row(security_id: str, path: str) -> dict[str, str] | None:
     """The MCX row for ``security_id`` in a raw detailed master CSV, as ``{column: value}``.
 
     Streams the 35 MB file line by line and only splits lines that start with ``MCX,M,<id>,``.
@@ -151,7 +151,7 @@ def tick_in_rupees(raw: str) -> Decimal:
     return paise / 100
 
 
-def tradable(contract: mcx_futures.Contract, row: Optional[Dict[str, str]]) -> TradableContract:
+def tradable(contract: mcx_futures.Contract, row: dict[str, str] | None) -> TradableContract:
     if not row:
         raise ValueError(f"{contract.name} (security id {contract.security_id}) is not in the raw instrument "
                          f"master; run 'python {MASTER_SCRIPT}'")
@@ -165,9 +165,9 @@ def tradable(contract: mcx_futures.Contract, row: Optional[Dict[str, str]]) -> T
                             int(lot), tick_in_rupees(row.get("TICK_SIZE", "")))
 
 
-def resolve_contract(commodity: str, year: Optional[int], month: Optional[int], today: date,
-                     db_path: Optional[str] = None, master_path: Optional[str] = None,
-                     avoid_within_days: Optional[int] = None) -> TradableContract:
+def resolve_contract(commodity: str, year: int | None, month: int | None, today: date,
+                     db_path: str | None = None, master_path: str | None = None,
+                     avoid_within_days: int | None = None) -> TradableContract:
     """Security id from the stored ``mcx_futures`` set; lot and tick size from the raw master CSV."""
     contracts, _, error = mcx_futures.load_contracts(db_path)
     if error:
@@ -192,9 +192,9 @@ def round_to_tick(price, tick: Decimal, up: bool) -> float:
 @dataclass(frozen=True)
 class Touch:
     """Top of the order book. ``bid``/``ask`` are None when that side of the book is empty."""
-    bid: Optional[float]
-    ask: Optional[float]
-    last: Optional[float]
+    bid: float | None
+    ask: float | None
+    last: float | None
 
 
 def reference_price(side: str, touch: Touch) -> float:
@@ -256,7 +256,7 @@ def max_lots(available: float, margin_per_lot: float) -> int:
     return max(0, math.floor(available / margin_per_lot + 1e-9))
 
 
-def choose_lots(computed: int, requested: Optional[int]) -> Tuple[int, str]:
+def choose_lots(computed: int, requested: int | None) -> tuple[int, str]:
     """``(lots, warning)``: the request capped at the computed maximum, or the maximum."""
     if requested is None:
         return computed, ""
@@ -295,7 +295,7 @@ def super_order_body(client_id: str, contract: TradableContract, plan: BandPlan,
     }
 
 
-def live_super_orders(super_orders: Iterable[dict], security_id: str) -> List[dict]:
+def live_super_orders(super_orders: Iterable[dict], security_id: str) -> list[dict]:
     """Super orders on ``security_id`` whose entry can still fill."""
     return [o for o in super_orders or [] if isinstance(o, dict)
             and str(o.get("securityId")) == str(security_id)
@@ -305,7 +305,7 @@ def live_super_orders(super_orders: Iterable[dict], security_id: str) -> List[di
 # -- REST ----------------------------------------------------------------------
 
 
-def error_of(body) -> Optional[Tuple[str, str]]:
+def error_of(body) -> tuple[str, str] | None:
     """``(code, message)`` if ``body`` is a Dhan error, else None.
 
     Dhan answers errors as ``{"errorType", "errorCode", "errorMessage"}`` (with or without
@@ -328,7 +328,7 @@ class DhanTrading:
     """Dhan REST calls with the shared, auto-renewed token. ``http`` is injectable for tests."""
 
     def __init__(self, http=requests, sleep: Callable[[float], None] = time.sleep, timeout: int = 20,
-                 token: Optional[str] = None):
+                 token: str | None = None):
         self.http, self.sleep, self.timeout = http, sleep, timeout
         self.token = token or dhan_session.get_access_token()
 
@@ -342,7 +342,7 @@ class DhanTrading:
         return {"access-token": self.token, "client-id": self.client_id,
                 "Accept": "application/json", "Content-Type": "application/json"}
 
-    def _call(self, method: str, path: str, body: Optional[dict] = None, retry_rate_limit: bool = True):
+    def _call(self, method: str, path: str, body: dict | None = None, retry_rate_limit: bool = True):
         """One call; renews a rejected token once. Rate limits are retried only when ``retry_rate_limit``."""
         renewed = False
         for attempt in range(4):
@@ -374,7 +374,7 @@ class DhanTrading:
         entry = ((payload.get("data") or {}).get(segment) or {}).get(str(security_id)) or {}
         depth = entry.get("depth") or {}
 
-        def best(levels) -> Optional[float]:
+        def best(levels) -> float | None:
             prices = [float(level.get("price") or 0) for level in levels or [] if isinstance(level, dict)]
             prices = [p for p in prices if p > 0]
             return prices[0] if prices else None
@@ -398,17 +398,17 @@ class DhanTrading:
             raise DhanOrderError("Dhan margin calculator", "", f"no totalMargin in {payload}")
         return payload
 
-    def open_positions(self, segment: str = MCX_COMM) -> List[dict]:
+    def open_positions(self, segment: str = MCX_COMM) -> list[dict]:
         """Positions in ``segment`` with a non-zero ``netQty`` (GET /positions)."""
         payload = self._call("GET", "/positions")
         return [row for row in payload if isinstance(row, dict) and int(row.get("netQty") or 0)
                 and str(row.get("exchangeSegment") or segment) == segment] if isinstance(payload, list) else []
 
-    def super_orders(self) -> List[dict]:
+    def super_orders(self) -> list[dict]:
         payload = self._call("GET", "/super/orders")
         return payload if isinstance(payload, list) else []
 
-    def super_order_by_correlation(self, correlation_id: str) -> Optional[dict]:
+    def super_order_by_correlation(self, correlation_id: str) -> dict | None:
         try:
             orders = self.super_orders()
         except DhanOrderError:

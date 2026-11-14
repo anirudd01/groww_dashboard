@@ -13,7 +13,6 @@ provider in ``market/providers/registry.py``. No other file changes.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 #: Segments a universe can ask for. Brokers map these onto their own names.
 SEGMENT_CASH = "CASH"
@@ -52,10 +51,10 @@ class DayBar:
     avoids.
     """
 
-    open: Optional[float] = None
-    high: Optional[float] = None
-    low: Optional[float] = None
-    volume: Optional[int] = None
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    volume: int | None = None
 
     @property
     def has_range(self) -> bool:
@@ -76,14 +75,14 @@ class FeedHandle(ABC):
         """False once the connection has dropped or been closed."""
 
     @abstractmethod
-    def latest_prices(self) -> Dict[str, float]:
+    def latest_prices(self) -> dict[str, float]:
         """Latest LTP per symbol seen so far. Cheap - no network calls.
 
         Called on a timer by the worker, so implementations should return a
         snapshot of in-memory state rather than doing work per call.
         """
 
-    def previous_closes(self) -> Dict[str, float]:
+    def previous_closes(self) -> dict[str, float]:
         """Previous-day closes the feed itself reported, if it does.
 
         Dhan pushes an explicit previous-close packet on subscribe; Groww does
@@ -92,7 +91,7 @@ class FeedHandle(ABC):
         """
         return {}
 
-    def day_bars(self) -> Dict[str, "DayBar"]:
+    def day_bars(self) -> dict[str, "DayBar"]:
         """Today's open/high/low/volume per symbol, where the feed carries it.
 
         Dhan's quote packets carry it; Groww's LTP feed does not. Default is
@@ -127,8 +126,8 @@ class MarketDataProvider(ABC):
 
     @abstractmethod
     def resolve_instruments(
-        self, symbols: List[str], segment: str = SEGMENT_CASH
-    ) -> Tuple[Dict[str, InstrumentRef], List[str]]:
+        self, symbols: list[str], segment: str = SEGMENT_CASH
+    ) -> tuple[dict[str, InstrumentRef], list[str]]:
         """Map canonical symbols to this broker's ids.
 
         Returns ``(resolved, missing)``. Ids come from the broker's instrument
@@ -141,10 +140,10 @@ class MarketDataProvider(ABC):
         """
 
     @abstractmethod
-    def get_previous_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_previous_close(self, refs: list[InstrumentRef]) -> dict[str, float]:
         """Previous trading day's close per symbol. Reference data, called rarely."""
 
-    def get_prior_session_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_prior_session_close(self, refs: list[InstrumentRef]) -> dict[str, float]:
         """Close of the trading day *before* the most recent completed session.
 
         Optional, and the answer to a question ``get_previous_close`` cannot
@@ -163,10 +162,10 @@ class MarketDataProvider(ABC):
         return {}
 
     @abstractmethod
-    def get_ltp_snapshot(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_ltp_snapshot(self, refs: list[InstrumentRef]) -> dict[str, float]:
         """Batched REST price snapshot - the fallback when the feed is down."""
 
-    def get_day_bars(self, refs: List[InstrumentRef]) -> Dict[str, DayBar]:
+    def get_day_bars(self, refs: list[InstrumentRef]) -> dict[str, DayBar]:
         """Batched REST session bars, for brokers whose quote endpoint has them.
 
         Optional: the default returns nothing, and callers degrade to showing
@@ -175,7 +174,7 @@ class MarketDataProvider(ABC):
         return {}
 
     @abstractmethod
-    def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:
+    def open_feed(self, refs: list[InstrumentRef]) -> FeedHandle:
         """Open a live feed. Raise if it cannot be established.
 
         May block; the worker calls this on a dedicated thread.

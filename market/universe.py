@@ -18,7 +18,6 @@ exchange segment without anything above them knowing broker specifics.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
 
 from market import index_constituents
 from market.index_mapping import ALL_INDICES
@@ -46,7 +45,7 @@ class Universe:
 
     key: str
     label: str
-    constituents: Tuple[Constituent, ...]
+    constituents: tuple[Constituent, ...]
     #: CASH universes are aggregated into sectors; INDEX universes are not -
     #: each constituent is already a sector-level number.
     segment: str = DEFAULT_SEGMENT
@@ -56,18 +55,18 @@ class Universe:
         return self.segment == SEGMENT_INDEX
 
     @property
-    def symbols(self) -> List[str]:
+    def symbols(self) -> list[str]:
         return [c.symbol for c in self.constituents]
 
     @property
-    def sectors(self) -> List[str]:
+    def sectors(self) -> list[str]:
         return sorted({c.sector for c in self.constituents})
 
     def __len__(self) -> int:
         return len(self.constituents)
 
 
-def _build(key: str, label: str, sector_map: Dict[str, str]) -> Universe:
+def _build(key: str, label: str, sector_map: dict[str, str]) -> Universe:
     constituents = tuple(
         Constituent(symbol=symbol, sector=sector)
         for symbol, sector in sorted(sector_map.items())
@@ -108,7 +107,7 @@ DEFAULT_UNIVERSE_KEY = "NIFTY50"
 MASTER_HINT = "Run 'python scripts/kite.py --master' (or dhan.py) to download NSE's lists."
 
 
-def universes(path: Optional[str] = None) -> Dict[str, Universe]:
+def universes(path: str | None = None) -> dict[str, Universe]:
     """Every known universe, keyed by key: the stored NSE indices, then the index board.
 
     An index in ``INDEX_FILES`` that is not stored yet is still listed, with no
@@ -118,7 +117,7 @@ def universes(path: Optional[str] = None) -> Dict[str, Universe]:
     document = index_constituents.load(path) or {}
     stored = document.get("indices") or {}
     labels = document.get("labels") or {}
-    found: Dict[str, Universe] = {}
+    found: dict[str, Universe] = {}
     for key in list(index_constituents.INDEX_FILES) + [k for k in stored if k not in index_constituents.INDEX_FILES]:
         label = labels.get(key) or index_constituents.INDEX_FILES.get(key, (key, ""))[0]
         members = stored.get(key) or {}
@@ -127,7 +126,7 @@ def universes(path: Optional[str] = None) -> Dict[str, Universe]:
     return found
 
 
-def get_universe(key: str = DEFAULT_UNIVERSE_KEY, path: Optional[str] = None) -> Universe:
+def get_universe(key: str = DEFAULT_UNIVERSE_KEY, path: str | None = None) -> Universe:
     """Look up a universe by key, raising a clear error for unknown keys."""
     normalised = (key or DEFAULT_UNIVERSE_KEY).upper().replace(" ", "").replace("_", "")
     known = universes(path)
@@ -143,18 +142,18 @@ def get_universe(key: str = DEFAULT_UNIVERSE_KEY, path: Optional[str] = None) ->
     return universe
 
 
-def available_universes(path: Optional[str] = None) -> List[Universe]:
+def available_universes(path: str | None = None) -> list[Universe]:
     """Universes that actually have constituents stored."""
     return [u for u in universes(path).values() if u.constituents]
 
 
-def tracked_symbols(path: Optional[str] = None) -> Tuple[Dict[str, Set[str]], List[Universe]]:
+def tracked_symbols(path: str | None = None) -> tuple[dict[str, set[str]], list[Universe]]:
     """Symbols the instrument-id sets must resolve, grouped by segment, and the universes they came from.
 
     Shared by every broker's ``--master`` run. An index with no constituents
     stored is left out: there is nothing to resolve for it.
     """
-    wanted: Dict[str, Set[str]] = {SEGMENT_CASH: set(), SEGMENT_INDEX: set()}
+    wanted: dict[str, set[str]] = {SEGMENT_CASH: set(), SEGMENT_INDEX: set()}
     included = available_universes(path)
     for universe in included:
         wanted.setdefault((universe.segment or SEGMENT_CASH).upper(), set()).update(universe.symbols)

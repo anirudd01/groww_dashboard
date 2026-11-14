@@ -34,9 +34,9 @@ have settled. It is stored once per session date. A capture is written in one tr
 Read-only against Dhan: it calls one ranking endpoint and places no orders.
 """
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
-from typing import Callable, List, Optional, Sequence, Tuple
 
 from market import dhan_movers as dm
 from market import dhan_movers_store as store
@@ -57,7 +57,7 @@ MAX_CONSECUTIVE_FAILURES = 3
 # -- what a capture may be --------------------------------------------------------
 
 
-def decide(now: datetime, session: date, intraday: bool = False) -> Tuple[Optional[str], str]:
+def decide(now: datetime, session: date, intraday: bool = False) -> tuple[str | None, str]:
     """What to capture now, given the session Dhan's prices belong to: (kind, why-not).
 
     ``close`` when that session is over: an earlier day (a weekend, a holiday, or before today's
@@ -78,7 +78,7 @@ def decide(now: datetime, session: date, intraday: bool = False) -> Tuple[Option
     return KIND_CLOSE, ""
 
 
-def resolve_universes(names: Optional[Sequence[str]]) -> List[str]:
+def resolve_universes(names: Sequence[str] | None) -> list[str]:
     """Dhan universe keys for what the user typed: a key (``NIFTY_BANK``) or a label (``Nifty Bank``)."""
     if not names:
         return list(dm.UNIVERSES.values())
@@ -101,12 +101,12 @@ def resolve_universes(names: Optional[Sequence[str]]) -> List[str]:
 @dataclass
 class UniverseSnapshot:
     universe: str
-    gainers: List[dm.Mover]
-    losers: List[dm.Mover]
+    gainers: list[dm.Mover]
+    losers: list[dm.Mover]
 
 
 def collect(provider, universes: Sequence[str], fetch: Callable = dm.fetch,
-            ) -> Tuple[List[UniverseSnapshot], List[Tuple[str, str]]]:
+            ) -> tuple[list[UniverseSnapshot], list[tuple[str, str]]]:
     """Gainers and losers of each universe. Returns (snapshots, [(universe, error)]).
 
     A universe is kept only if both its calls worked, since a half-known breadth is wrong.
@@ -135,7 +135,7 @@ def collect(provider, universes: Sequence[str], fetch: Callable = dm.fetch,
 
 
 def build_rows(captured_at: datetime, trading_date: date, kind: str, snapshots: Sequence[UniverseSnapshot],
-               top: int) -> Tuple[List[dict], List[dict]]:
+               top: int) -> tuple[list[dict], list[dict]]:
     """The rows for one capture: the top ``top`` of each side, and the breadth of each universe."""
     stamp = captured_at.isoformat(timespec="seconds")
     day = trading_date.isoformat()
@@ -165,14 +165,14 @@ class Capture:
     status: str
     message: str
     kind: str = ""
-    session: Optional[date] = None
-    mover_rows: List[dict] = field(default_factory=list)
-    breadth_rows: List[dict] = field(default_factory=list)
-    failed: List[Tuple[str, str]] = field(default_factory=list)
+    session: date | None = None
+    mover_rows: list[dict] = field(default_factory=list)
+    breadth_rows: list[dict] = field(default_factory=list)
+    failed: list[tuple[str, str]] = field(default_factory=list)
 
 
 def capture(provider, universes: Sequence[str], *, top: int, now: datetime, intraday: bool = False,
-            db_path: Optional[str] = None, dry_run: bool = False, fetch: Callable = dm.fetch,
+            db_path: str | None = None, dry_run: bool = False, fetch: Callable = dm.fetch,
             session_of: Callable = dm.session_date) -> Capture:
     """Take one capture and store it, unless it should not be stored (and say why).
 

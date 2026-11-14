@@ -17,9 +17,9 @@ talks to a broker; it is pure data handling.
 
 import sqlite3
 import statistics
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, Iterable, List, Optional, Sequence
 
 from market.drawdown import PARTIAL_AFTER_DAYS, _connect
 
@@ -48,7 +48,7 @@ class Rally:
     #: Sessions after the one that set the low.
     sessions_since_low: int
     #: Set when the stock is measured only from a suspected corporate action.
-    reset_on: Optional[str] = None
+    reset_on: str | None = None
     #: True when the history starts well after the window does.
     partial: bool = False
 
@@ -68,7 +68,7 @@ class Rally:
         return self.low_date > self.high_date
 
     @property
-    def recovered_pct(self) -> Optional[float]:
+    def recovered_pct(self) -> float | None:
         """For a low after the high: how much of the fall from the high has been won back (0 to 100).
 
         ``None`` when the low came first (the stock rose from the low to the high, so there is no
@@ -79,8 +79,8 @@ class Rally:
         return (self.close - self.low) / (self.high - self.low) * 100.0
 
 
-def rallies(symbols: Iterable[str], start: str, as_of: str, path: Optional[str] = None,
-            resets: Optional[Dict[str, str]] = None) -> List[Rally]:
+def rallies(symbols: Iterable[str], start: str, as_of: str, path: str | None = None,
+            resets: dict[str, str] | None = None) -> list[Rally]:
     """One ``Rally`` per stock in ``symbols`` with a bar in ``[start, as_of]``, biggest rise first.
 
     ``resets`` is symbol -> a later start for that stock (the day of a suspected corporate action).
@@ -152,7 +152,7 @@ class GroupSummary:
     best: str
 
 
-def weighted_rise(rows: Sequence[Rally], weights: Optional[Dict[str, float]] = None) -> float:
+def weighted_rise(rows: Sequence[Rally], weights: dict[str, float] | None = None) -> float:
     """Weight-averaged rise. A stock without a weight counts at the median weight of the others."""
     if not rows:
         return 0.0
@@ -164,7 +164,7 @@ def weighted_rise(rows: Sequence[Rally], weights: Optional[Dict[str, float]] = N
     return sum(w * x for w, x in pairs) / total
 
 
-def summarise(name: str, rows: Sequence[Rally], weights: Optional[Dict[str, float]] = None) -> GroupSummary:
+def summarise(name: str, rows: Sequence[Rally], weights: dict[str, float] | None = None) -> GroupSummary:
     rises = [r.rise_pct for r in rows]
     best = max(rows, key=lambda r: r.rise_pct).symbol if rows else ""
     return GroupSummary(
@@ -178,10 +178,10 @@ def summarise(name: str, rows: Sequence[Rally], weights: Optional[Dict[str, floa
     )
 
 
-def by_sector(rows: Sequence[Rally], sectors: Dict[str, str], weights: Optional[Dict[str, float]] = None,
-              unknown: str = "Other") -> List[GroupSummary]:
+def by_sector(rows: Sequence[Rally], sectors: dict[str, str], weights: dict[str, float] | None = None,
+              unknown: str = "Other") -> list[GroupSummary]:
     """One summary per sector, biggest weighted rise first."""
-    groups: Dict[str, List[Rally]] = {}
+    groups: dict[str, list[Rally]] = {}
     for row in rows:
         groups.setdefault(sectors.get(row.symbol) or unknown, []).append(row)
     summaries = [summarise(name, members, weights) for name, members in groups.items()]

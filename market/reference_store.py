@@ -26,7 +26,7 @@ adds and removes entries, and each carries the note saying why.
 import json
 import os
 import sqlite3
-from typing import Dict, Optional, Sequence
+from collections.abc import Sequence
 
 from market import intraday_store, state_store
 
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS reference_rows (
 """
 
 
-def _connect(path: Optional[str] = None) -> sqlite3.Connection:
+def _connect(path: str | None = None) -> sqlite3.Connection:
     return state_store.connect_shared(path, SCHEMA)
 
 
@@ -55,7 +55,7 @@ LAYOUT_KEY = "__layout__"
 
 
 def save_document(name: str, document: dict, sections: Sequence[str] = (), nested: Sequence[str] = (),
-                  path: Optional[str] = None) -> int:
+                  path: str | None = None) -> int:
     """Store ``document`` as the set ``name``, replacing any earlier version in one transaction.
 
     ``sections`` names top-level fields that are ``{key: entry}`` objects. ``nested`` names top-level
@@ -92,7 +92,7 @@ def save_document(name: str, document: dict, sections: Sequence[str] = (), neste
     return len(rows)
 
 
-def load_document(name: str, path: Optional[str] = None) -> Optional[dict]:
+def load_document(name: str, path: str | None = None) -> dict | None:
     """The set as the dictionary it was saved from, or None if it is not stored. Never raises.
 
     Does not create the database: a machine that has never run the generating script has nothing yet.
@@ -104,7 +104,7 @@ def load_document(name: str, path: Optional[str] = None) -> Optional[dict]:
         head = conn.execute("SELECT meta, generated_at FROM reference_sets WHERE name = ?", (name,)).fetchone()
         if head is None:
             return None
-        document: Dict[str, object] = json.loads(head[0])
+        document: dict[str, object] = json.loads(head[0])
         layout = document.pop(LAYOUT_KEY, {})
         for field in layout.get("sections", ()):
             document[field] = {}
@@ -126,7 +126,7 @@ def load_document(name: str, path: Optional[str] = None) -> Optional[dict]:
         conn.close()
 
 
-def delete_document(name: str, path: Optional[str] = None) -> bool:
+def delete_document(name: str, path: str | None = None) -> bool:
     """Remove a stored set. True if there was one."""
     if not os.path.exists(path or state_store.db_path()):
         return False

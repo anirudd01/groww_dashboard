@@ -65,6 +65,7 @@ def main():
     args = parser.parse_args()
 
     from growwapi import GrowwAPI as G
+
     from groww_api.client import GrowwAPIClient
 
     client = GrowwAPIClient.get_instance()
@@ -159,6 +160,7 @@ def main():
     if args.socket:
         print(f"\n== Live socket, {args.socket} s ==")
         from growwapi import GrowwFeed
+
         from market.providers.groww import GrowwFeedHandle
 
         started = time.monotonic()

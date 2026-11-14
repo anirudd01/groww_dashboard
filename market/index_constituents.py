@@ -36,7 +36,7 @@ aggregated from them, and the drill-down still shows Nifty 50 members only.
 
 import csv
 import io
-from typing import Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 from market import reference_store, state_store
 
@@ -50,7 +50,7 @@ CSV_URL = "https://www.niftyindices.com/IndexConstituent/{file}"
 
 #: Universe key -> (label, NSE file). Adding an index is one line here plus a
 #: ``--master`` run; ``market/universe.py`` registers every key it finds stored.
-INDEX_FILES: Dict[str, Tuple[str, str]] = {
+INDEX_FILES: dict[str, tuple[str, str]] = {
     "NIFTY50": ("Nifty 50", "ind_nifty50list.csv"),
     "NIFTYNEXT50": ("Nifty Next 50", "ind_niftynext50list.csv"),
 }
@@ -59,7 +59,7 @@ INDEX_FILES: Dict[str, Tuple[str, str]] = {
 BANK_INDEX_FILE = "ind_niftybanklist.csv"
 
 #: Index tile symbol (``market/index_mapping.py``) -> NSE's constituent list. NSE only.
-INDEX_MEMBER_FILES: Dict[str, str] = {
+INDEX_MEMBER_FILES: dict[str, str] = {
     "NIFTY AUTO": "ind_niftyautolist.csv",
     "BANKNIFTY": BANK_INDEX_FILE,
     "NIFTY CONSR DURBL": "ind_niftyconsumerdurableslist.csv",
@@ -90,7 +90,7 @@ SECTOR_BANKS = "Banks"
 FINANCIAL_SERVICES = "Financial Services"
 
 #: NSE industry name -> tile label, where the NSE name is too long for a tile.
-INDUSTRY_LABELS: Dict[str, str] = {
+INDUSTRY_LABELS: dict[str, str] = {
     "Automobile and Auto Components": "Automobile",
     "Fast Moving Consumer Goods": "FMCG",
     "Oil Gas & Consumable Fuels": "Oil, Gas & Consumable Fuels",
@@ -99,7 +99,7 @@ INDUSTRY_LABELS: Dict[str, str] = {
 COLUMNS = ("Company Name", "Industry", "Symbol", "Series", "ISIN Code")
 
 
-def parse_csv(text: str) -> List[dict]:
+def parse_csv(text: str) -> list[dict]:
     """One NSE constituent CSV -> ``[{symbol, company, industry, series, isin}]``.
 
     Raises ValueError when the header is not NSE's, so an HTML error page saved
@@ -125,9 +125,9 @@ def sector_label(industry: str, is_bank: bool = False) -> str:
     return INDUSTRY_LABELS.get(industry, industry)
 
 
-def build_document(lists: Dict[str, List[dict]], bank_symbols: Iterable[str], generated_at: str,
-                   members: Optional[Dict[str, Iterable[str]]] = None,
-                   sector_rows: Optional[List[dict]] = None) -> dict:
+def build_document(lists: dict[str, list[dict]], bank_symbols: Iterable[str], generated_at: str,
+                   members: dict[str, Iterable[str]] | None = None,
+                   sector_rows: list[dict] | None = None) -> dict:
     """The set to store: each index's constituents with their sector label.
 
     ``members`` is index tile symbol -> constituent symbols (``INDEX_MEMBER_FILES``).
@@ -152,28 +152,28 @@ def build_document(lists: Dict[str, List[dict]], bank_symbols: Iterable[str], ge
     }
 
 
-def save(document: dict, path: Optional[str] = None) -> int:
+def save(document: dict, path: str | None = None) -> int:
     return reference_store.save_document(CONSTITUENTS_SET, document, sections=(MEMBERS_SECTION, SECTORS_SECTION),
                                          nested=("indices",), path=path)
 
 
-def load(path: Optional[str] = None) -> Optional[dict]:
+def load(path: str | None = None) -> dict | None:
     """The stored set, or None when no ``--master`` run has stored it on this machine."""
     return reference_store.load_document(CONSTITUENTS_SET, path or state_store.db_path())
 
 
-def load_index_members(path: Optional[str] = None) -> Dict[str, List[str]]:
+def load_index_members(path: str | None = None) -> dict[str, list[str]]:
     """Index tile symbol -> its constituent symbols, as stored. Empty when none are."""
     stored = (load(path) or {}).get(MEMBERS_SECTION) or {}
     return {symbol: list(rows) for symbol, rows in stored.items() if isinstance(rows, list)}
 
 
-def load_sectors(path: Optional[str] = None) -> Dict[str, str]:
+def load_sectors(path: str | None = None) -> dict[str, str]:
     """Symbol -> sector label (``SECTORS_SECTION``). Empty before a ``--master`` run has stored it."""
     stored = (load(path) or {}).get(SECTORS_SECTION) or {}
     return {symbol: label for symbol, label in stored.items() if isinstance(label, str) and label}
 
 
-def index_member_symbols(path: Optional[str] = None) -> List[str]:
+def index_member_symbols(path: str | None = None) -> list[str]:
     """Every stock in any stored index member list - what the weights job must also weigh."""
     return sorted({symbol for rows in load_index_members(path).values() for symbol in rows})

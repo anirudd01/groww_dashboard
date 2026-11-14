@@ -28,7 +28,8 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime
+from datetime import time as dtime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 

@@ -6,7 +6,7 @@ can sit inside sector boxes, and the outer box is the whole universe, so the sec
 read off the same picture. A box's colour is its stocks' weighted drop.
 """
 
-from typing import Dict, List, Optional, Sequence
+from collections.abc import Sequence
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -51,8 +51,8 @@ def _stock_hover(row: Drawdown, sector: str) -> str:
     )
 
 
-def build_drawdown_treemap(rows: Sequence[Drawdown], root: str, sectors: Optional[Dict[str, str]] = None,
-                           weights: Optional[Dict[str, float]] = None, limit: float = DEFAULT_LIMIT_PCT,
+def build_drawdown_treemap(rows: Sequence[Drawdown], root: str, sectors: dict[str, str] | None = None,
+                           weights: dict[str, float] | None = None, limit: float = DEFAULT_LIMIT_PCT,
                            height: int = 720) -> go.Figure:
     """One treemap: ``root`` > (sector >) stock. ``sectors`` None = no sector boxes.
 
@@ -81,7 +81,7 @@ def build_drawdown_treemap(rows: Sequence[Drawdown], root: str, sectors: Optiona
     add("root", root, "", 0, root_drop, _node_text(root, root_drop),
         f"<b>{root}</b><br>{len(rows)} stocks, weighted drop {root_drop:+.2f}%")
     if sectors is not None:
-        groups: Dict[str, List[Drawdown]] = {}
+        groups: dict[str, list[Drawdown]] = {}
         for row in rows:
             groups.setdefault(sectors.get(row.symbol) or UNKNOWN_SECTOR, []).append(row)
         for name, members in sorted(groups.items()):
@@ -132,7 +132,7 @@ def build_drawdown_treemap(rows: Sequence[Drawdown], root: str, sectors: Optiona
     return figure
 
 
-def stocks_frame(rows: Sequence[Drawdown], sectors: Optional[Dict[str, str]] = None) -> pd.DataFrame:
+def stocks_frame(rows: Sequence[Drawdown], sectors: dict[str, str] | None = None) -> pd.DataFrame:
     """One row per stock, deepest drop first, for the table and the CSV."""
     return pd.DataFrame([{
         "Symbol": r.symbol,

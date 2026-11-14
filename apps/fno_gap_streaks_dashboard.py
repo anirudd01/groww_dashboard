@@ -20,8 +20,22 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 import pandas as pd
 import streamlit as st
 
-from apps.fno_common import freshness, panels, require_history, source_caption, suspected_toggle, universe_options
-from market.fno_consistency import METRIC_CONSISTENCY, METRIC_NET_CHANGE, METRIC_UP_DAYS, METRICS, leaders, rank
+from apps.fno_common import (
+    freshness,
+    panels,
+    require_history,
+    source_caption,
+    suspected_toggle,
+    universe_options,
+)
+from market.fno_consistency import (
+    METRIC_CONSISTENCY,
+    METRIC_NET_CHANGE,
+    METRIC_UP_DAYS,
+    METRICS,
+    leaders,
+    rank,
+)
 from market.gap_streaks import DEFAULT_FLAT_BELOW, gap_rows, session_after, streak_table
 from market.price_panel import UNIVERSE_ALL, UNIVERSE_NIFTY50
 from market.session_split import split_returns

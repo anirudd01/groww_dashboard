@@ -33,7 +33,7 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
-from utils.public_mode import allow_refresh
+from apps.fno_common import nifty50 as nifty50_universe
 from market.fno_movers import (
     CLOSE_COLUMNS,
     UPDATE_SCRIPT,
@@ -60,8 +60,8 @@ from market.market_hours import (
     now_ist,
     session_state,
 )
-from apps.fno_common import nifty50 as nifty50_universe
 from ui.shading import shade_change
+from utils.public_mode import allow_refresh
 
 logger = logging.getLogger(__name__)
 

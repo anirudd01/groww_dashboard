@@ -28,7 +28,6 @@ import struct
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
 
 import requests
 
@@ -44,10 +43,13 @@ from market.providers.base import (
     InstrumentRef,
     MarketDataProvider,
 )
+
 # Re-exported: these began life here, and callers still import them from dhan.
 from market.providers.candles import (  # noqa: F401
     _candle_dates,
     prior_close_from_candles,
+)
+from market.providers.candles import (
     positive as _positive,
 )
 
@@ -222,7 +224,7 @@ def client_id_from_token(access_token: str) -> str:
         return ""
 
 
-def token_expiry(access_token: str) -> Optional[int]:
+def token_expiry(access_token: str) -> int | None:
     """Unix expiry of a Dhan access token, or None if unreadable."""
     try:
         payload = (access_token or "").split(".")[1]
@@ -250,14 +252,14 @@ class DhanFeedHandle(FeedHandle):
     caller never touches asyncio.
     """
 
-    def __init__(self, access_token: str, client_id: str, refs: List[InstrumentRef]):
+    def __init__(self, access_token: str, client_id: str, refs: list[InstrumentRef]):
         self._token = access_token
         self._client_id = client_id
         self._refs = list(refs)
         # (header segment number, security id) -> symbol, plus a bare-id
         # lookup for ids that appear in only one segment of this feed.
-        self._by_key: Dict[Tuple[Optional[int], int], str] = {}
-        by_id: Dict[int, List[str]] = {}
+        self._by_key: dict[tuple[int | None, int], str] = {}
+        by_id: dict[int, list[str]] = {}
         for ref in self._refs:
             try:
                 security_id = int(ref.provider_id)
@@ -267,18 +269,18 @@ class DhanFeedHandle(FeedHandle):
             number = FEED_SEGMENT_NUMBERS.get(segment_code(ref.segment))
             self._by_key[(number, security_id)] = ref.symbol
             by_id.setdefault(security_id, []).append(ref.symbol)
-        self._by_id: Dict[int, str] = {
+        self._by_id: dict[int, str] = {
             security_id: symbols[0] for security_id, symbols in by_id.items() if len(symbols) == 1
         }
 
         self._lock = threading.Lock()
-        self._prices: Dict[str, float] = {}
-        self._prev_closes: Dict[str, float] = {}
-        self._bars: Dict[str, DayBar] = {}
+        self._prices: dict[str, float] = {}
+        self._prev_closes: dict[str, float] = {}
+        self._bars: dict[str, DayBar] = {}
 
         self._stop = threading.Event()
         self._ready = threading.Event()
-        self._error: Optional[BaseException] = None
+        self._error: BaseException | None = None
         self._alive = False
         self._logged_first_packet = False
         self._thread = threading.Thread(
@@ -302,15 +304,15 @@ class DhanFeedHandle(FeedHandle):
     def is_alive(self) -> bool:
         return self._alive and self._thread.is_alive() and not self._stop.is_set()
 
-    def latest_prices(self) -> Dict[str, float]:
+    def latest_prices(self) -> dict[str, float]:
         with self._lock:
             return dict(self._prices)
 
-    def previous_closes(self) -> Dict[str, float]:
+    def previous_closes(self) -> dict[str, float]:
         with self._lock:
             return dict(self._prev_closes)
 
-    def day_bars(self) -> Dict[str, DayBar]:
+    def day_bars(self) -> dict[str, DayBar]:
         with self._lock:
             return dict(self._bars)
 
@@ -392,9 +394,9 @@ class DhanFeedHandle(FeedHandle):
         segment:uint8, security_id:int32.
         """
         offset, size = 0, len(data)
-        prices: Dict[str, float] = {}
-        prev: Dict[str, float] = {}
-        bars: Dict[str, DayBar] = {}
+        prices: dict[str, float] = {}
+        prev: dict[str, float] = {}
+        bars: dict[str, DayBar] = {}
 
         while offset + 8 <= size:
             code, length, segment, security_id = struct.unpack_from(
@@ -482,8 +484,8 @@ class DhanProvider(MarketDataProvider):
 
     def __init__(
         self,
-        access_token: Optional[str] = None,
-        client_id: Optional[str] = None,
+        access_token: str | None = None,
+        client_id: str | None = None,
         timeout: int = 15,
     ):
         # An explicit token (tests, one-off tools) is used as given and never
@@ -516,7 +518,7 @@ class DhanProvider(MarketDataProvider):
         """
         _quote_gate()
 
-    def _resolve_client_id(self, configured: Optional[str]) -> str:
+    def _resolve_client_id(self, configured: str | None) -> str:
         """Client id from the token, which is authoritative.
 
         Dhan embeds ``dhanClientId`` in the access token, so DHAN_CLIENT_ID is
@@ -572,7 +574,7 @@ class DhanProvider(MarketDataProvider):
             requests.get(f"{REST_BASE}/profile", headers=self._headers(), timeout=self._timeout)
         )
 
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self) -> dict[str, str]:
         return {
             "access-token": self._token,
             "client-id": self._client_id,
@@ -580,7 +582,7 @@ class DhanProvider(MarketDataProvider):
             "Content-Type": "application/json",
         }
 
-    def auth_headers(self) -> Dict[str, str]:
+    def auth_headers(self) -> dict[str, str]:
         """Headers for a raw Dhan REST call (scripts). Call ``connect()`` first."""
         return self._headers()
 
@@ -701,10 +703,10 @@ class DhanProvider(MarketDataProvider):
         return self._instrument_file
 
     def resolve_instruments(
-        self, symbols: List[str], segment: str = SEGMENT_CASH
-    ) -> Tuple[Dict[str, InstrumentRef], List[str]]:
-        resolved: Dict[str, InstrumentRef] = {}
-        missing: List[str] = []
+        self, symbols: list[str], segment: str = SEGMENT_CASH
+    ) -> tuple[dict[str, InstrumentRef], list[str]]:
+        resolved: dict[str, InstrumentRef] = {}
+        missing: list[str] = []
         if not symbols:
             return resolved, missing
 
@@ -740,8 +742,8 @@ class DhanProvider(MarketDataProvider):
         return resolved, missing
 
     def _post_marketfeed(
-        self, endpoint: str, refs: List[InstrumentRef], strict: bool = False
-    ) -> Dict[str, dict]:
+        self, endpoint: str, refs: list[InstrumentRef], strict: bool = False
+    ) -> dict[str, dict]:
         """Batched quote call. Returns ``{symbol: entry}``.
 
         Every exchange segment goes in the same request body
@@ -755,7 +757,7 @@ class DhanProvider(MarketDataProvider):
         from "Dhan has no prices" (on an exchange holiday the reply is a
         success with empty data).
         """
-        wanted: Dict[Tuple[str, str], str] = {}
+        wanted: dict[tuple[str, str], str] = {}
         for ref in refs:
             try:
                 wanted[(segment_code(ref.segment), str(int(ref.provider_id)))] = ref.symbol
@@ -763,9 +765,9 @@ class DhanProvider(MarketDataProvider):
                 continue
 
         keys = list(wanted)
-        out: Dict[str, dict] = {}
+        out: dict[str, dict] = {}
         for i in range(0, len(keys), REST_BATCH):
-            body: Dict[str, List[int]] = {}
+            body: dict[str, list[int]] = {}
             for code, security_id in keys[i : i + REST_BATCH]:
                 body.setdefault(code, []).append(int(security_id))
             payload, error = {}, None
@@ -799,9 +801,9 @@ class DhanProvider(MarketDataProvider):
         return out
 
     @staticmethod
-    def _by_symbol(entries: Dict[str, dict], extract) -> Dict[str, float]:
+    def _by_symbol(entries: dict[str, dict], extract) -> dict[str, float]:
         """``{symbol: positive float}`` pulled out of ``{symbol: entry}``; bad values are dropped."""
-        out: Dict[str, float] = {}
+        out: dict[str, float] = {}
         for symbol, entry in (entries or {}).items():
             try:
                 value = extract(entry)
@@ -811,7 +813,7 @@ class DhanProvider(MarketDataProvider):
                 out[symbol] = float(value)
         return out
 
-    def get_previous_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_previous_close(self, refs: list[InstrumentRef]) -> dict[str, float]:
         """Previous-day close from the OHLC endpoint.
 
         Dhan's OHLC block reports the previous session's close **while the
@@ -828,7 +830,7 @@ class DhanProvider(MarketDataProvider):
 
     def _post_historical(
         self, ref: InstrumentRef, window: dict, endpoint: str = "historical"
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Daily candles (``historical``) or minute candles (``intraday``) for one instrument,
         or None if the call gave nothing.
 
@@ -873,7 +875,7 @@ class DhanProvider(MarketDataProvider):
                 time.sleep(MIN_HISTORY_INTERVAL)
         return None
 
-    def get_prior_session_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_prior_session_close(self, refs: list[InstrumentRef]) -> dict[str, float]:
         """Previous close from daily candles, for use outside market hours.
 
         The OHLC endpoint behind ``get_previous_close`` starts reporting
@@ -897,7 +899,7 @@ class DhanProvider(MarketDataProvider):
         }
         session_date = todays_session_date()
 
-        closes: Dict[str, float] = {}
+        closes: dict[str, float] = {}
         consecutive_failures = 0
         for ref in refs:
             payload = self._post_historical(ref, window)
@@ -922,10 +924,10 @@ class DhanProvider(MarketDataProvider):
         )
         return closes
 
-    def get_ltp_snapshot(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_ltp_snapshot(self, refs: list[InstrumentRef]) -> dict[str, float]:
         return self._by_symbol(self._post_marketfeed("ltp", refs), lambda e: e.get("last_price"))
 
-    def get_day_bars(self, refs: List[InstrumentRef]) -> Dict[str, DayBar]:
+    def get_day_bars(self, refs: list[InstrumentRef]) -> dict[str, DayBar]:
         """Today's open/high/low from the same OHLC endpoint.
 
         Dhan's OHLC block reports today's open/high/low alongside the previous
@@ -936,7 +938,7 @@ class DhanProvider(MarketDataProvider):
         every value to a positive float - the right guard for a price, the
         wrong one for a nested block.
         """
-        bars: Dict[str, DayBar] = {}
+        bars: dict[str, DayBar] = {}
         for symbol, entry in self._post_marketfeed("ohlc", refs).items():
             ohlc = entry.get("ohlc")
             if not isinstance(ohlc, dict):
@@ -949,8 +951,8 @@ class DhanProvider(MarketDataProvider):
         return bars
 
     def get_last_trade_times(
-        self, refs: List[InstrumentRef], strict: bool = False
-    ) -> Dict[str, datetime]:
+        self, refs: list[InstrumentRef], strict: bool = False
+    ) -> dict[str, datetime]:
         """When each instrument last traded, from the quote endpoint's ``last_trade_time``.
 
         The only thing in Dhan's responses that dates the data: after the close, at the weekend
@@ -958,7 +960,7 @@ class DhanProvider(MarketDataProvider):
         Dhan writes it as ``01/10/2026 15:59:03`` (IST). Instruments that never traded, or whose
         time cannot be read, are left out. ``strict``: see ``_post_marketfeed``.
         """
-        times: Dict[str, datetime] = {}
+        times: dict[str, datetime] = {}
         for symbol, entry in self._post_marketfeed("quote", refs, strict=strict).items():
             try:
                 times[symbol] = datetime.strptime(
@@ -968,7 +970,7 @@ class DhanProvider(MarketDataProvider):
                 continue
         return times
 
-    def get_quotes(self, refs: List[InstrumentRef], strict: bool = False) -> Dict[str, dict]:
+    def get_quotes(self, refs: list[InstrumentRef], strict: bool = False) -> dict[str, dict]:
         """The full ``/marketfeed/quote`` entry per symbol: last price, OHLC, volume, OI, circuit limits.
 
         Used by the MCX page, which shows more of the quote than the boards' price-only calls.
@@ -978,8 +980,8 @@ class DhanProvider(MarketDataProvider):
         return self._post_marketfeed("quote", refs, strict=strict)
 
     def get_candles(
-        self, ref: InstrumentRef, start: datetime, end: datetime, interval: Optional[int] = None
-    ) -> Optional[dict]:
+        self, ref: InstrumentRef, start: datetime, end: datetime, interval: int | None = None
+    ) -> dict | None:
         """Candles with open interest for one instrument, or None.
 
         ``interval`` is minutes (1, 5, 15, 25 or 60) for ``/charts/intraday``; None asks
@@ -1039,7 +1041,7 @@ class DhanProvider(MarketDataProvider):
             raise DhanDataError(*error)
         return payload
 
-    def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:
+    def open_feed(self, refs: list[InstrumentRef]) -> FeedHandle:
         # A reconnect late in the token's life picks up (or mints) its successor.
         self._refresh_token()
         return DhanFeedHandle(self._token, self._client_id, refs).start()

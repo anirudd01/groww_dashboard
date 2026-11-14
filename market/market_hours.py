@@ -7,7 +7,6 @@ that instead of the dashboard pretending prices are live.
 """
 
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Optional
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -49,7 +48,7 @@ def is_market_open(now: datetime = None) -> bool:
     return session_state(now) == SESSION_OPEN
 
 
-def todays_session_date(now: datetime = None) -> Optional[date]:
+def todays_session_date(now: datetime = None) -> date | None:
     """Today's date once today's session has begun, otherwise ``None``.
 
     Answers one narrow question: does the latest available price belong to

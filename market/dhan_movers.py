@@ -20,7 +20,6 @@ import calendar
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Tuple
 
 from market.market_hours import now_ist
 
@@ -95,8 +94,8 @@ def build_request(
     kind: str,
     category: str,
     *,
-    universe: Optional[str] = None,
-    expiry: Optional[date] = None,
+    universe: str | None = None,
+    expiry: date | None = None,
     limit: int = 20,
 ) -> dict:
     """The JSON body for one ranking. Raises ``ValueError`` for a combination Dhan rejects."""
@@ -152,13 +151,13 @@ class Mover:
     volume: int
     traded_value: float  # rupees
     lot_size: int = 0
-    expiry: Optional[str] = None
-    strike: Optional[float] = None
-    open_interest: Optional[int] = None
-    oi_change_pct: Optional[float] = None
-    basis_pct: Optional[float] = None  # futures only: futures price over the underlying
-    underlying_ltp: Optional[float] = None
-    pcr: Optional[float] = None  # options only: Dhan's put-call ratio for the contract
+    expiry: str | None = None
+    strike: float | None = None
+    open_interest: int | None = None
+    oi_change_pct: float | None = None
+    basis_pct: float | None = None  # futures only: futures price over the underlying
+    underlying_ltp: float | None = None
+    pcr: float | None = None  # options only: Dhan's put-call ratio for the contract
 
     @property
     def underlying(self) -> str:
@@ -167,7 +166,7 @@ class Mover:
         return self.symbol[: month.start()] if month else self.symbol
 
     @property
-    def side(self) -> Optional[str]:
+    def side(self) -> str | None:
         """CE or PE for an option, else None."""
         suffix = self.symbol.rsplit("-", 1)[-1]
         return suffix if suffix in ("CE", "PE") else None
@@ -185,7 +184,7 @@ def _whole(value, default=0):
     return int(number) if number is not None else default
 
 
-def parse_movers(payload: dict) -> List[Mover]:
+def parse_movers(payload: dict) -> list[Mover]:
     """Rows of a marketmovers response, in Dhan's ranked order. Unusable rows are skipped."""
     movers = []
     for row in (payload or {}).get("data") or []:
@@ -228,7 +227,7 @@ def parse_movers(payload: dict) -> List[Mover]:
 NO_DATA_CODE = "DH-907"
 
 
-def fetch(provider, kind: str, category: str, **options) -> List[Mover]:
+def fetch(provider, kind: str, category: str, **options) -> list[Mover]:
     """One ranking from Dhan, via a connected ``DhanProvider``. Empty when nothing ranks.
 
     A reply with no ``data`` field at all is not an empty ranking (Dhan sends ``DH-907`` for
@@ -273,7 +272,7 @@ LONG_UNWINDING = "Long unwinding"
 BUILDUPS = (LONG_BUILDUP, SHORT_BUILDUP, SHORT_COVERING, LONG_UNWINDING)
 
 
-def buildup(price_pct: float, oi_pct: Optional[float]) -> Optional[str]:
+def buildup(price_pct: float, oi_pct: float | None) -> str | None:
     """Name the quadrant a futures contract sits in, from today's price and open-interest change.
 
     Price up with open interest up is fresh buying (long build-up); price down with open
@@ -289,16 +288,16 @@ def buildup(price_pct: float, oi_pct: Optional[float]) -> Optional[str]:
     return SHORT_BUILDUP if oi_pct > 0 else LONG_UNWINDING
 
 
-def merge_by_symbol(*rankings: List[Mover]) -> List[Mover]:
+def merge_by_symbol(*rankings: list[Mover]) -> list[Mover]:
     """Several rankings as one list with each contract once (the first occurrence wins)."""
-    seen: Dict[str, Mover] = {}
+    seen: dict[str, Mover] = {}
     for ranking in rankings:
         for mover in ranking:
             seen.setdefault(mover.symbol, mover)
     return list(seen.values())
 
 
-def universe_members(gainers: list, losers: list) -> Tuple[Dict[str, dict], bool]:
+def universe_members(gainers: list, losers: list) -> tuple[dict[str, dict], bool]:
     """A stock universe's members, read off its raw gainers and losers (``data`` rows), and whether
     the list may be cut short.
 
@@ -307,7 +306,7 @@ def universe_members(gainers: list, losers: list) -> Tuple[Dict[str, dict], bool
     been cut off, and a stock that has not traded yet today is in neither. There is no sector
     in the rows: membership is all this gives (docs/DHAN_API_EXPLORER.md).
     """
-    members: Dict[str, dict] = {}
+    members: dict[str, dict] = {}
     for row in list(gainers or []) + list(losers or []):
         symbol = (row or {}).get("tradingSymbol")
         if symbol:

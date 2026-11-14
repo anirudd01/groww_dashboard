@@ -45,7 +45,7 @@ the page says how many such tiles there are.
 """
 
 import dataclasses
-from typing import Dict, Iterable, List, Optional, Sequence
+from collections.abc import Iterable, Sequence
 
 from market.models import SectorMarketData, StockMarketData
 from market.sector_aggregation import rank_sectors, weighted_change_pct
@@ -57,7 +57,7 @@ ORDER_BY_PERFORMANCE = "performance"
 ORDERS = (ORDER_BY_IMPACT, ORDER_BY_SIZE, ORDER_BY_PERFORMANCE)
 
 #: Sidebar labels, in display order.
-ORDER_LABELS: Dict[str, str] = {
+ORDER_LABELS: dict[str, str] = {
     ORDER_BY_IMPACT: "Biggest impact first",
     ORDER_BY_SIZE: "Largest sector first",
     ORDER_BY_PERFORMANCE: "Biggest move first",
@@ -67,16 +67,16 @@ CRORE = 1e7
 LAKH_CRORE = 1e12
 
 
-def _usable(weight: Optional[float]) -> bool:
+def _usable(weight: float | None) -> bool:
     return weight is not None and weight > 0
 
 
 def attach_sector_impact(
     sectors: Iterable[SectorMarketData],
     stocks: Sequence[StockMarketData],
-    weights: Optional[Dict[str, float]],
-    index_previous_close: Optional[float] = None,
-) -> List[SectorMarketData]:
+    weights: dict[str, float] | None,
+    index_previous_close: float | None = None,
+) -> list[SectorMarketData]:
     """The Nifty 50 board's sectors with their index share and impact filled in.
 
     ``stocks`` is the whole universe (every member of the index), so the share
@@ -88,7 +88,7 @@ def attach_sector_impact(
     weights = weights or {}
     index_cap = sum(weights[s.symbol] for s in stocks if _usable(weights.get(s.symbol)))
 
-    by_sector: Dict[str, List[StockMarketData]] = {}
+    by_sector: dict[str, list[StockMarketData]] = {}
     for stock in stocks:
         by_sector.setdefault(stock.sector, []).append(stock)
 
@@ -132,9 +132,9 @@ def attach_sector_impact(
 
 def attach_index_weights(
     sectors: Iterable[SectorMarketData],
-    members: Dict[str, Sequence[str]],
-    weights: Optional[Dict[str, float]],
-) -> List[SectorMarketData]:
+    members: dict[str, Sequence[str]],
+    weights: dict[str, float] | None,
+) -> list[SectorMarketData]:
     """The index board's tiles with their free-float cap and rupee impact.
 
     ``members`` maps a tile label to its index's constituent symbols (NSE's
@@ -164,7 +164,7 @@ def attach_index_weights(
     return result
 
 
-def order_sectors(sectors: Iterable[SectorMarketData], order: str) -> List[SectorMarketData]:
+def order_sectors(sectors: Iterable[SectorMarketData], order: str) -> list[SectorMarketData]:
     """Tiles in the requested order (see the module docstring).
 
     Unknown orders fall back to ``performance``. Ties break by name, so equal
@@ -188,12 +188,12 @@ def order_sectors(sectors: Iterable[SectorMarketData], order: str) -> List[Secto
     return rank_sectors(sectors)
 
 
-def unweighted_tiles(sectors: Iterable[SectorMarketData]) -> List[str]:
+def unweighted_tiles(sectors: Iterable[SectorMarketData]) -> list[str]:
     """Names of tiles with no usable weight - ranked last by size and impact."""
     return [s.sector for s in sectors if s.free_float_cap is None]
 
 
-def partially_weighted_tiles(sectors: Iterable[SectorMarketData]) -> List[str]:
+def partially_weighted_tiles(sectors: Iterable[SectorMarketData]) -> list[str]:
     """Names of tiles whose weight covers only some of their members."""
     return [
         s.sector
@@ -205,7 +205,7 @@ def partially_weighted_tiles(sectors: Iterable[SectorMarketData]) -> List[str]:
 # --------------------------------------------------------------------------
 # Formatting for tiles and tooltips
 # --------------------------------------------------------------------------
-def format_rupees(value: Optional[float], signed: bool = False) -> str:
+def format_rupees(value: float | None, signed: bool = False) -> str:
     """Rupees as crore, or lakh crore once that is shorter: ``₹4,120 cr``, ``₹18.2 lakh cr``."""
     if value is None:
         return "-"
@@ -228,7 +228,7 @@ def sector_weight_line(sector: SectorMarketData, index_name: str) -> str:
     return " · ".join(parts)
 
 
-def index_close_for_points(index: Optional[StockMarketData]) -> Optional[float]:
+def index_close_for_points(index: StockMarketData | None) -> float | None:
     """The index's previous close to turn impact into points, or None to stay in %.
 
     ``index`` is ``MarketSnapshot.index``. Its previous close follows the same
@@ -240,7 +240,7 @@ def index_close_for_points(index: Optional[StockMarketData]) -> Optional[float]:
     return index.previous_close
 
 
-def index_points_note(index: Optional[StockMarketData], index_name: str, provider: str = "") -> str:
+def index_points_note(index: StockMarketData | None, index_name: str, provider: str = "") -> str:
     """Caption fragment saying what unit the impact is in, and why when it is not points."""
     if index_close_for_points(index) is not None:
         return "in index points (from the index's previous close, on the same feed). "
@@ -253,7 +253,7 @@ def index_points_note(index: Optional[StockMarketData], index_name: str, provide
     return f"in % of the index - {reason}, so points cannot be shown. "
 
 
-def index_level_text(index: Optional[StockMarketData]) -> Optional[str]:
+def index_level_text(index: StockMarketData | None) -> str | None:
     """``24,812.35 (+0.42%)`` for the board header, or None while the index has no price."""
     if index is None or index.ltp is None or index.ltp <= 0:
         return None

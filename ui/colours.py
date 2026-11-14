@@ -5,7 +5,7 @@ percentage change drives the colour, zero is neutral, and intensity is relative
 to the strongest move currently on screen.
 """
 
-from typing import Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 # Endpoints of the diverging ramp. Light ends sit next to zero, dark ends at the
 # strongest move in either direction.
@@ -24,22 +24,22 @@ TEXT_ON_DARK = "#ffffff"
 TEXT_MUTED = "#666666"
 
 
-def _hex(rgb: Tuple[int, int, int]) -> str:
+def _hex(rgb: tuple[int, int, int]) -> str:
     return "#{:02x}{:02x}{:02x}".format(*rgb)
 
 
-def _mix(start: Tuple[int, int, int], end: Tuple[int, int, int], t: float):
+def _mix(start: tuple[int, int, int], end: tuple[int, int, int], t: float):
     t = max(0.0, min(1.0, t))
     return tuple(round(a + (b - a) * t) for a, b in zip(start, end))
 
 
-def scale_limit(values: Sequence[Optional[float]], minimum: float = MIN_SCALE_PCT) -> float:
+def scale_limit(values: Sequence[float | None], minimum: float = MIN_SCALE_PCT) -> float:
     """Symmetric +/- bound for a set of percentage changes."""
     magnitudes = [abs(v) for v in values if v is not None]
     return max([minimum] + magnitudes)
 
 
-def change_colours(value: Optional[float], limit: float) -> Tuple[str, str]:
+def change_colours(value: float | None, limit: float) -> tuple[str, str]:
     """Background and text colour for one percentage change.
 
     ``value`` of ``None`` means "no data" and renders neutral - never as if it
@@ -64,7 +64,7 @@ def change_colours(value: Optional[float], limit: float) -> Tuple[str, str]:
     return _hex(rgb), text
 
 
-def change_background(value: Optional[float], limit: float) -> str:
+def change_background(value: float | None, limit: float) -> str:
     """CSS declaration for a table cell, as pandas Styler expects."""
     background, text = change_colours(value, limit)
     return f"background-color: {background}; color: {text};"

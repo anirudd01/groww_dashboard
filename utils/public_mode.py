@@ -17,7 +17,6 @@ Locally nothing changes: with the variable unset every function here is a no-op 
 import os
 import threading
 import time
-from typing import Dict
 
 ENV = "PULSE_PUBLIC_MODE"
 
@@ -25,7 +24,7 @@ ENV = "PULSE_PUBLIC_MODE"
 REFRESH_COOLDOWN_SECONDS = 60
 
 _lock = threading.Lock()
-_last_refresh: Dict[str, float] = {}
+_last_refresh: dict[str, float] = {}
 
 
 def is_public() -> bool:

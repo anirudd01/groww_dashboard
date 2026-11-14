@@ -19,7 +19,14 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import streamlit as st
 
-from apps.fno_common import freshness, panels, require_history, source_caption, suspected_toggle, universe_picker
+from apps.fno_common import (
+    freshness,
+    panels,
+    require_history,
+    source_caption,
+    suspected_toggle,
+    universe_picker,
+)
 from market.price_panel import UNIVERSE_ALL, restrict
 from market.session_split import split_returns, split_summary, universe_split
 from ui.insight_charts import CONFIG, split_scatter

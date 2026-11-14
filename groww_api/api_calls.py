@@ -1,14 +1,14 @@
 """API wrapper for Groww Trading API calls."""
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any
 
 from groww_api.client import GrowwAPIClient
 
 logger = logging.getLogger(__name__)
 
 
-def batched_ltp(session, exchange: str, segment: str, symbols: List[str]) -> Dict[str, float]:
+def batched_ltp(session, exchange: str, segment: str, symbols: list[str]) -> dict[str, float]:
     """LTP by trading symbol via the SDK ``session.get_ltp``, 50 ``EXCHANGE_SYMBOL`` keys per call.
 
     Symbols without a positive price are left out, so the caller treats them as unpriced
@@ -26,7 +26,7 @@ def batched_ltp(session, exchange: str, segment: str, symbols: List[str]) -> Dic
             timeout=10,
         ) or {}
 
-    result: Dict[str, float] = {}
+    result: dict[str, float] = {}
     for i in range(0, len(keys), 50):
         batch = tuple(keys[i : i + 50])
         try:
@@ -54,7 +54,7 @@ class GrowwAPIService:
     Uses singleton client from GrowwAPIClient.
     """
 
-    def __init__(self, client: Optional[GrowwAPIClient] = None):
+    def __init__(self, client: GrowwAPIClient | None = None):
         """
         Initialize service with a GrowwAPIClient.
         If none provided, uses the singleton instance.
@@ -63,7 +63,7 @@ class GrowwAPIService:
         if not self.client.is_connected:
             raise RuntimeError(self.client.auth_error or "Client not authenticated")
 
-    def get_user_profile(self) -> Dict[str, Any]:
+    def get_user_profile(self) -> dict[str, Any]:
         """Fetch user profile details."""
         try:
             return self.client.session.get_user_profile()
@@ -71,7 +71,7 @@ class GrowwAPIService:
             logger.error("Error fetching user profile: %s", e)
             return {}
 
-    def get_margins(self) -> Dict[str, Any]:
+    def get_margins(self) -> dict[str, Any]:
         """Fetch available margin and fund balance."""
         try:
             return self.client.session.get_available_margin_details()
@@ -79,7 +79,7 @@ class GrowwAPIService:
             logger.error("Error fetching margins: %s", e)
             return {}
 
-    def get_holdings(self) -> List[Dict[str, Any]]:
+    def get_holdings(self) -> list[dict[str, Any]]:
         """Fetch long term delivery holdings for user (the ``holdings`` list of the response)."""
         try:
             resp = self.client.session.get_holdings_for_user(timeout=15)
@@ -88,7 +88,7 @@ class GrowwAPIService:
             logger.error("Error fetching holdings: %s", e)
             return []
 
-    def get_positions(self) -> List[Dict[str, Any]]:
+    def get_positions(self) -> list[dict[str, Any]]:
         """Fetch open positions (cash/MTF)."""
         try:
             resp = self.client.session.get_positions_for_user()
@@ -112,8 +112,8 @@ class GrowwAPIService:
         product: str,
         order_type: str,
         transaction_type: str,
-        timeout: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
         """Place an order via the underlying Groww API session.
 
         The SDK waits forever by default. With ``timeout`` a slow answer raises instead, but the
@@ -132,20 +132,20 @@ class GrowwAPIService:
             transaction_type=transaction_type,
         )
 
-    def get_order_status(self, segment: str, groww_order_id: str) -> Dict[str, Any]:
+    def get_order_status(self, segment: str, groww_order_id: str) -> dict[str, Any]:
         """Fetch the current status of a previously placed order."""
         return self.client.session.get_order_status(
             segment=segment,
             groww_order_id=groww_order_id,
         )
 
-    def get_ltp_for_nse_fno(self, symbols: List[str]) -> Dict[str, float]:
+    def get_ltp_for_nse_fno(self, symbols: list[str]) -> dict[str, float]:
         """LTP for NSE F&O contracts, keyed by trading symbol."""
         from growwapi import GrowwAPI
 
         return batched_ltp(self.client.session, GrowwAPI.EXCHANGE_NSE, GrowwAPI.SEGMENT_FNO, symbols)
 
-    def get_ltp_for_mcx(self, symbols: List[str]) -> Dict[str, float]:
+    def get_ltp_for_mcx(self, symbols: list[str]) -> dict[str, float]:
         """LTP for MCX contracts, keyed by trading symbol.
 
         Batched ``get_ltp`` with ``MCX_`` keys and segment COMMODITY works on the paid data plan
@@ -156,7 +156,7 @@ class GrowwAPIService:
         return batched_ltp(self.client.session, GrowwAPI.EXCHANGE_MCX, GrowwAPI.SEGMENT_COMMODITY, symbols)
 
     def get_greeks(self, exchange: str, underlying: str, trading_symbol: str, expiry: str,
-                   timeout: float = 10) -> Dict[str, Any]:
+                   timeout: float = 10) -> dict[str, Any]:
         """The ``greeks`` dict (delta, gamma, theta, vega, rho, iv) for one option contract.
 
         ``GrowwAPI.get_greeks`` is the only SDK call without a timeout argument (its request has
@@ -193,8 +193,8 @@ class GrowwAPIService:
         return self.client.session.get_all_instruments()
 
     def resolve_nse_cash_instruments(
-        self, symbols: List[str]
-    ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+        self, symbols: list[str]
+    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
         """
         Resolve NSE CASH trading symbols to their instrument metadata.
 
@@ -206,8 +206,8 @@ class GrowwAPIService:
             with exchange / segment / exchange_token / name, and `missing` lists
             the symbols that could not be found.
         """
-        resolved: Dict[str, Dict[str, Any]] = {}
-        missing: List[str] = []
+        resolved: dict[str, dict[str, Any]] = {}
+        missing: list[str] = []
 
         if not symbols:
             return resolved, missing
@@ -261,15 +261,15 @@ class GrowwAPIService:
         )
         return resolved, missing
 
-    def _nse_cash_batches(self, symbols: List[str], batch_size: int = 50):
+    def _nse_cash_batches(self, symbols: list[str], batch_size: int = 50):
         """Yield (batch_of_symbols, prefixed_tuple) pairs for batched endpoints."""
         for i in range(0, len(symbols), batch_size):
             batch = symbols[i : i + batch_size]
             yield batch, tuple(f"NSE_{s}" for s in batch)
 
     def get_previous_close_nse_cash(
-        self, symbols: List[str], batch_size: int = 50, timeout: Optional[int] = 15
-    ) -> Dict[str, float]:
+        self, symbols: list[str], batch_size: int = 50, timeout: int | None = 15
+    ) -> dict[str, float]:
         """
         Fetch the previous trading day's closing price for NSE CASH symbols.
 
@@ -277,7 +277,7 @@ class GrowwAPIService:
         session's close (today's close is not known until the session ends).
         This is reference data: call it on startup, not on every refresh.
         """
-        result: Dict[str, float] = {}
+        result: dict[str, float] = {}
         if not symbols:
             return result
 
@@ -320,8 +320,8 @@ class GrowwAPIService:
         return result
 
     def get_ltp_nse_cash(
-        self, symbols: List[str], batch_size: int = 50, timeout: Optional[int] = 10
-    ) -> Dict[str, float]:
+        self, symbols: list[str], batch_size: int = 50, timeout: int | None = 10
+    ) -> dict[str, float]:
         """
         Batched LTP snapshot for NSE CASH symbols.
 
@@ -331,7 +331,7 @@ class GrowwAPIService:
         An explicit timeout is essential: the SDK defaults to no timeout, and a
         stalled request would otherwise freeze the polling loop indefinitely.
         """
-        result: Dict[str, float] = {}
+        result: dict[str, float] = {}
         if not symbols:
             return result
 

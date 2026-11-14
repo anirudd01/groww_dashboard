@@ -26,7 +26,6 @@ not publish that, and the UI says so. ``None`` means no sensible link exists
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -39,13 +38,13 @@ class IndexDefinition:
     label: str
     #: Sector label (see ``market/index_constituents.py``) whose Nifty 50 members the drill-down
     #: lists, or None when no honest link exists.
-    sector: Optional[str] = None
+    sector: str | None = None
     #: Broad market benchmarks render after the sectoral tiles.
     is_benchmark: bool = False
 
 
 #: The NSE sectoral indices. Order is the display order.
-SECTORAL_INDICES: Tuple[IndexDefinition, ...] = (
+SECTORAL_INDICES: tuple[IndexDefinition, ...] = (
     IndexDefinition("NIFTY AUTO", "Nifty Auto", "Automobile"),
     IndexDefinition("BANKNIFTY", "Nifty Bank", "Banks"),
     IndexDefinition("NIFTY CONSR DURBL", "Nifty Consumer Durables", "Consumer Durables"),
@@ -70,36 +69,36 @@ SECTORAL_INDICES: Tuple[IndexDefinition, ...] = (
 
 #: Broad benchmarks, shown after the sectoral tiles for context. Nifty Bank is
 #: deliberately absent here - it is already a sectoral tile above.
-BENCHMARK_INDICES: Tuple[IndexDefinition, ...] = (
+BENCHMARK_INDICES: tuple[IndexDefinition, ...] = (
     IndexDefinition("NIFTY", "Nifty 50", None, is_benchmark=True),
     IndexDefinition("NIFTYNXT50", "Nifty Next 50", None, is_benchmark=True),
     IndexDefinition("NIFTY 500", "Nifty 500", None, is_benchmark=True),
 )
 
-ALL_INDICES: Tuple[IndexDefinition, ...] = SECTORAL_INDICES + BENCHMARK_INDICES
+ALL_INDICES: tuple[IndexDefinition, ...] = SECTORAL_INDICES + BENCHMARK_INDICES
 
 #: Equity universe key -> its own index (an ``INDEX``-segment symbol, as on the index
 #: board). The equity board subscribes it on its own feed, apart from the constituents
 #: (``MarketSnapshot.index``), to turn an impact in % of the index into index points.
-UNIVERSE_INDEX_SYMBOLS: Dict[str, str] = {
+UNIVERSE_INDEX_SYMBOLS: dict[str, str] = {
     "NIFTY50": "NIFTY",
     "NIFTYNEXT50": "NIFTYNXT50",
 }
 
 
-def index_by_symbol() -> Dict[str, IndexDefinition]:
+def index_by_symbol() -> dict[str, IndexDefinition]:
     return {definition.symbol: definition for definition in ALL_INDICES}
 
 
-def index_by_label() -> Dict[str, IndexDefinition]:
+def index_by_label() -> dict[str, IndexDefinition]:
     return {definition.label: definition for definition in ALL_INDICES}
 
 
-def sector_for_label(label: str) -> Optional[str]:
+def sector_for_label(label: str) -> str | None:
     """The sector whose Nifty 50 members back this index tile, if any."""
     definition = index_by_label().get(label)
     return definition.sector if definition else None
 
 
-def index_symbols() -> List[str]:
+def index_symbols() -> list[str]:
     return [definition.symbol for definition in ALL_INDICES]

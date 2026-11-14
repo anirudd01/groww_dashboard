@@ -1,6 +1,6 @@
+import json
 import os
 import sys
-import json
 
 # Allow running as `python scripts/test_api.py` from the repo root while still
 # importing groww_api/groww_client.py.
@@ -22,6 +22,7 @@ except ImportError:
             pass
 
 from groww_api.groww_client import GrowwClient
+
 
 def test_groww_connection():
 

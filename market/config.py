@@ -7,8 +7,7 @@ No credentials are read or stored here.
 
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from dataclasses import dataclass
 
 from market.providers.registry import DEFAULT_PROVIDER_ORDER
 from market.sector_impact import (  # noqa: F401  (re-exported for the dashboards)
@@ -74,7 +73,7 @@ class HeatmapConfig:
     # Broker preference order. The service uses the first one that
     # authenticates and resolves instruments; the rest are fallbacks.
     # Known: dhan, groww, kite (alias: zerodha).
-    providers: Tuple[str, ...] = DEFAULT_PROVIDER_ORDER
+    providers: tuple[str, ...] = DEFAULT_PROVIDER_ORDER
 
     # --- universe -------------------------------------------------------
     universe_key: str = DEFAULT_UNIVERSE_KEY
@@ -85,7 +84,7 @@ class HeatmapConfig:
     # Weights are read from the database at startup and never fetched live.
     # Generate them with scripts/dhan.py --master. None is the shared
     # data/market.db; a path points at another database (PULSE_STATE_DB does too).
-    weights_path: Optional[str] = None
+    weights_path: str | None = None
 
     # --- UI -------------------------------------------------------------
     ui_refresh_seconds: float = 1.0

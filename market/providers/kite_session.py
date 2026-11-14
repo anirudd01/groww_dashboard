@@ -33,8 +33,8 @@ import hashlib
 import logging
 import os
 from dataclasses import asdict, dataclass
-from datetime import datetime, time as dtime, timedelta
-from typing import Optional
+from datetime import datetime, timedelta
+from datetime import time as dtime
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
@@ -60,7 +60,7 @@ LOGIN_SCRIPT = "scripts/kite_login.py"
 TOKEN_EXPIRY_TIME = dtime(6, 0)
 
 
-def _clean(value: Optional[str]) -> str:
+def _clean(value: str | None) -> str:
     value = (value or "").strip()
     # Placeholders copied from .env.example are "not configured", not a key.
     return "" if value.lower().startswith(("your_", "<")) else value
@@ -131,7 +131,7 @@ class KiteAuthError(RuntimeError):
     """Kite rejected a login or a token."""
 
 
-def error_of(status_code: int, payload) -> Optional[str]:
+def error_of(status_code: int, payload) -> str | None:
     """Human-readable reason for a failed Kite response, or None if it succeeded.
 
     Kite's error body is ``{"status": "error", "error_type": ..., "message": ...}``.
@@ -154,18 +154,18 @@ class KiteSession:
     expires_at: str = ""  # ISO, IST
 
     @property
-    def expires(self) -> Optional[datetime]:
+    def expires(self) -> datetime | None:
         try:
             return datetime.fromisoformat(self.expires_at)
         except (TypeError, ValueError):
             return None
 
-    def is_expired(self, now: Optional[datetime] = None) -> bool:
+    def is_expired(self, now: datetime | None = None) -> bool:
         """Unknown expiry counts as expired - a token we cannot date is not trusted."""
         expires = self.expires
         return expires is None or (now or now_ist()) >= expires
 
-    def hours_left(self, now: Optional[datetime] = None) -> float:
+    def hours_left(self, now: datetime | None = None) -> float:
         expires = self.expires
         if expires is None:
             return 0.0
@@ -212,14 +212,14 @@ def exchange_request_token(
     )
 
 
-def save_session(session: KiteSession, path: Optional[str] = None) -> None:
+def save_session(session: KiteSession, path: str | None = None) -> None:
     """Store the session. ``path`` is a database file, for tests; the default is the shared one."""
     state_store.write(STATE_NAME, asdict(session), path)
 
 
 def load_session(
-    api_key: str, path: Optional[str] = None, now: Optional[datetime] = None
-) -> Optional[KiteSession]:
+    api_key: str, path: str | None = None, now: datetime | None = None
+) -> KiteSession | None:
     """The saved session if it is for ``api_key`` and still valid, else None.
 
     Never raises and does no network I/O, so ``is_configured`` can call it.
@@ -251,12 +251,12 @@ def load_session(
     return session
 
 
-def clear_session(path: Optional[str] = None) -> bool:
+def clear_session(path: str | None = None) -> bool:
     """Forget the saved session (logout). True if there was one."""
     return state_store.delete(STATE_NAME, path)
 
 
-def invalidate_session(api_key: str, access_token: str, timeout: int = 15) -> Optional[str]:
+def invalidate_session(api_key: str, access_token: str, timeout: int = 15) -> str | None:
     """Log the API session out on Kite's side. Returns an error string or None."""
     response = requests.delete(
         f"{API_ROOT}/session/token",

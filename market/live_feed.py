@@ -40,17 +40,17 @@ import threading
 import time
 from copy import copy
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Optional
 
 from market import exchange_status
 from market.config import HeatmapConfig
+from market.index_mapping import UNIVERSE_INDEX_SYMBOLS
 from market.market_hours import (
     SESSION_OPEN,
     SESSION_PRE_MARKET,
     is_market_open,
     session_state,
 )
-from market.index_mapping import UNIVERSE_INDEX_SYMBOLS
 from market.models import (
     PREV_CLOSE_DAILY_CANDLE,
     PREV_CLOSE_OHLC,
@@ -80,8 +80,8 @@ class LiveMarketDataService:
     def __init__(
         self,
         universe: Universe,
-        config: Optional[HeatmapConfig] = None,
-        providers: Optional[List[MarketDataProvider]] = None,
+        config: HeatmapConfig | None = None,
+        providers: list[MarketDataProvider] | None = None,
         market_status: Optional["exchange_status.ExchangeStatus"] = None,
     ):
         self.universe = universe
@@ -99,17 +99,17 @@ class LiveMarketDataService:
         # a buffer re-read: Dhan's and Kite's feeds return every price they
         # hold on every read, so "the drain returned prices" is no proof that
         # anything traded. Only a change counts (see _last_fresh_at).
-        self._last_drained: Dict[str, float] = {}
-        self._last_fresh_at: Optional[float] = None
+        self._last_drained: dict[str, float] = {}
+        self._last_fresh_at: float | None = None
         self._drain_was_fresh = False
 
         self._lock = threading.RLock()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._started = False
 
         # Shared state - only ever touched while holding self._lock.
-        self._stocks: Dict[str, StockMarketData] = {
+        self._stocks: dict[str, StockMarketData] = {
             c.symbol: StockMarketData(
                 symbol=c.symbol,
                 sector=c.sector,
@@ -126,15 +126,15 @@ class LiveMarketDataService:
         # never one of them (see the module docstring). Only live once the
         # active provider resolves it: ``_index_ref`` is None otherwise.
         index_symbol = None if universe.is_index_board else UNIVERSE_INDEX_SYMBOLS.get(universe.key)
-        self._index: Optional[StockMarketData] = (
+        self._index: StockMarketData | None = (
             StockMarketData(symbol=index_symbol, sector="", segment=SEGMENT_INDEX)
             if index_symbol and index_symbol not in self._stocks
             else None
         )
-        self._index_ref: Optional[InstrumentRef] = None
+        self._index_ref: InstrumentRef | None = None
 
-        self._provider: Optional[MarketDataProvider] = None
-        self._refs: List[InstrumentRef] = []
+        self._provider: MarketDataProvider | None = None
+        self._refs: list[InstrumentRef] = []
         self._feed = None
         self._first_tick_logged: set = set()
         self._prev_close_fetched_at: float = 0.0
@@ -148,7 +148,7 @@ class LiveMarketDataService:
         self._ws_delivering = False
         # Connection attempts run on their own thread: a provider's connect may
         # block for minutes (Groww's does), and that must never stall the UI.
-        self._connect_thread: Optional[threading.Thread] = None
+        self._connect_thread: threading.Thread | None = None
         self._connect_result = None
         self._next_connect_attempt = 0.0
         # How many times we have tried to get the active provider's websocket
@@ -274,11 +274,11 @@ class LiveMarketDataService:
         )
 
     @property
-    def _feed_refs(self) -> List[InstrumentRef]:
+    def _feed_refs(self) -> list[InstrumentRef]:
         """What the feed and REST calls ask for: the constituents, then the index if served."""
         return self._refs + ([self._index_ref] if self._index_ref is not None else [])
 
-    def _entry(self, symbol: str) -> Optional[StockMarketData]:
+    def _entry(self, symbol: str) -> StockMarketData | None:
         """The state a symbol's data belongs to - a constituent, or the index. Hold the lock."""
         stock = self._stocks.get(symbol)
         if stock is None and self._index_ref is not None and symbol == self._index.symbol:
@@ -339,10 +339,10 @@ class LiveMarketDataService:
         # mid-session is caught by exactly the same timer. Measuring from the
         # connection instead would declare every long-lived feed dead the
         # moment it passed that window.
-        last_progress: Optional[float] = None
+        last_progress: float | None = None
         next_rest_poll = 0.0
-        fast_polling: Optional[bool] = None
-        session_clock: Optional[bool] = None
+        fast_polling: bool | None = None
+        session_clock: bool | None = None
 
         while not self._stop_event.is_set():
             now = time.monotonic()
@@ -471,7 +471,7 @@ class LiveMarketDataService:
     # ------------------------------------------------------------------
     # Provider selection
     # ------------------------------------------------------------------
-    def _activate_provider(self, remaining: List[MarketDataProvider]) -> bool:
+    def _activate_provider(self, remaining: list[MarketDataProvider]) -> bool:
         """Adopt the first remaining provider that authenticates and resolves.
 
         Mutates ``remaining`` so each provider is tried at most once.
@@ -547,7 +547,7 @@ class LiveMarketDataService:
 
         self._fetch_previous_close(provider, self._feed_refs)
 
-    def _resolve_index(self, provider: MarketDataProvider) -> Optional[InstrumentRef]:
+    def _resolve_index(self, provider: MarketDataProvider) -> InstrumentRef | None:
         """The universe's own index on this provider, or None when it has none to offer.
 
         Resolved from the same stored instrument ids as the index board, so no
@@ -572,7 +572,7 @@ class LiveMarketDataService:
         return ref
 
     def _fetch_previous_close(
-        self, provider: MarketDataProvider, refs: List[InstrumentRef]
+        self, provider: MarketDataProvider, refs: list[InstrumentRef]
     ) -> None:
         """Load previous closes from whichever source is honest right now.
 
@@ -617,7 +617,7 @@ class LiveMarketDataService:
             )
 
     def _previous_close_source(
-        self, provider: MarketDataProvider, refs: List[InstrumentRef]
+        self, provider: MarketDataProvider, refs: list[InstrumentRef]
     ):
         """``(closes, source)`` from the path that is trustworthy right now."""
         in_session = session_state() in (SESSION_OPEN, SESSION_PRE_MARKET)
@@ -784,7 +784,7 @@ class LiveMarketDataService:
         return False
 
     def _connect_worker(
-        self, provider: MarketDataProvider, refs: List[InstrumentRef]
+        self, provider: MarketDataProvider, refs: list[InstrumentRef]
     ) -> None:
         """Runs on its own thread; publishes its outcome via _connect_result.
 
@@ -907,7 +907,7 @@ class LiveMarketDataService:
     # ------------------------------------------------------------------
     # Shared state helpers
     # ------------------------------------------------------------------
-    def _apply_prices(self, prices: Dict[str, float]) -> bool:
+    def _apply_prices(self, prices: dict[str, float]) -> bool:
         now = datetime.now()
         applied = 0
         with self._lock:
@@ -948,7 +948,7 @@ class LiveMarketDataService:
                 if bar.volume:
                     stock.volume = int(bar.volume)
 
-    def _apply_previous_closes(self, closes: Dict[str, float]) -> None:
+    def _apply_previous_closes(self, closes: dict[str, float]) -> None:
         """Fill in any previous closes REST could not supply."""
         if not closes:
             return

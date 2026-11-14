@@ -31,7 +31,6 @@ cannot be verified must never be guessed.
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Optional
 
 from market import reference_store, state_store
 
@@ -62,8 +61,8 @@ class InstrumentSet:
     """Loaded ids plus enough provenance to judge whether to trust them."""
 
     #: segment -> symbol -> {"security_id": ..., "isin": ..., ...}
-    instruments: Dict[str, Dict[str, dict]] = field(default_factory=dict)
-    generated_at: Optional[datetime] = None
+    instruments: dict[str, dict[str, dict]] = field(default_factory=dict)
+    generated_at: datetime | None = None
     source: str = ""
     provider: str = ""
     universes: tuple = ()
@@ -81,7 +80,7 @@ class InstrumentSet:
     def symbol_count(self) -> int:
         return sum(len(rows) for rows in self.instruments.values())
 
-    def security_ids(self, segment: str) -> Dict[str, str]:
+    def security_ids(self, segment: str) -> dict[str, str]:
         """``symbol -> security id`` for one segment. Empty if unknown."""
         rows = self.instruments.get((segment or "").upper()) or {}
         ids = {}
@@ -92,7 +91,7 @@ class InstrumentSet:
         return ids
 
     @property
-    def age_days(self) -> Optional[float]:
+    def age_days(self) -> float | None:
         if self.generated_at is None:
             return None
         generated = self.generated_at
@@ -125,7 +124,7 @@ def regenerate_hint(path: str, script: str = DHAN_SCRIPT) -> str:
     )
 
 
-def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+def _parse_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
@@ -136,7 +135,7 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
 
 
 def load_instruments(
-    name: str = DHAN_SET, script: str = DHAN_SCRIPT, path: Optional[str] = None
+    name: str = DHAN_SET, script: str = DHAN_SCRIPT, path: str | None = None
 ) -> InstrumentSet:
     """Read a broker's stored instrument ids. Never raises - callers check ``is_usable``.
 
@@ -159,7 +158,7 @@ def load_instruments(
     if not isinstance(raw, dict):
         return InstrumentSet(path=label, error=f"{label} has no 'instruments' section")
 
-    instruments: Dict[str, Dict[str, dict]] = {}
+    instruments: dict[str, dict[str, dict]] = {}
     for segment, rows in raw.items():
         if not isinstance(rows, dict):
             logger.warning("Ignoring non-object segment %r in %s", segment, label)

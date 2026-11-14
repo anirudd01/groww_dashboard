@@ -6,7 +6,7 @@ sit inside sector boxes, and the outer box is the whole universe. A box's colour
 weighted rise. The mirror of ``ui/drawdown_treemap.py``.
 """
 
-from typing import Dict, List, Optional, Sequence
+from collections.abc import Sequence
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -53,8 +53,8 @@ def _stock_hover(row: Rally, sector: str) -> str:
     )
 
 
-def build_rally_treemap(rows: Sequence[Rally], root: str, sectors: Optional[Dict[str, str]] = None,
-                        weights: Optional[Dict[str, float]] = None, limit: float = DEFAULT_LIMIT_PCT,
+def build_rally_treemap(rows: Sequence[Rally], root: str, sectors: dict[str, str] | None = None,
+                        weights: dict[str, float] | None = None, limit: float = DEFAULT_LIMIT_PCT,
                         height: int = 720) -> go.Figure:
     """One treemap: ``root`` > (sector >) stock. ``sectors`` None = no sector boxes.
 
@@ -83,7 +83,7 @@ def build_rally_treemap(rows: Sequence[Rally], root: str, sectors: Optional[Dict
     add("root", root, "", 0, root_rise, _node_text(root, root_rise),
         f"<b>{root}</b><br>{len(rows)} stocks, weighted rise {root_rise:+.2f}%")
     if sectors is not None:
-        groups: Dict[str, List[Rally]] = {}
+        groups: dict[str, list[Rally]] = {}
         for row in rows:
             groups.setdefault(sectors.get(row.symbol) or UNKNOWN_SECTOR, []).append(row)
         for name, members in sorted(groups.items()):
@@ -134,7 +134,7 @@ def build_rally_treemap(rows: Sequence[Rally], root: str, sectors: Optional[Dict
     return figure
 
 
-def stocks_frame(rows: Sequence[Rally], sectors: Optional[Dict[str, str]] = None) -> pd.DataFrame:
+def stocks_frame(rows: Sequence[Rally], sectors: dict[str, str] | None = None) -> pd.DataFrame:
     """One row per stock, biggest rise first, for the table and the CSV."""
     return pd.DataFrame([{
         "Symbol": r.symbol,

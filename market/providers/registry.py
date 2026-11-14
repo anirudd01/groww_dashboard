@@ -12,7 +12,7 @@ and add one line to ``PROVIDER_FACTORIES``.
 """
 
 import logging
-from typing import Callable, Dict, List
+from collections.abc import Callable
 
 from market.providers.base import FeedHandle, InstrumentRef, MarketDataProvider
 
@@ -38,14 +38,14 @@ def _make_kite() -> MarketDataProvider:
 
 
 #: name -> factory.
-PROVIDER_FACTORIES: Dict[str, Callable[[], MarketDataProvider]] = {
+PROVIDER_FACTORIES: dict[str, Callable[[], MarketDataProvider]] = {
     "dhan": _make_dhan,
     "groww": _make_groww,
     "kite": _make_kite,
 }
 
 #: Other names people use for a broker. Zerodha's API is Kite Connect.
-PROVIDER_ALIASES: Dict[str, str] = {
+PROVIDER_ALIASES: dict[str, str] = {
     "zerodha": "kite",
     "kiteconnect": "kite",
 }
@@ -58,7 +58,7 @@ PLANNED_PROVIDERS: set = set()
 DEFAULT_PROVIDER_ORDER = ("dhan", "groww", "kite")
 
 
-def available_provider_names() -> List[str]:
+def available_provider_names() -> list[str]:
     return sorted(PROVIDER_FACTORIES)
 
 
@@ -75,13 +75,13 @@ def provider_label(name: str) -> str:
     )
 
 
-def build_providers(order: List[str]) -> List[MarketDataProvider]:
+def build_providers(order: list[str]) -> list[MarketDataProvider]:
     """Instantiate providers in preference order, skipping unusable entries.
 
     Unknown names are logged and skipped rather than raising, so a typo in
     config degrades to "use the others" instead of breaking the dashboard.
     """
-    providers: List[MarketDataProvider] = []
+    providers: list[MarketDataProvider] = []
     for raw in order or DEFAULT_PROVIDER_ORDER:
         name = canonical_provider_name(raw)
         if not name:

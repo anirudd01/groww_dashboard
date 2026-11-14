@@ -42,12 +42,16 @@ import logging
 import os
 import sys
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from jobs import common  # noqa: E402  (sets up the import path)
-from jobs import dhan_daily, dhan_movers, groww_intraday  # noqa: E402
+from jobs import (  # noqa: E402  (sets up the import path)
+    common,
+    dhan_daily,
+    dhan_movers,
+    groww_intraday,
+)
 
 JOBS = ("dhan-daily", "groww-intraday", "movers")
 
@@ -65,8 +69,8 @@ MORNING_JOBS = ("dhan-daily",)
 logger = logging.getLogger("jobs")
 
 
-def nse_traded_today(probe: Optional[Callable] = None, checks: int = MARKET_CHECKS,
-                     gap: float = MARKET_CHECK_GAP_S, sleep: Callable[[float], None] = time.sleep) -> Optional[bool]:
+def nse_traded_today(probe: Callable | None = None, checks: int = MARKET_CHECKS,
+                     gap: float = MARKET_CHECK_GAP_S, sleep: Callable[[float], None] = time.sleep) -> bool | None:
     """True / False from the broker, or None when it could not say (then the jobs should run).
 
     False only when every one of ``checks`` fresh answers says so: one bad reply must not cost

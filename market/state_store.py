@@ -23,7 +23,6 @@ import os
 import sqlite3
 import time
 from datetime import datetime
-from typing import Optional
 
 from market import intraday_store
 from market.market_hours import IST
@@ -62,7 +61,7 @@ def db_path() -> str:
     return os.getenv(PATH_ENV) or os.path.join(REPO_ROOT, intraday_store.DB_PATH)
 
 
-def connect_shared(path: Optional[str], schema: str) -> sqlite3.Connection:
+def connect_shared(path: str | None, schema: str) -> sqlite3.Connection:
     """The shared store with ``schema`` added. A few tries, because several processes starting together
     on a fresh machine all create the file at once and SQLite can refuse the first switch to WAL."""
     for attempt in range(CONNECT_TRIES):
@@ -74,11 +73,11 @@ def connect_shared(path: Optional[str], schema: str) -> sqlite3.Connection:
             time.sleep(0.1 * (attempt + 1))
 
 
-def _connect(path: Optional[str] = None) -> sqlite3.Connection:
+def _connect(path: str | None = None) -> sqlite3.Connection:
     return connect_shared(path, SCHEMA)
 
 
-def read(name: str, path: Optional[str] = None) -> Optional[dict]:
+def read(name: str, path: str | None = None) -> dict | None:
     """The stored document, or None if there is none or it cannot be read. Never raises.
 
     Does not create the database: a machine that has never logged in simply has nothing yet.
@@ -102,7 +101,7 @@ def read(name: str, path: Optional[str] = None) -> Optional[dict]:
         conn.close()
 
 
-def write(name: str, document: dict, path: Optional[str] = None) -> None:
+def write(name: str, document: dict, path: str | None = None) -> None:
     """Store ``document`` under ``name``, replacing what was there. Raises ``sqlite3.Error`` on failure."""
     conn = _connect(path)
     try:
@@ -116,7 +115,7 @@ def write(name: str, document: dict, path: Optional[str] = None) -> None:
         conn.close()
 
 
-def delete(name: str, path: Optional[str] = None) -> bool:
+def delete(name: str, path: str | None = None) -> bool:
     """Remove a stored document. True if there was one."""
     path = path or db_path()
     if not os.path.exists(path):
@@ -136,11 +135,11 @@ class Lock:
     short write, so a token request that takes seconds does not block anything else writing.
     """
 
-    def __init__(self, name: str, path: Optional[str] = None, timeout: float = 90.0, error=RuntimeError,
+    def __init__(self, name: str, path: str | None = None, timeout: float = 90.0, error=RuntimeError,
                  stale_after: float = LOCK_STALE_SECONDS):
         self.name, self.path, self.timeout = name, path, timeout
         self.error, self.stale_after = error, stale_after
-        self._taken_at: Optional[float] = None
+        self._taken_at: float | None = None
 
     def _try_acquire(self) -> bool:
         conn = _connect(self.path)

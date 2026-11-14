@@ -21,7 +21,7 @@ Rules this module keeps, each one a bug it used to have:
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from groww_api.api_calls import GrowwAPIService
 from groww_api.instruments import ContractInfo, contracts_by_symbol
@@ -39,7 +39,7 @@ def _number(value) -> float:
         return 0.0
 
 
-def open_entry_price(p: Dict[str, Any]) -> float:
+def open_entry_price(p: dict[str, Any]) -> float:
     """Average cost of the open quantity, in rupees; 0.0 when the position is flat.
 
     Groww's ``realised_pnl`` is what the closed part made, so the open part's cost is whatever of
@@ -63,7 +63,7 @@ def open_entry_price(p: Dict[str, Any]) -> float:
     return _number(p.get("credit_price") if quantity > 0 else p.get("debit_price"))
 
 
-def build_position(p: Dict[str, Any], ltp: Optional[float], info: Optional[ContractInfo]) -> Dict[str, Any]:
+def build_position(p: dict[str, Any], ltp: float | None, info: ContractInfo | None) -> dict[str, Any]:
     """One raw Groww position as the dashboard's row. ``ltp`` None means it could not be priced."""
     symbol = p.get("trading_symbol", "UNKNOWN")
     exchange = str(p.get("exchange") or "NSE").upper()
@@ -113,7 +113,7 @@ class PositionProcessor:
     def __init__(self, api_service: GrowwAPIService):
         self.api = api_service
 
-    def _contracts(self, positions) -> Dict[Tuple[str, str], ContractInfo]:
+    def _contracts(self, positions) -> dict[tuple[str, str], ContractInfo]:
         try:
             instruments = self.api.get_instruments()
         except Exception as e:
@@ -122,7 +122,7 @@ class PositionProcessor:
         keys = [(str(p.get("exchange") or "NSE"), p.get("trading_symbol", "")) for p in positions]
         return contracts_by_symbol(instruments, keys)
 
-    def get_fno_positions(self) -> List[Dict[str, Any]]:
+    def get_fno_positions(self) -> list[dict[str, Any]]:
         """Open F&O and MCX positions, plus any closed today that still carry a realised P&L."""
         positions = [
             p for p in self.api.get_positions()
@@ -138,7 +138,7 @@ class PositionProcessor:
                 exchange = "MCX" if str(p.get("exchange", "")).upper() == "MCX" else "NSE"
                 open_symbols[exchange].append(p["trading_symbol"])
 
-        ltp_map: Dict[str, float] = {}
+        ltp_map: dict[str, float] = {}
         if open_symbols["NSE"]:
             ltp_map.update(self.api.get_ltp_for_nse_fno(open_symbols["NSE"]))
         if open_symbols["MCX"]:
@@ -154,7 +154,7 @@ class PositionProcessor:
             for p in positions
         ]
 
-    def get_option_greeks(self, positions: List[Dict[str, Any]]) -> Tuple[Dict[str, dict], Optional[str]]:
+    def get_option_greeks(self, positions: list[dict[str, Any]]) -> tuple[dict[str, dict], str | None]:
         """``({symbol: greeks}, error)`` for the open option positions.
 
         MCX options are skipped: on the paid plan ``get_greeks`` answers "Internal error occurred"
@@ -162,7 +162,7 @@ class PositionProcessor:
         Stops at the first other failure: without the data plan every call is refused the same
         way, so the reason is reported once instead of being retried per contract.
         """
-        greeks: Dict[str, dict] = {}
+        greeks: dict[str, dict] = {}
         error = None
         for pos in positions:
             if pos.get("kind") not in ("CALL", "PUT") or not pos.get("quantity") or not pos.get("expiry_date"):

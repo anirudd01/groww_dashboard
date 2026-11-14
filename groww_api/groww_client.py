@@ -1,6 +1,6 @@
-import os
 import logging
-from typing import Dict, Any, List, Optional
+import os
+from typing import Any
 
 try:
     from dotenv import load_dotenv
@@ -19,7 +19,6 @@ except ImportError:
             pass
 
 # Shared with the FnO dashboard - single implementation lives in utils/formatting.py
-from utils.formatting import format_inr, format_inr_full
 from groww_api.api_calls import batched_ltp
 from groww_api.position_processor import open_entry_price
 
@@ -32,11 +31,11 @@ class GrowwClient:
     """
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        totp_secret: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        access_token: Optional[str] = None,
-        auth_mode: Optional[str] = None,
+        api_key: str | None = None,
+        totp_secret: str | None = None,
+        api_secret: str | None = None,
+        access_token: str | None = None,
+        auth_mode: str | None = None,
         mock_mode: bool = False
     ):
         self.api_key = api_key or os.getenv("GROWW_API_KEY")
@@ -103,7 +102,7 @@ class GrowwClient:
     def is_connected(self) -> bool:
         return self.client is not None or self.mock_mode
 
-    def get_user_profile(self) -> Dict[str, Any]:
+    def get_user_profile(self) -> dict[str, Any]:
         """Fetch user profile details."""
         if self.mock_mode:
             return {
@@ -118,7 +117,7 @@ class GrowwClient:
             raise RuntimeError(self.auth_error or "Client not authenticated")
         return self.client.get_user_profile()
 
-    def get_margins(self) -> Dict[str, Any]:
+    def get_margins(self) -> dict[str, Any]:
         """Fetch available margin and fund balance."""
         if self.mock_mode:
             return {
@@ -143,7 +142,7 @@ class GrowwClient:
             raise RuntimeError(self.auth_error or "Client not authenticated")
         return self.client.get_available_margin_details()
 
-    def get_holdings(self) -> List[Dict[str, Any]]:
+    def get_holdings(self) -> list[dict[str, Any]]:
         """Fetch long term delivery holdings for user."""
         if self.mock_mode:
             return [
@@ -212,7 +211,7 @@ class GrowwClient:
             return resp.get("holdings", [])
         return resp if isinstance(resp, list) else []
 
-    def get_positions(self) -> List[Dict[str, Any]]:
+    def get_positions(self) -> list[dict[str, Any]]:
         """Fetch open & carry-forward MTF/margin positions (bought with Groww's margin funding)."""
         if self.mock_mode:
             return [
@@ -262,7 +261,7 @@ class GrowwClient:
         # massively inflate the equity portfolio totals.
         return [p for p in positions if str(p.get("segment", "CASH")).upper() == "CASH"]
 
-    def get_ltp(self, symbols: List[str]) -> Dict[str, float]:
+    def get_ltp(self, symbols: list[str]) -> dict[str, float]:
         """LTP for NSE CASH trading symbols; symbols Groww cannot price are left out."""
         if self.mock_mode:
             mock_prices = {
@@ -283,7 +282,7 @@ class GrowwClient:
 
         return batched_ltp(self.client, "NSE", "CASH", symbols)
 
-    def get_processed_portfolio(self) -> Dict[str, Any]:
+    def get_processed_portfolio(self) -> dict[str, Any]:
         """
         Accurately structures portfolio into:
         1. Actual Delivery Holdings (100% Owned by User with their Cash Capital):

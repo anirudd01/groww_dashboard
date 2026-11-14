@@ -20,15 +20,15 @@ from a live scrape, so a weighting run is reproducible and the dashboard has
 no extra network dependency.
 """
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence
 
 from market.models import SectorMarketData, StockMarketData
 
 
 def compute_change_pct(
-    ltp: Optional[float], previous_close: Optional[float]
-) -> Optional[float]:
+    ltp: float | None, previous_close: float | None
+) -> float | None:
     """Percentage change of ``ltp`` against the previous trading day's close.
 
     Returns ``None`` when the change cannot be computed honestly - a missing
@@ -48,8 +48,8 @@ def compute_change_pct(
 
 
 def weighted_change_pct(
-    changes: Sequence[float], weights: Sequence[Optional[float]]
-) -> Optional[float]:
+    changes: Sequence[float], weights: Sequence[float | None]
+) -> float | None:
     """Mean of ``changes`` weighted by ``weights``, normalised over what is usable.
 
     Only pairs where both the change and a positive weight are present count,
@@ -70,15 +70,15 @@ def weighted_change_pct(
     return sum(change * weight for change, weight in usable) / total_weight
 
 
-def _mean(values: Sequence[Optional[float]]) -> Optional[float]:
+def _mean(values: Sequence[float | None]) -> float | None:
     usable = [v for v in values if v is not None]
     return sum(usable) / len(usable) if usable else None
 
 
 def aggregate_sectors(
     stocks: Iterable[StockMarketData],
-    weights: Optional[Dict[str, float]] = None,
-) -> List[SectorMarketData]:
+    weights: dict[str, float] | None = None,
+) -> list[SectorMarketData]:
     """Collapse constituent-level data into one row per sector, market-cap weighted.
 
     Constituents without a usable percentage change are counted but excluded
@@ -95,11 +95,11 @@ def aggregate_sectors(
     """
     weights = weights or {}
 
-    grouped: Dict[str, List[StockMarketData]] = {}
+    grouped: dict[str, list[StockMarketData]] = {}
     for stock in stocks:
         grouped.setdefault(stock.sector, []).append(stock)
 
-    sectors: List[SectorMarketData] = []
+    sectors: list[SectorMarketData] = []
     for sector, members in grouped.items():
         priced = [m for m in members if m.change_pct is not None]
         changes = [m.change_pct for m in priced]
@@ -139,19 +139,19 @@ def aggregate_sectors(
     return sectors
 
 
-def _sort_key(value: Optional[float]) -> float:
+def _sort_key(value: float | None) -> float:
     """Push rows with no data to the bottom of any descending sort."""
     return float("-inf") if value is None else value
 
 
-def rank_sectors(sectors: Iterable[SectorMarketData]) -> List[SectorMarketData]:
+def rank_sectors(sectors: Iterable[SectorMarketData]) -> list[SectorMarketData]:
     """Strongest sector first; ties and unpriced sectors fall back to name."""
     return sorted(
         sectors, key=lambda s: (-_sort_key(s.change_pct), s.sector)
     )
 
 
-def rank_constituents(stocks: Iterable[StockMarketData]) -> List[StockMarketData]:
+def rank_constituents(stocks: Iterable[StockMarketData]) -> list[StockMarketData]:
     """Highest percentage change first; never alphabetical, never by price."""
     return sorted(stocks, key=lambda s: (-_sort_key(s.change_pct), s.symbol))
 
@@ -170,17 +170,17 @@ class SectorHighlight:
     """
 
     sector: str
-    sector_change_pct: Optional[float]
+    sector_change_pct: float | None
     symbol: str
-    change_pct: Optional[float]
-    ltp: Optional[float]
-    previous_close: Optional[float]
+    change_pct: float | None
+    ltp: float | None
+    previous_close: float | None
 
 
 def _by_sector(
     stocks: Iterable[StockMarketData],
-) -> Dict[str, List[StockMarketData]]:
-    grouped: Dict[str, List[StockMarketData]] = {}
+) -> dict[str, list[StockMarketData]]:
+    grouped: dict[str, list[StockMarketData]] = {}
     for stock in stocks:
         grouped.setdefault(stock.sector, []).append(stock)
     return grouped
@@ -188,9 +188,9 @@ def _by_sector(
 
 def _highlight(
     sector: SectorMarketData,
-    members: List[StockMarketData],
+    members: list[StockMarketData],
     best: bool,
-) -> Optional[SectorHighlight]:
+) -> SectorHighlight | None:
     """Best (or worst) priced constituent of one sector, or None if none are priced."""
     priced = [m for m in members if m.change_pct is not None]
     if not priced:
@@ -210,8 +210,8 @@ def _highlight(
 def leading_sector_highlights(
     stocks: Iterable[StockMarketData],
     sectors: Iterable[SectorMarketData],
-    limit: Optional[int] = None,
-) -> List[SectorHighlight]:
+    limit: int | None = None,
+) -> list[SectorHighlight]:
     """Advancing sectors, strongest first, each with its best constituent.
 
     Only sectors with a positive change appear: a "top performers" table that
@@ -231,8 +231,8 @@ def leading_sector_highlights(
 def lagging_sector_highlights(
     stocks: Iterable[StockMarketData],
     sectors: Iterable[SectorMarketData],
-    limit: Optional[int] = None,
-) -> List[SectorHighlight]:
+    limit: int | None = None,
+) -> list[SectorHighlight]:
     """Declining sectors, weakest first, each with its worst constituent."""
     members = _by_sector(stocks)
     declining = [

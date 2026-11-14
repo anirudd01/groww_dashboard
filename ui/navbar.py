@@ -13,12 +13,12 @@ under the bar. If a Streamlit upgrade renames those selectors, the page falls ba
 to the default spacing; nothing breaks.
 """
 
-from typing import List, Sequence, Tuple
+from collections.abc import Sequence
 
 import streamlit as st
 
 #: (section label, [(page, short link label), ...]) in display order.
-NavSpec = Sequence[Tuple[str, Sequence[Tuple["st.Page", str]]]]
+NavSpec = Sequence[tuple[str, Sequence[tuple["st.Page", str]]]]
 
 #: Width of the section-label column, so every row's links start at the same x.
 LABEL_WIDTH_PX = 80
@@ -49,7 +49,7 @@ def pages_by_section(spec: NavSpec) -> dict:
     return {section: [page for page, _ in links] for section, links in spec}
 
 
-def link_labels(spec: NavSpec) -> List[str]:
+def link_labels(spec: NavSpec) -> list[str]:
     """Every link label, in display order (for tests and docs)."""
     return [label for _, links in spec for _, label in links]
 

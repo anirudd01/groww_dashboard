@@ -19,7 +19,6 @@ import dataclasses
 import logging
 import os
 import threading
-from typing import Optional
 
 import streamlit as st
 
@@ -39,15 +38,13 @@ except ImportError:  # pragma: no cover - mirrors the other dashboards
         except Exception:
             pass
 
-from utils.public_mode import is_public
-from market.config import HeatmapConfig, ORDERS, ORDER_BY_IMPACT
+import pandas as pd
+
+from market.config import ORDER_BY_IMPACT, ORDERS, HeatmapConfig
+from market.index_constituents import load_index_members
+from market.index_mapping import index_by_label
 from market.live_feed import LiveMarketDataService
 from market.market_hours import session_state
-from market.providers.registry import (
-    available_provider_names,
-    canonical_provider_name,
-    provider_label,
-)
 from market.models import (
     PREV_CLOSE_DAILY_CANDLE,
     SOURCE_REST,
@@ -58,6 +55,11 @@ from market.models import (
     STATUS_INITIALISING,
     STATUS_LIVE,
     STATUS_STALE,
+)
+from market.providers.registry import (
+    available_provider_names,
+    canonical_provider_name,
+    provider_label,
 )
 from market.sector_aggregation import (
     aggregate_sectors,
@@ -80,13 +82,15 @@ from market.sector_impact import (
     sector_weight_line,
     unweighted_tiles,
 )
-from market.index_constituents import load_index_members
-from market.index_mapping import index_by_label
 from market.universe import INDEX_UNIVERSE_KEY, get_universe
 from market.weights import load_weights
-import pandas as pd
-
 from ui.colours import change_background, scale_limit
+from ui.index_board import (
+    build_index_table,
+    format_index_summary,
+    index_tooltip,
+    split_index_table,
+)
 from ui.sector_detail import build_constituent_table, style_constituent_table
 from ui.sector_heatmap import build_sector_treemap
 from ui.sector_highlights import (
@@ -94,13 +98,8 @@ from ui.sector_highlights import (
     combined_scale_limit,
     style_highlight_table,
 )
-from ui.index_board import (
-    build_index_table,
-    format_index_summary,
-    index_tooltip,
-    split_index_table,
-)
 from ui.sector_tiles import default_tooltip, render_sector_tiles
+from utils.public_mode import is_public
 
 logging.basicConfig(
     level=os.getenv("PULSE_LOG_LEVEL", "INFO").upper(),
@@ -166,7 +165,7 @@ def stop_idle_services(services: dict, lock, idle_after: float) -> list:
 
 
 _reaper_started = threading.Lock()
-_reaper_thread: Optional[threading.Thread] = None
+_reaper_thread: threading.Thread | None = None
 
 
 def _start_idle_reaper(services: dict, lock) -> None:
@@ -390,7 +389,7 @@ def render_status_bar(status, index=None, index_name: str = "") -> None:
 # Views
 # ---------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
-def get_weights(path: Optional[str]):
+def get_weights(path: str | None):
     """Load the stored weights once per process.
 
     Cached because it is a static read whose result must not change
@@ -400,7 +399,7 @@ def get_weights(path: Optional[str]):
 
 
 @st.cache_resource(show_spinner=False)
-def get_index_members(path: Optional[str]):
+def get_index_members(path: str | None):
     """Index tile label -> its NSE constituents, read once per process (``--master`` stores them)."""
     stored = load_index_members(path)
     return {label: stored.get(d.symbol, []) for label, d in index_by_label().items()}

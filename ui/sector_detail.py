@@ -7,7 +7,6 @@ graded; ``style_constituent_table`` applies the same diverging scale the
 heatmap tiles use, so the strongest mover in a sector is the darkest row.
 """
 
-from typing import List, Optional
 
 import pandas as pd
 
@@ -22,7 +21,7 @@ def _fmt_time(value) -> str:
     return "-" if value is None else value.strftime("%H:%M:%S")
 
 
-def build_constituent_table(stocks: List[StockMarketData]) -> pd.DataFrame:
+def build_constituent_table(stocks: list[StockMarketData]) -> pd.DataFrame:
     """Constituent rows sorted by live percentage change, descending.
 
     Numeric columns stay numeric (``NaN`` where unknown) so they can be styled
@@ -78,6 +77,6 @@ def style_constituent_table(
     return styler
 
 
-def change_pct_series(stocks: List[StockMarketData]) -> List[Optional[float]]:
+def change_pct_series(stocks: list[StockMarketData]) -> list[float | None]:
     """Raw percentage changes in the same order as ``build_constituent_table``."""
     return [s.change_pct for s in rank_constituents(stocks)]

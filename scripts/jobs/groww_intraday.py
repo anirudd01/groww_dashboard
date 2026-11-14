@@ -28,7 +28,13 @@ from datetime import time as dtime
 
 from market import state_store
 from market.fno_movers import load_universe
-from market.intraday_store import connect, groww_minute_rows, last_minute, replace_days, upsert_minutes
+from market.intraday_store import (
+    connect,
+    groww_minute_rows,
+    last_minute,
+    replace_days,
+    upsert_minutes,
+)
 from market.market_hours import now_ist
 
 logger = logging.getLogger("groww_intraday")

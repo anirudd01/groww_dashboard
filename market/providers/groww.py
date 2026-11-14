@@ -18,10 +18,14 @@ import asyncio
 import logging
 import os
 import time
-from typing import Dict, List, Optional, Tuple
 
 from groww_api import GrowwAPIClient, GrowwAPIService
-from market.providers.base import SEGMENT_CASH, FeedHandle, InstrumentRef, MarketDataProvider
+from market.providers.base import (
+    SEGMENT_CASH,
+    FeedHandle,
+    InstrumentRef,
+    MarketDataProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +51,11 @@ class GrowwFeedHandle(FeedHandle):
       the life of the process. ``close`` disconnects and evicts the entry.
     """
 
-    def __init__(self, feed, refs: List[InstrumentRef]):
+    def __init__(self, feed, refs: list[InstrumentRef]):
         self._feed = feed
         self._by_token = {str(r.provider_id): r.symbol for r in refs}
         #: last (timestamp, price) seen per symbol, for change detection
-        self._last_seen: Dict[str, tuple] = {}
+        self._last_seen: dict[str, tuple] = {}
         self._closed = False
 
     @property
@@ -78,7 +82,7 @@ class GrowwFeedHandle(FeedHandle):
         # lands is still caught, by the no-ticks timer.
         return bool(socket.is_connected or socket.is_reconnecting)
 
-    def latest_prices(self) -> Dict[str, float]:
+    def latest_prices(self) -> dict[str, float]:
         if self._feed is None:
             return {}
         try:
@@ -88,7 +92,7 @@ class GrowwFeedHandle(FeedHandle):
             self._closed = True
             return {}
 
-        prices: Dict[str, float] = {}
+        prices: dict[str, float] = {}
         # Shape: {exchange: {segment: {exchange_token: {"ltp": .., "tsInMillis": ..}}}}
         try:
             for segments in (payload or {}).values():
@@ -176,7 +180,7 @@ class GrowwProvider(MarketDataProvider):
     name = "groww"
     label = "Groww"
 
-    def __init__(self, api_service: Optional[GrowwAPIService] = None, batch_size: int = 50):
+    def __init__(self, api_service: GrowwAPIService | None = None, batch_size: int = 50):
         self._service = api_service
         self._batch_size = batch_size
 
@@ -204,8 +208,8 @@ class GrowwProvider(MarketDataProvider):
         return self._service
 
     def resolve_instruments(
-        self, symbols: List[str], segment: str = SEGMENT_CASH
-    ) -> Tuple[Dict[str, InstrumentRef], List[str]]:
+        self, symbols: list[str], segment: str = SEGMENT_CASH
+    ) -> tuple[dict[str, InstrumentRef], list[str]]:
         """Groww serves NSE cash equities only in this adapter.
 
         Index values are reported as entirely missing rather than raising, so
@@ -232,17 +236,17 @@ class GrowwProvider(MarketDataProvider):
         }
         return resolved, missing
 
-    def get_previous_close(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_previous_close(self, refs: list[InstrumentRef]) -> dict[str, float]:
         return self.service.get_previous_close_nse_cash(
             [r.symbol for r in refs], batch_size=self._batch_size
         )
 
-    def get_ltp_snapshot(self, refs: List[InstrumentRef]) -> Dict[str, float]:
+    def get_ltp_snapshot(self, refs: list[InstrumentRef]) -> dict[str, float]:
         return self.service.get_ltp_nse_cash(
             [r.symbol for r in refs], batch_size=self._batch_size
         )
 
-    def open_feed(self, refs: List[InstrumentRef]) -> FeedHandle:
+    def open_feed(self, refs: list[InstrumentRef]) -> FeedHandle:
         from growwapi import GrowwFeed
 
         instruments = [

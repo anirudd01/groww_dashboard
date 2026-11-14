@@ -16,7 +16,6 @@ These are observations, not recommendations. Nothing here ranks stocks as
 things to buy or sell.
 """
 
-from typing import List, Optional
 
 import pandas as pd
 
@@ -32,7 +31,7 @@ PERCENT_COLUMNS = ("Sector %", "Stock %")
 
 
 def build_highlight_table(
-    highlights: List[SectorHighlight], stock_column: str = "Best Stock"
+    highlights: list[SectorHighlight], stock_column: str = "Best Stock"
 ) -> pd.DataFrame:
     """Rows in the order given - the caller has already ranked them.
 
@@ -59,7 +58,7 @@ def build_highlight_table(
 def style_highlight_table(
     frame: pd.DataFrame,
     min_colour_scale_pct: float = MIN_SCALE_PCT,
-    limit: Optional[float] = None,
+    limit: float | None = None,
 ):
     """Format and colour-grade both percentage columns.
 
@@ -70,7 +69,7 @@ def style_highlight_table(
     present = [c for c in PERCENT_COLUMNS if c in frame.columns]
 
     if limit is None:
-        values: List[Optional[float]] = []
+        values: list[float | None] = []
         for column in present:
             values.extend(list(frame[column]))
         limit = scale_limit(values, min_colour_scale_pct)
@@ -90,10 +89,10 @@ def style_highlight_table(
 
 
 def combined_scale_limit(
-    frames: List[pd.DataFrame], min_colour_scale_pct: float = MIN_SCALE_PCT
+    frames: list[pd.DataFrame], min_colour_scale_pct: float = MIN_SCALE_PCT
 ) -> float:
     """One colour scale spanning several highlight tables."""
-    values: List[Optional[float]] = []
+    values: list[float | None] = []
     for frame in frames:
         for column in PERCENT_COLUMNS:
             if column in frame.columns:

@@ -21,7 +21,7 @@ RS-Momentum behind commercial RRG charts are proprietary, so values will not
 match those charts.
 """
 
-from typing import Dict, Iterable, List, Tuple
+from collections.abc import Iterable
 
 import pandas as pd
 
@@ -38,9 +38,9 @@ IMPROVING = "Improving"
 QUADRANTS = (LEADING, WEAKENING, LAGGING, IMPROVING)
 
 
-def sector_indices(closes: pd.DataFrame, sector_of: Dict[str, str]) -> pd.DataFrame:
+def sector_indices(closes: pd.DataFrame, sector_of: dict[str, str]) -> pd.DataFrame:
     """One equal-weight index per sector (date x sector), from the members present in ``closes``."""
-    members: Dict[str, List[str]] = {}
+    members: dict[str, list[str]] = {}
     for symbol, sector in sector_of.items():
         if symbol in closes.columns:
             members.setdefault(sector, []).append(symbol)
@@ -53,7 +53,7 @@ def rotation(
     lookback: int = LOOKBACK,
     momentum: int = MOMENTUM,
     smooth: int = SMOOTH,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """``(rs_ratio, rs_momentum)``, both date x name. NaN until enough history exists."""
     rs = series.div(benchmark, axis=0)
     ratio = 100 * rs / rs.rolling(lookback, min_periods=lookback).mean()

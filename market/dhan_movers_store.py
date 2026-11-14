@@ -16,7 +16,6 @@ interest are deliberately not stored.
 """
 
 import sqlite3
-from typing import Dict, List, Optional
 
 from market import intraday_store
 
@@ -66,14 +65,14 @@ def _named_insert(table: str, columns) -> str:
             f"VALUES ({', '.join(':' + c for c in columns)})")
 
 
-def connect(path: Optional[str] = None) -> sqlite3.Connection:
+def connect(path: str | None = None) -> sqlite3.Connection:
     """The shared store with these tables in place (created if the file or tables are new)."""
     conn = intraday_store.connect(path or DB_PATH, SCHEMA)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def connect_readonly(path: Optional[str] = None) -> Optional[sqlite3.Connection]:
+def connect_readonly(path: str | None = None) -> sqlite3.Connection | None:
     """A read-only handle, or None if there is no database file yet."""
     conn = intraday_store.connect_readonly(path or DB_PATH)
     if conn is not None:
@@ -92,7 +91,7 @@ def has_history(conn: sqlite3.Connection) -> bool:
 # -- writing -------------------------------------------------------------------
 
 
-def save_capture(conn: sqlite3.Connection, mover_rows: List[dict], breadth_rows: List[dict]) -> None:
+def save_capture(conn: sqlite3.Connection, mover_rows: list[dict], breadth_rows: list[dict]) -> None:
     """Store one capture: every mover row and every breadth row, or none of them."""
     with conn:
         conn.executemany(_named_insert("dhan_movers", MOVER_COLUMNS), mover_rows)
@@ -109,7 +108,7 @@ def has_session(conn: sqlite3.Connection, trading_date: str, kind: str = KIND_CL
     return row is not None
 
 
-def session_dates(conn: sqlite3.Connection, kind: str = KIND_CLOSE) -> List[str]:
+def session_dates(conn: sqlite3.Connection, kind: str = KIND_CLOSE) -> list[str]:
     """Stored session dates, newest first."""
     if not has_history(conn):
         return []
@@ -118,7 +117,7 @@ def session_dates(conn: sqlite3.Connection, kind: str = KIND_CLOSE) -> List[str]
     return [r[0] for r in rows]
 
 
-def universes_on(conn: sqlite3.Connection, trading_date: str, kind: str = KIND_CLOSE) -> List[str]:
+def universes_on(conn: sqlite3.Connection, trading_date: str, kind: str = KIND_CLOSE) -> list[str]:
     """Universes captured for that session, in alphabetical order."""
     rows = conn.execute("SELECT DISTINCT universe FROM dhan_movers_breadth WHERE trading_date = ? AND kind = ? "
                         "ORDER BY universe", (trading_date, kind))
@@ -126,7 +125,7 @@ def universes_on(conn: sqlite3.Connection, trading_date: str, kind: str = KIND_C
 
 
 def movers_on(conn: sqlite3.Connection, trading_date: str, universe: str, kind: str = KIND_CLOSE,
-              ) -> Dict[str, List[sqlite3.Row]]:
+              ) -> dict[str, list[sqlite3.Row]]:
     """``{'gainer': [...], 'loser': [...]}``, each in rank order, for the latest capture of that session."""
     rows = conn.execute(
         "SELECT side, rank, symbol, name, ltp, change_pct FROM dhan_movers "
@@ -137,7 +136,7 @@ def movers_on(conn: sqlite3.Connection, trading_date: str, universe: str, kind: 
     return {side: [r for r in rows if r["side"] == side] for side in (GAINER, LOSER)}
 
 
-def breadth_history(conn: sqlite3.Connection, universe: str, kind: str = KIND_CLOSE) -> List[sqlite3.Row]:
+def breadth_history(conn: sqlite3.Connection, universe: str, kind: str = KIND_CLOSE) -> list[sqlite3.Row]:
     """Advancing and declining counts of one universe, one row per stored session, oldest first."""
     if not has_history(conn):
         return []
@@ -150,7 +149,7 @@ def breadth_history(conn: sqlite3.Connection, universe: str, kind: str = KIND_CL
 
 
 def repeat_movers(conn: sqlite3.Connection, universe: str, side: str, top: int = 10, limit: int = 20,
-                  kind: str = KIND_CLOSE) -> List[sqlite3.Row]:
+                  kind: str = KIND_CLOSE) -> list[sqlite3.Row]:
     """Stocks that keep appearing among the ``top`` gainers (or losers) of a universe.
 
     Each row: symbol, name, ``sessions`` it was in the top, and ``avg_move`` (mean % change on

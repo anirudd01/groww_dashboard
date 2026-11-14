@@ -18,8 +18,21 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 
 import streamlit as st
 
-from apps.fno_common import freshness, nifty50, panels, require_history, source_caption, suspected_toggle, universe_options
-from market.price_panel import UNIVERSE_EX_NIFTY, UNIVERSE_NIFTY50, equal_weight_index, restrict
+from apps.fno_common import (
+    freshness,
+    nifty50,
+    panels,
+    require_history,
+    source_caption,
+    suspected_toggle,
+    universe_options,
+)
+from market.price_panel import (
+    UNIVERSE_EX_NIFTY,
+    UNIVERSE_NIFTY50,
+    equal_weight_index,
+    restrict,
+)
 from market.rotation import (
     IMPROVING,
     LAGGING,

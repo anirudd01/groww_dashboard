@@ -24,8 +24,8 @@ import statistics
 import struct
 import threading
 import time
+from collections.abc import Callable
 from email.utils import parsedate_to_datetime
-from typing import Callable, Optional, Tuple
 
 from market import state_store
 
@@ -46,10 +46,10 @@ MAX_RTT = 1.0
 NTP_EPOCH_DELTA = 2208988800
 
 _LOCK = threading.Lock()
-_cached: Optional[Tuple[float, float]] = None  # (offset, monotonic time measured)
+_cached: tuple[float, float] | None = None  # (offset, monotonic time measured)
 
 
-def ntp_offset(host: str, timeout: float = 2.0) -> Tuple[float, float]:
+def ntp_offset(host: str, timeout: float = 2.0) -> tuple[float, float]:
     """(offset, round trip) from one SNTP query. Raises OSError on failure."""
     packet = b"\x1b" + 47 * b"\0"  # LI=0, version 3, mode 3 (client)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -69,7 +69,7 @@ def ntp_offset(host: str, timeout: float = 2.0) -> Tuple[float, float]:
     return ((server_rx - sent) + (server_tx - received)) / 2, received - sent
 
 
-def http_offset(url: str, timeout: float = 10.0) -> Tuple[float, float]:
+def http_offset(url: str, timeout: float = 10.0) -> tuple[float, float]:
     """(offset, round trip) from an HTTP ``Date`` header, good to about ±0.5 s."""
     import requests
 
@@ -81,7 +81,7 @@ def http_offset(url: str, timeout: float = 10.0) -> Tuple[float, float]:
     return server - (sent + received) / 2, received - sent
 
 
-def measure(ntp: Callable = ntp_offset, http: Callable = http_offset) -> Tuple[Optional[float], str]:
+def measure(ntp: Callable = ntp_offset, http: Callable = http_offset) -> tuple[float | None, str]:
     """A fresh offset and its source, or (None, "") if nothing answered."""
     readings = []
     for host in NTP_SERVERS:
@@ -107,7 +107,7 @@ def measure(ntp: Callable = ntp_offset, http: Callable = http_offset) -> Tuple[O
     return None, ""
 
 
-def _save(value: float, source: str, path: Optional[str]) -> None:
+def _save(value: float, source: str, path: str | None) -> None:
     payload = {
         "offset_seconds": round(value, 3),
         "source": source,
@@ -121,7 +121,7 @@ def _save(value: float, source: str, path: Optional[str]) -> None:
         logger.debug("Could not save the clock offset: %s", exc)
 
 
-def _load(path: Optional[str]) -> Optional[float]:
+def _load(path: str | None) -> float | None:
     """The saved offset if it is under a day old, else None."""
     raw = state_store.read(STATE_NAME, path)
     try:
@@ -132,7 +132,7 @@ def _load(path: Optional[str]) -> Optional[float]:
     return None
 
 
-def offset(refresh: bool = False, path: Optional[str] = None, measurer: Callable = measure) -> float:
+def offset(refresh: bool = False, path: str | None = None, measurer: Callable = measure) -> float:
     """Seconds to add to ``time.time()`` for real time.
 
     Measured once per process (and again after ``REMEASURE_AFTER``, or when

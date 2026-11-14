@@ -20,7 +20,7 @@ Data: ``open`` and ``close`` in the stored daily closes (``daily_bars``). No API
 """
 
 import math
-from typing import Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 import pandas as pd
 
@@ -34,9 +34,9 @@ DEFAULT_FLAT_BELOW = 0.1
 def gap_rows(
     overnight: pd.DataFrame,
     window: int,
-    symbols: Optional[Iterable[str]] = None,
+    symbols: Iterable[str] | None = None,
     flat_below: float = DEFAULT_FLAT_BELOW,
-) -> Tuple[List[ConsistencyRow], List[str]]:
+) -> tuple[list[ConsistencyRow], list[str]]:
     """One row per stock with a gap on **every** day of the last ``window`` days.
 
     ``overnight`` is a date x symbol frame of log gaps. Returns ``(rows, left_out)``.
@@ -59,13 +59,13 @@ def gap_rows(
     return rows, left_out
 
 
-def session_after(intraday: pd.DataFrame, window: int) -> Dict[str, float]:
+def session_after(intraday: pd.DataFrame, window: int) -> dict[str, float]:
     """Each stock's open-to-close moves over the same window, compounded, in %."""
     total = last_days(intraday, window).sum(min_count=1)
     return {symbol: math.expm1(value) * 100 for symbol, value in total.items() if value == value}
 
 
-def streak_table(rows: List[ConsistencyRow], session: Dict[str, float]) -> pd.DataFrame:
+def streak_table(rows: list[ConsistencyRow], session: dict[str, float]) -> pd.DataFrame:
     """Per stock: current streak, gap-up/down days, net gap, average gap, consistency, session after."""
     records = []
     for r in rows:

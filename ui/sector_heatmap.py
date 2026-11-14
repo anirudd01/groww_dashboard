@@ -4,7 +4,7 @@ Rendering only. All aggregation happens in ``market.sector_aggregation``; this
 module never calls the Groww API.
 """
 
-from typing import Callable, List, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 import plotly.graph_objects as go
 
@@ -35,17 +35,17 @@ def colour_scale_limit(
     return max([minimum] + magnitudes)
 
 
-def _tile_text(sector: SectorMarketData, detail: Optional[str] = None) -> str:
+def _tile_text(sector: SectorMarketData, detail: str | None = None) -> str:
     change = "no data" if sector.change_pct is None else f"{sector.change_pct:+.2f}%"
     text = f"<b>{sector.sector}</b><br>{change}"
     return f"{text}<br><span style='font-size:12px'>{detail}</span>" if detail else text
 
 
 def build_sector_treemap(
-    sectors: List[SectorMarketData],
+    sectors: list[SectorMarketData],
     min_colour_scale_pct: float = 0.75,
     height: int = 620,
-    detail: Optional[Callable[[SectorMarketData], str]] = None,
+    detail: Callable[[SectorMarketData], str] | None = None,
 ) -> go.Figure:
     """Build the treemap for the supplied sectors, in the order given.
 
@@ -115,7 +115,7 @@ def build_sector_treemap(
     return figure
 
 
-def selected_sector_from_event(event, known_sectors: Sequence[str]) -> Optional[str]:
+def selected_sector_from_event(event, known_sectors: Sequence[str]) -> str | None:
     """Pull a sector name out of a Streamlit Plotly selection event.
 
     Returns ``None`` when nothing usable was selected. Plotly/Streamlit event

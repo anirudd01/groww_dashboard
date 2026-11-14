@@ -18,7 +18,7 @@ The Plotly treemap remains available in ``ui/sector_heatmap.py`` as a
 display-only alternative.
 """
 
-from typing import Callable, List, Optional, Sequence
+from collections.abc import Callable, Sequence
 
 import streamlit as st
 
@@ -35,7 +35,7 @@ def tile_key(sector: str) -> str:
     return f"{TILE_KEY_PREFIX}_{slug}"
 
 
-def tile_label(sector: SectorMarketData, detail: Optional[str] = None) -> str:
+def tile_label(sector: SectorMarketData, detail: str | None = None) -> str:
     """Button label: sector name above its percentage change.
 
     ``detail`` is an optional smaller third line - the tile's weight in its
@@ -111,13 +111,13 @@ def default_tooltip(sector: SectorMarketData) -> str:
 
 
 def render_sector_tiles(
-    sectors: List[SectorMarketData],
+    sectors: list[SectorMarketData],
     columns: int = 4,
     min_colour_scale_pct: float = MIN_SCALE_PCT,
     height_px: int = 96,
-    tooltip: Optional[Callable[[SectorMarketData], str]] = None,
-    detail: Optional[Callable[[SectorMarketData], str]] = None,
-) -> Optional[str]:
+    tooltip: Callable[[SectorMarketData], str] | None = None,
+    detail: Callable[[SectorMarketData], str] | None = None,
+) -> str | None:
     """Draw the clickable heatmap. Returns the sector clicked, if any.
 
     ``sectors`` is rendered in the order given, so the caller controls the
@@ -138,7 +138,7 @@ def render_sector_tiles(
         unsafe_allow_html=True,
     )
 
-    clicked: Optional[str] = None
+    clicked: str | None = None
     for start in range(0, len(sectors), columns):
         row = sectors[start : start + columns]
         cells = st.columns(columns, gap="small")

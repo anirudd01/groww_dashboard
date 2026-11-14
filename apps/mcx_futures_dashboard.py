@@ -35,10 +35,10 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
-from utils.public_mode import allow_refresh
 from market import mcx_futures as mf
 from market.market_hours import now_ist
 from ui.shading import shade_change
+from utils.public_mode import allow_refresh
 
 logger = logging.getLogger(__name__)
 

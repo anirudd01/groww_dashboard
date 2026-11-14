@@ -29,8 +29,8 @@ Exit codes: 0 placed (or dry run), 1 refused or failed, 2 bad arguments.
 import argparse
 import os
 import sys
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:

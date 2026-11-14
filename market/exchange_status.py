@@ -24,9 +24,10 @@ jobs run in their own process and ask for themselves.
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, time as dtime
-from typing import Callable, Dict, List, Optional
+from datetime import date, datetime
+from datetime import time as dtime
 
 from market.market_hours import IST, now_ist
 
@@ -50,7 +51,7 @@ MCX_PROBE_COMMODITIES = ("GOLD", "CRUDEOIL", "SILVER")
 
 @dataclass
 class _Entry:
-    verdict: Optional[bool]
+    verdict: bool | None
     checked_at: float  # time.monotonic()
     detail: str = ""
 
@@ -62,17 +63,17 @@ Probe = Callable[[str, date], bool]
 class ExchangeStatus:
     """Per-exchange "traded today?" verdicts, each trusted for ``ttl`` seconds."""
 
-    def __init__(self, probe: Optional[Probe] = None, ttl: float = TTL_SECONDS,
+    def __init__(self, probe: Probe | None = None, ttl: float = TTL_SECONDS,
                  clock: Callable[[], float] = time.monotonic, now: Callable[[], datetime] = now_ist):
         self._probe = probe or dhan_probe
         self._ttl = ttl
         self._clock = clock
         self._now = now
         self._lock = threading.Lock()
-        self._entries: Dict[str, _Entry] = {}
-        self._day: Optional[date] = None
+        self._entries: dict[str, _Entry] = {}
+        self._day: date | None = None
 
-    def peek(self, exchange: str) -> Optional[bool]:
+    def peek(self, exchange: str) -> bool | None:
         """The current verdict without asking anyone: True, False, or None (not known)."""
         with self._lock:
             self._roll_day()
@@ -81,7 +82,7 @@ class ExchangeStatus:
                 return None
             return entry.verdict
 
-    def traded_today(self, exchange: str) -> Optional[bool]:
+    def traded_today(self, exchange: str) -> bool | None:
         """True / False once the broker has said so in the last 5 minutes, asking if needed.
 
         ``None`` before the session's first minute is over, or when the broker could not answer.
@@ -96,7 +97,7 @@ class ExchangeStatus:
                 return entry.verdict
         # Asked outside the lock: a probe is a network call, and peek() must never wait on it.
         try:
-            verdict: Optional[bool] = bool(self._probe(exchange, now.date()))
+            verdict: bool | None = bool(self._probe(exchange, now.date()))
             detail = "trading today" if verdict else "no trade today"
         except Exception as exc:  # noqa: BLE001 - "not known" is the honest answer
             verdict, detail = None, f"check failed: {exc}"
@@ -172,7 +173,7 @@ def dhan_probe(exchange: str, today: date) -> bool:
     holiday Dhan answers successfully with no NSE prices at all).
     """
     global _provider
-    refs: List = _nse_refs() if exchange == NSE else _mcx_refs(today)
+    refs: list = _nse_refs() if exchange == NSE else _mcx_refs(today)
     try:
         times = _dhan().get_last_trade_times(refs, strict=True)
     except Exception:
@@ -183,7 +184,7 @@ def dhan_probe(exchange: str, today: date) -> bool:
     return any(t.astimezone(IST).date() == today for t in times.values())
 
 
-_shared: Optional[ExchangeStatus] = None
+_shared: ExchangeStatus | None = None
 _shared_lock = threading.Lock()
 
 

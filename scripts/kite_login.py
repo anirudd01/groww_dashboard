@@ -44,13 +44,13 @@ from market.providers.kite_session import (  # noqa: E402
     KiteAuthError,
     api_key_from_env,
     api_secret_from_env,
+    clear_session,
     error_of,
     exchange_request_token,
     extract_request_token,
     invalidate_session,
     load_session,
     login_url,
-    clear_session,
     save_session,
 )
 

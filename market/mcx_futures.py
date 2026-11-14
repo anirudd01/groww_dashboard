@@ -19,9 +19,9 @@ Visualisation only - nothing here places orders.
 """
 
 import logging
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, Iterable, List, Optional, Sequence
 
 from market import reference_store, state_store
 from market.market_hours import IST
@@ -85,7 +85,7 @@ class Contract:
     def is_mini(self) -> bool:
         return self.commodity in MINI_CONTRACTS
 
-    def ref(self, provider: str = "dhan") -> Optional[InstrumentRef]:
+    def ref(self, provider: str = "dhan") -> InstrumentRef | None:
         """This contract addressed to one broker, or None if that broker has no id for it."""
         if provider == "kite":
             if not (self.kite_token and self.kite_symbol):
@@ -99,23 +99,23 @@ class Contract:
 @dataclass(frozen=True)
 class FutureQuote:
     contract: Contract
-    ltp: Optional[float]
-    prev_close: Optional[float]
-    open: Optional[float]
-    high: Optional[float]
-    low: Optional[float]
-    volume: Optional[int]
-    oi: Optional[int]
-    last_trade: Optional[datetime]
+    ltp: float | None
+    prev_close: float | None
+    open: float | None
+    high: float | None
+    low: float | None
+    volume: int | None
+    oi: int | None
+    last_trade: datetime | None
 
     @property
-    def change(self) -> Optional[float]:
+    def change(self) -> float | None:
         if self.ltp is None or self.prev_close is None:
             return None
         return self.ltp - self.prev_close
 
     @property
-    def change_pct(self) -> Optional[float]:
+    def change_pct(self) -> float | None:
         change = self.change
         return None if change is None else change / self.prev_close * 100
 
@@ -123,7 +123,7 @@ class FutureQuote:
 # -- contracts ---------------------------------------------------------------
 
 
-def contracts_from_master(rows: Iterable[dict]) -> List[Contract]:
+def contracts_from_master(rows: Iterable[dict]) -> list[Contract]:
     """MCX commodity futures out of Dhan's instrument-master CSV rows (``csv.DictReader``)."""
     found = []
     for row in rows:
@@ -141,7 +141,7 @@ def contracts_from_master(rows: Iterable[dict]) -> List[Contract]:
     return found
 
 
-def attach_kite(contracts: Iterable[Contract], kite_rows: Iterable[dict]) -> List[Contract]:
+def attach_kite(contracts: Iterable[Contract], kite_rows: Iterable[dict]) -> list[Contract]:
     """Add Kite's ids to each contract, matched on commodity and expiry.
 
     ``kite_rows`` are rows of Kite's public ``/instruments/MCX`` CSV. Only ``FUT`` rows in the
@@ -174,12 +174,12 @@ def to_document(contracts: Sequence[Contract], sources: Sequence[str]) -> dict:
     }
 
 
-def save_contracts(contracts: Sequence[Contract], sources: Sequence[str] = (), path: Optional[str] = None) -> int:
+def save_contracts(contracts: Sequence[Contract], sources: Sequence[str] = (), path: str | None = None) -> int:
     return reference_store.save_document(MCX_SET, to_document(contracts, sources), sections=("contracts",),
                                          path=path)
 
 
-def load_contracts(path: Optional[str] = None):
+def load_contracts(path: str | None = None):
     """``(contracts, generated_at, error)``. Never raises; the error says what to run."""
     database = path or state_store.db_path()
     document = reference_store.load_document(MCX_SET, database)
@@ -201,19 +201,19 @@ def load_contracts(path: Optional[str] = None):
     return contracts, generated, ""
 
 
-def live_contracts(contracts: Iterable[Contract], today: date) -> List[Contract]:
+def live_contracts(contracts: Iterable[Contract], today: date) -> list[Contract]:
     """Unexpired contracts. A contract trades on its expiry day, so that day still counts."""
     return [c for c in contracts if c.expiry >= today]
 
 
-def choose(quotes: Iterable["FutureQuote"], pick: str = MOST_ACTIVE) -> List["FutureQuote"]:
+def choose(quotes: Iterable["FutureQuote"], pick: str = MOST_ACTIVE) -> list["FutureQuote"]:
     """One contract per commodity: the most active (highest OI, then volume), or the near/next/far month.
 
     Most active is the default because MCX liquidity does not follow the calendar: in the week
     GOLD OCT expires it had 169 lots of OI while GOLD DEC carried the market. Commodities with
     fewer live expiries than asked for are left out. Sorted by group, then commodity.
     """
-    by_commodity: Dict[str, List[FutureQuote]] = {}
+    by_commodity: dict[str, list[FutureQuote]] = {}
     for quote in quotes:
         by_commodity.setdefault(quote.contract.commodity, []).append(quote)
     chosen = []
@@ -226,7 +226,7 @@ def choose(quotes: Iterable["FutureQuote"], pick: str = MOST_ACTIVE) -> List["Fu
     return sorted(chosen, key=lambda q: (GROUP_ORDER.index(q.contract.group), q.contract.commodity))
 
 
-def last_expiry(contracts: Iterable[Contract]) -> Optional[date]:
+def last_expiry(contracts: Iterable[Contract]) -> date | None:
     return max((c.expiry for c in contracts), default=None)
 
 
@@ -241,7 +241,7 @@ def _number(value, cast=float):
     return number if number > 0 else None
 
 
-def _trade_time(value) -> Optional[datetime]:
+def _trade_time(value) -> datetime | None:
     """Dhan's ``01/10/2026 23:29:58`` or Kite's ``2026-10-01 23:29:58`` (both IST).
 
     A contract that never traded says ``01/01/1980`` on Dhan and ``1970-01-01 05:30:00`` on Kite.
@@ -255,7 +255,7 @@ def _trade_time(value) -> Optional[datetime]:
     return None
 
 
-def parse_quote(contract: Contract, entry: Optional[dict]) -> FutureQuote:
+def parse_quote(contract: Contract, entry: dict | None) -> FutureQuote:
     """One Dhan ``/marketfeed/quote`` or Kite ``/quote`` entry (the fields used here have the same
     names on both). Zeros mean "no value" and become None."""
     entry = entry or {}
@@ -273,7 +273,7 @@ def parse_quote(contract: Contract, entry: Optional[dict]) -> FutureQuote:
     )
 
 
-def fetch_quotes(provider, contracts: Sequence[Contract]) -> List[FutureQuote]:
+def fetch_quotes(provider, contracts: Sequence[Contract]) -> list[FutureQuote]:
     """One quote call for every contract the provider can address (Dhan takes 1000 per call, Kite
     500; MCX lists ~160 live). Contracts the provider has no id for are left out."""
     refs = {c: c.ref(provider.name) for c in contracts}
@@ -293,7 +293,7 @@ def quotes_with_fallback(connect, contracts: Sequence[Contract], order: Sequence
     result rather than raising. Returns ``(quotes, source, failures)``, where ``failures`` maps
     each broker that was tried and failed to the reason; ``source`` is "" if every broker failed.
     """
-    failures: Dict[str, str] = {}
+    failures: dict[str, str] = {}
     for name in order:
         try:
             quotes = fetch_quotes(connect(name), contracts)
@@ -309,7 +309,7 @@ def quotes_with_fallback(connect, contracts: Sequence[Contract], order: Sequence
 def candles_with_fallback(connect, contract: Contract, interval_label: str, now: datetime,
                           order: Sequence[str] = PROVIDERS):
     """Candles from the first broker in ``order`` that returns any. ``(rows, source, failures)``."""
-    failures: Dict[str, str] = {}
+    failures: dict[str, str] = {}
     for name in order:
         try:
             rows = fetch_candles(connect(name), contract, interval_label, now)
@@ -322,7 +322,7 @@ def candles_with_fallback(connect, contract: Contract, interval_label: str, now:
     return [], "", failures
 
 
-def latest_trade(quotes: Iterable[FutureQuote]) -> Optional[datetime]:
+def latest_trade(quotes: Iterable[FutureQuote]) -> datetime | None:
     return max((q.last_trade for q in quotes if q.last_trade), default=None)
 
 
@@ -356,7 +356,7 @@ INTERVALS = {
 }
 
 
-def fetch_candles(provider, contract: Contract, interval_label: str, now: datetime) -> List[dict]:
+def fetch_candles(provider, contract: Contract, interval_label: str, now: datetime) -> list[dict]:
     interval, days = INTERVALS[interval_label]
     ref = contract.ref(provider.name)
     if ref is None:
@@ -366,7 +366,7 @@ def fetch_candles(provider, contract: Contract, interval_label: str, now: dateti
     return candle_rows(payload)
 
 
-def candle_rows(payload: Optional[dict]) -> List[dict]:
+def candle_rows(payload: dict | None) -> list[dict]:
     """Parallel candle arrays (Dhan's shape; Kite's are converted to it) as one dict per candle,
     times in IST (naive, for charting)."""
     if not payload:

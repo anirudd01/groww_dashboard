@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPTS = os.path.join(ROOT, "scripts")
@@ -15,7 +15,7 @@ for _path in (ROOT, SCRIPTS):
 logger = logging.getLogger("jobs")
 
 #: (label, zero-argument callable returning an exit code)
-Job = Tuple[str, Callable[[], int]]
+Job = tuple[str, Callable[[], int]]
 
 
 def setup(verbose: bool = False) -> None:
@@ -31,9 +31,9 @@ def setup(verbose: bool = False) -> None:
         pass
 
 
-def _run_once(jobs: List[Job]) -> Dict[str, Tuple[int, float]]:
+def _run_once(jobs: list[Job]) -> dict[str, tuple[int, float]]:
     """Run each job in order; ``{label: (exit code, seconds)}``."""
-    outcomes: Dict[str, Tuple[int, float]] = {}
+    outcomes: dict[str, tuple[int, float]] = {}
     for label, job in jobs:
         logger.info("\n== %s", label)
         started = time.monotonic()
@@ -46,8 +46,8 @@ def _run_once(jobs: List[Job]) -> Dict[str, Tuple[int, float]]:
     return outcomes
 
 
-def run_jobs(jobs: List[Job], retries: int = 0, retry_gap: float = 600.0,
-             sleep: Callable[[float], None] = time.sleep, deadline: Optional[float] = None,
+def run_jobs(jobs: list[Job], retries: int = 0, retry_gap: float = 600.0,
+             sleep: Callable[[float], None] = time.sleep, deadline: float | None = None,
              clock: Callable[[], float] = time.monotonic) -> int:
     """Run every job in order, even after one fails, and return the worst exit code.
 
